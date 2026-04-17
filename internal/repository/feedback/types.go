@@ -1,0 +1,66 @@
+package feedback
+
+// types.go — Types for the feedback_history collection.
+
+import (
+	"go.mongodb.org/mongo-driver/bson"
+
+	mongorepo "erc-8004-benchmarking-be/internal/repository"
+)
+
+// FeedbackResponse represents one ResponseAppended event.
+type FeedbackResponse struct {
+	Responder      string         `bson:"responder"`
+	ResponseURI    string         `bson:"responseURI"`
+	ResponseHash   string         `bson:"responseHash"`
+	TxHash         string         `bson:"txHash"`
+	ResponseParsed map[string]any `bson:"responseParsed,omitempty"`
+}
+
+// FeedbackClassification holds the output of the rule-based (or future LLM) classifier.
+type FeedbackClassification struct {
+	Category      string  `bson:"category"`                // service_feedback | config_feedback | app_specific | others | spam | noise
+	Confidence    float64 `bson:"confidence"`              // 0.0–1.0
+	Source        string  `bson:"source"`                  // "rule" | "fallback"
+	NormalizedTag string  `bson:"normalizedTag,omitempty"` // canonical tag1 value
+}
+
+// FeedbackRecord stores a single feedback event and its scoring impact.
+// Schema follows ERC-8004 feedback_history collection spec.
+type FeedbackRecord struct {
+	ID             string                 `bson:"_id"` // {chainId}:{agentId}:{clientAddress}:{feedbackIndex}
+	AgentID        string                 `bson:"agentId"`
+	ChainID        int64                  `bson:"chainId"`
+	ClientAddress  string                 `bson:"clientAddress"`
+	FeedbackIndex  uint64                 `bson:"feedbackIndex"`
+	Value          string                 `bson:"value"` // int128 as string
+	ValueDecimals  uint8                  `bson:"valueDecimals"`
+	Tag1           string                 `bson:"tag1,omitempty"`
+	Tag2           string                 `bson:"tag2,omitempty"`
+	Endpoint       string                 `bson:"endpoint,omitempty"`
+	FeedbackURI    string                 `bson:"feedbackURI,omitempty"`
+	FeedbackHash   string                 `bson:"feedbackHash,omitempty"`
+	FeedbackParsed map[string]any         `bson:"feedbackParsed,omitempty"`
+	BlockNumber    uint64                 `bson:"blockNumber"`
+	TxHash         string                 `bson:"txHash"`
+	LogIndex       uint                   `bson:"logIndex"`
+	Timestamp      int64                  `bson:"timestamp"`
+	Type           string                 `bson:"type"` // reputation_feedback, etc.
+	PriceUSDC      float64                `bson:"priceUSDC"`
+	Wi             float64                `bson:"wi"`                     // difficulty weight at time of scoring
+	Vi             float64                `bson:"vi"`                     // validation score [0, 1]
+	Classification FeedbackClassification `bson:"classification"`         // set by classifier
+	Responses      []FeedbackResponse     `bson:"responses,omitempty"`    // ResponseAppended history
+	RevokeTxHash   string                 `bson:"revokeTxHash,omitempty"` // set when FeedbackRevoked
+}
+
+// FeedbackUpdate holds a partial update for a single feedback document.
+type FeedbackUpdate struct {
+	ID     string // document _id
+	Update bson.M // full update document (e.g. {"$set": {...}, "$push": {...}})
+}
+
+// Repository wraps the feedback_history collection.
+type Repository struct {
+	mongorepo.MongoRepoImpl[FeedbackRecord]
+}
