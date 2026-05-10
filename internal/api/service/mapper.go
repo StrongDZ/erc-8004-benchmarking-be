@@ -137,6 +137,7 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		Tag1:           r.Tag1,
 		Tag2:           r.Tag2,
 		Endpoint:       r.Endpoint,
+		Unit:           r.Unit,
 		FeedbackURI:    r.FeedbackURI,
 		FeedbackHash:   r.FeedbackHash,
 		FeedbackParsed: r.FeedbackParsed,

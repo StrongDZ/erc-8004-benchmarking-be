@@ -4,6 +4,8 @@ package trustrank
 // Cron: each tick reads active chains, runs one goroutine per chain.
 // Per chain: reads events from own checkpoint up to the URI cursor (set by Stream 1),
 // processes events in strict chronological order (blockNumber, logIndex).
+//
+// Also manages per-chain ServiceURIConsumer goroutines started lazily on chain discovery.
 
 import (
 	"context"
@@ -14,25 +16,34 @@ import (
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
-	bootstrapapp "erc-8004-benchmarking-be/internal/app/uri_bootstrap"
+	bootstrapapp "erc-8004-benchmarking-be/internal/app/uribootstrap"
 	domaintrustrank "erc-8004-benchmarking-be/internal/domain/trustrank"
 	configrepo "erc-8004-benchmarking-be/internal/repository/config"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 )
 
 // App wraps domain trustrank App with application-level concerns.
 type App struct {
 	domainApp *domaintrustrank.App
+
+	// per-chain service_uri consumer management
+	consumersMu   sync.Mutex
+	startedChains map[int64]struct{}
+	startConsumer func(ctx context.Context, chainID int64) // injected by cmd/workers/trustrank
 }
 
 // NewApp wires repositories and tuning. proc may be nil (noop logger).
+// startConsumer is called once per newly discovered chain to launch its ServiceURIConsumer;
+// pass nil to disable service URI consuming.
 func NewApp(
-	contracts *configrepo.ContractsRepository,
+	contracts *contractsrepo.ContractsRepository,
 	events *eventrepo.Repository,
 	configRepo *configrepo.ConfigRepository,
 	interval time.Duration,
 	eventBatchSize int64,
 	proc domaintrustrank.EventProcessor,
+	startConsumer func(ctx context.Context, chainID int64),
 ) *App {
 	return &App{
 		domainApp: &domaintrustrank.App{
@@ -43,6 +54,8 @@ func NewApp(
 			BatchSize:  eventBatchSize,
 			Proc:       proc,
 		},
+		startedChains: make(map[int64]struct{}),
+		startConsumer: startConsumer,
 	}
 }
 
@@ -76,6 +89,19 @@ func (a *App) runCycle(ctx context.Context) error {
 	if len(chains) == 0 {
 		log.Printf("trustrank_worker: no active chains")
 		return nil
+	}
+
+	// Start service_uri consumers for any newly discovered chains.
+	if a.startConsumer != nil {
+		a.consumersMu.Lock()
+		for _, c := range chains {
+			if _, ok := a.startedChains[c.ChainID]; !ok {
+				a.startedChains[c.ChainID] = struct{}{}
+				chainID := c.ChainID
+				go a.startConsumer(ctx, chainID)
+			}
+		}
+		a.consumersMu.Unlock()
 	}
 
 	var wg sync.WaitGroup

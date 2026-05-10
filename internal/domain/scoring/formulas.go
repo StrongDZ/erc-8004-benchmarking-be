@@ -18,7 +18,7 @@ type FormulaConfig struct {
 	TBaseDays float64 // §3.3 half-life base in days (default 15.0)
 	Gamma     float64 // §3.4 penalty base coefficient (default 5.0)
 	Theta     float64 // §3.4 penalty exponent (default 2.0)
-	SBase     float64 // §3.1 base score assigned at agent registration (default 10.0)
+	SBase     float64 // §3.1 base score assigned at agent registration (default 0.0)
 }
 
 // DefaultFormulaConfig returns the spec-defined default parameter set.
@@ -70,19 +70,21 @@ func ComputePenalty(nFail int64, gamma, theta float64) float64 {
 
 // ComputeScore computes the total TrustRank score for an agent.
 // §3.1: S = S_base + Σ[wᵢ·vᵢ·e^(-λᵢ·Δt)] − P
-// Result is clamped to [0, 1000].
-func ComputeScore(tasks []TaskInput, consecutiveFails int64, cfg FormulaConfig) float64 {
-	sum := 0.0
-	for _, t := range tasks {
-		wi := ComputeWi(t.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
-		lambda := ComputeDecayRate(wi, cfg.TBaseDays)
-		decay := ComputeDecayFactor(lambda, t.DeltaDays)
-		sum += wi * t.Vi * decay
-	}
-	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
-	score := cfg.SBase + sum - penalty
-	return math.Min(1000.0, math.Max(0.0, score))
-}
+// Result is clamped to (-∞, 1000]; negative scores are allowed to represent
+// agents with net-negative signal (heavy penalty or decreasing-metric feedbacks).
+
+// func ComputeScore(tasks []TaskInput, consecutiveFails int64, cfg FormulaConfig) float64 {
+// 	sum := 0.0
+// 	for _, t := range tasks {
+// 		wi := ComputeWi(t.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
+// 		lambda := ComputeDecayRate(wi, cfg.TBaseDays)
+// 		decay := ComputeDecayFactor(lambda, t.DeltaDays)
+// 		sum += wi * t.Vi * decay
+// 	}
+// 	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
+// 	score := cfg.SBase + sum - penalty
+// 	return math.Min(1000.0, score)
+// }
 
 // ── O(1) incremental scoring functions ─────────────────────────────────────────
 
@@ -114,8 +116,12 @@ func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNow
 
 // ComputeCurrentScore performs lazy decay evaluation (read path, §3.6).
 //
-// Returns the displayed score S clamped to [0, 1000].
+// Returns the displayed score S clamped to (-∞, 1000]; negative scores are allowed.
 // This value is for display only — NEVER write it back to MongoDB as accumulatedScore.
+//
+// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight)
+// rather than the true per-task wᵢ mix. This intentionally under-decays high-wᵢ tasks
+// at read time in exchange for O(1) computation. The write path (ApplyTaskScore) is exact.
 //
 // accScore:         stored accumulatedScore.
 // lastUpdateUnix:   Unix seconds of last score update.
@@ -133,7 +139,7 @@ func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, consecutiveFail
 	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
 	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
 	score := cfg.SBase + decayed - penalty
-	return math.Min(1000.0, math.Max(0.0, score))
+	return math.Min(1000.0, score)
 }
 
 // RevertFeedbackScore subtracts a previously scored feedback's residual contribution
@@ -164,9 +170,5 @@ func RevertFeedbackScore(accScore float64, lastUpdateUnix int64, wi, vi float64,
 	}
 	residual := wi * vi * ComputeDecayFactor(lambda, deltaDaysFeedback)
 
-	result := decayed - residual
-	if result < 0 {
-		result = 0
-	}
-	return result
+	return decayed - residual
 }

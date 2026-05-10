@@ -13,7 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"erc-8004-benchmarking-be/internal/mq"
-	"erc-8004-benchmarking-be/internal/repository/config"
+	"erc-8004-benchmarking-be/internal/repository/contracts"
 )
 
 // Args is the decoded parameter map written to MongoDB.
@@ -37,7 +37,7 @@ type abiInputJSON struct {
 
 // buildParsedABI converts ABI fragments stored in the MQ message into a
 // go-ethereum abi.ABI for event lookup and data unpacking.
-func buildParsedABI(fragments []config.ABIEventFragment) (abi.ABI, error) {
+func buildParsedABI(fragments []contracts.ABIEventFragment) (abi.ABI, error) {
 	items := make([]abiJSON, 0, len(fragments))
 	for _, f := range fragments {
 		inputs := make([]abiInputJSON, 0, len(f.Inputs))

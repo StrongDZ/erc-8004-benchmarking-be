@@ -1,9 +1,8 @@
 package handlers
 
-// agent.go — HTTP handlers for /agents/:chainId/:agentId/* endpoints.
+// agent.go âÿÿ HTTP handlers for /agents/:chainId/:agentId/* endpoints.
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
@@ -19,7 +18,7 @@ type AgentHandler struct {
 // NewAgentHandler returns a new AgentHandler.
 func NewAgentHandler(svc *service.Agent) *AgentHandler { return &AgentHandler{svc: svc} }
 
-// Profile handles GET /agents/:chainId/:agentId (§3.1).
+// Profile handles GET /agents/:chainId/:agentId (Â§3.1).
 // @Summary Agent profile
 // @Tags agents
 // @Produce json
@@ -37,13 +36,37 @@ func (h *AgentHandler) Profile(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.Profile(r.Context(), chainID, agentID)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// ScoreHistory handles GET /agents/:chainId/:agentId/score-history (§3.2).
+// Overview handles GET /agents/:chainId/:agentId/overview.
+// @Summary Agent overview tab (basic info + services health + metadata)
+// @Tags agents
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/overview [get]
+func (h *AgentHandler) Overview(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.Overview(r.Context(), chainID, agentID)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
+}
+
+// ScoreHistory handles GET /agents/:chainId/:agentId/score-history (Â§3.2).
 // @Summary Agent score history
 // @Tags agents
 // @Produce json
@@ -79,13 +102,13 @@ func (h *AgentHandler) ScoreHistory(w http.ResponseWriter, r *http.Request) {
 		Limit:      limit,
 	})
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.SuccessMeta(w, r, dto.ScoreHistoryResult{Points: out.Points}, &dto.Meta{Total: out.Total})
 }
 
-// Feedbacks handles GET /agents/:chainId/:agentId/feedbacks (§3.3).
+// Feedbacks handles GET /agents/:chainId/:agentId/feedbacks (Â§3.3).
 // @Summary Agent feedback list
 // @Tags agents
 // @Produce json
@@ -132,13 +155,13 @@ func (h *AgentHandler) Feedbacks(w http.ResponseWriter, r *http.Request) {
 		Skip:     skip,
 	})
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
 }
 
-// FeedbackDetail handles GET /agents/:chainId/:agentId/feedbacks/:feedbackId (§3.4).
+// FeedbackDetail handles GET /agents/:chainId/:agentId/feedbacks/:feedbackId (Â§3.4).
 // @Summary Agent feedback detail
 // @Tags agents
 // @Produce json
@@ -162,13 +185,13 @@ func (h *AgentHandler) FeedbackDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.FeedbackDetail(r.Context(), chainID, agentID, fid)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// IdentityHistory handles GET /agents/:chainId/:agentId/identity-history (§3.5).
+// IdentityHistory handles GET /agents/:chainId/:agentId/identity-history (Â§3.5).
 // @Summary Agent identity history
 // @Tags agents
 // @Produce json
@@ -186,13 +209,13 @@ func (h *AgentHandler) IdentityHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.IdentityHistory(r.Context(), chainID, agentID)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// ActivityHeatmap handles GET /agents/:chainId/:agentId/activity-heatmap (§3.7).
+// ActivityHeatmap handles GET /agents/:chainId/:agentId/activity-heatmap (Â§3.7).
 // @Summary Agent activity heatmap
 // @Tags agents
 // @Produce json
@@ -212,13 +235,13 @@ func (h *AgentHandler) ActivityHeatmap(w http.ResponseWriter, r *http.Request) {
 	days := dto.ParseInt(r, "days", 365)
 	out, err := h.svc.ActivityHeatmap(r.Context(), chainID, agentID, days)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// Penalties handles GET /agents/:chainId/:agentId/penalties (§3.8).
+// Penalties handles GET /agents/:chainId/:agentId/penalties (Â§3.8).
 // @Summary Agent penalties
 // @Tags agents
 // @Produce json
@@ -251,13 +274,13 @@ func (h *AgentHandler) Penalties(w http.ResponseWriter, r *http.Request) {
 		Skip:    skip,
 	})
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
 }
 
-// Related handles GET /agents/:chainId/:agentId/related (§3.11).
+// Related handles GET /agents/:chainId/:agentId/related (Â§3.11).
 // @Summary Related agents
 // @Tags agents
 // @Produce json
@@ -288,13 +311,13 @@ func (h *AgentHandler) Related(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.Related(r.Context(), chainID, agentID, by, limit)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// Radar handles GET /agents/:chainId/:agentId/radar (§3.6).
+// Radar handles GET /agents/:chainId/:agentId/radar (Â§3.6).
 // @Summary Agent radar
 // @Tags agents
 // @Produce json
@@ -312,13 +335,13 @@ func (h *AgentHandler) Radar(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.Radar(r.Context(), chainID, agentID)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// Proof handles GET /agents/:chainId/:agentId/proof/:txHash (§3.10).
+// Proof handles GET /agents/:chainId/:agentId/proof/:txHash (Â§3.10).
 // @Summary Agent proof by transaction
 // @Tags agents
 // @Produce json
@@ -342,13 +365,13 @@ func (h *AgentHandler) Proof(w http.ResponseWriter, r *http.Request) {
 	}
 	out, err := h.svc.Proof(r.Context(), chainID, agentID, tx)
 	if err != nil {
-		writeAgentErr(w, r, err)
+		writeServiceErr(w, r, err)
 		return
 	}
 	dto.Success(w, r, out)
 }
 
-// AntiSpam is a v2 placeholder (§3.9).
+// AntiSpam is a v2 placeholder (Â§3.9).
 // @Summary Agent anti-spam (v2 placeholder)
 // @Tags agents
 // @Produce json
@@ -378,12 +401,3 @@ func (h *AgentHandler) parseAgentPath(w http.ResponseWriter, r *http.Request) (i
 	return chainID, agentID, true
 }
 
-// writeAgentErr converts common service errors into standard HTTP errors.
-func writeAgentErr(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, service.ErrAgentNotFound):
-		dto.Fail(w, r, http.StatusNotFound, dto.CodeNotFound, "agent not found")
-	default:
-		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
-	}
-}

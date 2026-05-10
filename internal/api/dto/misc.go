@@ -1,6 +1,6 @@
 package dto
 
-// misc.go — OASF discovery & chain metadata DTOs.
+// misc.go — OASF discovery & chain DTOs.
 
 // OASFFacetNode mirrors agent.OASFFacetNode but JSON-tagged for public API.
 type OASFFacetNode struct {
@@ -21,12 +21,8 @@ type OASFFacetTree struct {
 
 // ChainInfo is one entry of /chains (§5.1).
 type ChainInfo struct {
-	ChainID        int64  `json:"chainId"`
-	Name           string `json:"name"`
-	ShortName      string `json:"shortName"`
-	NativeCurrency string `json:"nativeCurrency,omitempty"`
-	BlockExplorer  string `json:"blockExplorer,omitempty"`
-	AgentCount     int64  `json:"agentCount"`
+	ChainID    int64 `json:"chainId"`
+	AgentCount int64 `json:"agentCount"`
 }
 
 // ContractInfo is one entry of /chains/:id/contracts (§5.2).
@@ -40,10 +36,11 @@ type ContractInfo struct {
 type IndexerChainStatus struct {
 	ChainID            int64   `json:"chainId"`
 	LastProcessedBlock uint64  `json:"lastProcessedBlock"`
-	CrawlerStatus      string  `json:"crawlerStatus,omitempty"`
-	LastError          string  `json:"lastError,omitempty"`
-	LastUpdatedAt      string  `json:"lastUpdatedAt,omitempty"`
-	ActiveRPC          string  `json:"activeRpc,omitempty"`
+	AgentCount         int64   `json:"agentCount"`
+	FeedbackCount      int64   `json:"feedbackCount"`
+	IdentityRegistry   string  `json:"identityRegistry,omitempty"`
+	ReputationRegistry string  `json:"reputationRegistry,omitempty"`
+	LastIndexedAt      string  `json:"lastIndexedAt,omitempty"`
 }
 
 // WorkerCursor is a (blockNumber, logIndex) cursor as returned by indexer-status.

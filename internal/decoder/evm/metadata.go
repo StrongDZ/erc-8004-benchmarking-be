@@ -15,7 +15,7 @@ import (
 // MetadataDecodeResult stores normalized decode output for one metadata value.
 type MetadataDecodeResult struct {
 	RawHex       string
-	Decoded      string
+	Decoded      any
 	DetectedType string
 	Confidence   string
 }
@@ -26,7 +26,7 @@ func DecodeMetadataValue(key, hexValue string) MetadataDecodeResult {
 	if trimmed == "" {
 		return MetadataDecodeResult{
 			RawHex:       "",
-			Decoded:      "",
+			Decoded:      nil,
 			DetectedType: "empty",
 			Confidence:   "high",
 		}
@@ -59,16 +59,16 @@ func DecodeMetadataValue(key, hexValue string) MetadataDecodeResult {
 		}
 	case "ecosystem", "name", "description", "version", "source", "meshAgentId", "twitter", "website", "email", "skills", "tags", "platform", "category", "endpoint", "ensName", "mandate", "manifestUrl", "agentName", "agentType":
 		if s := decodeABIString(data); s != "" && isMostlyPrintable(s) {
-			return MetadataDecodeResult{RawHex: normalized, Decoded: s, DetectedType: "abi_string", Confidence: "high"}
+			return MetadataDecodeResult{RawHex: normalized, Decoded: decodeDecodedJSONIfAny(s), DetectedType: "abi_string", Confidence: "high"}
 		}
 		if s := decodeASCIIHex(data); s != "" {
-			return MetadataDecodeResult{RawHex: normalized, Decoded: s, DetectedType: "ascii_hex", Confidence: "high"}
+			return MetadataDecodeResult{RawHex: normalized, Decoded: decodeDecodedJSONIfAny(s), DetectedType: "ascii_hex", Confidence: "high"}
 		}
 	}
 
 	// Heuristic fallback for unknown keys.
 	if s := decodeABIString(data); s != "" && isMostlyPrintable(s) {
-		return MetadataDecodeResult{RawHex: normalized, Decoded: s, DetectedType: "abi_string", Confidence: "medium"}
+		return MetadataDecodeResult{RawHex: normalized, Decoded: decodeDecodedJSONIfAny(s), DetectedType: "abi_string", Confidence: "medium"}
 	}
 	if v := decodeAddressLike(data, normalized); v != "" {
 		return MetadataDecodeResult{RawHex: normalized, Decoded: v, DetectedType: "address", Confidence: "medium"}
@@ -86,7 +86,7 @@ func DecodeMetadataValue(key, hexValue string) MetadataDecodeResult {
 		if isJSON(s) {
 			detected = "json_hex"
 		}
-		return MetadataDecodeResult{RawHex: normalized, Decoded: s, DetectedType: detected, Confidence: "medium"}
+		return MetadataDecodeResult{RawHex: normalized, Decoded: decodeDecodedJSONIfAny(s), DetectedType: detected, Confidence: "medium"}
 	}
 
 	return MetadataDecodeResult{
@@ -186,4 +186,21 @@ func isMostlyPrintable(s string) bool {
 func isJSON(s string) bool {
 	var v any
 	return json.Unmarshal([]byte(s), &v) == nil
+}
+
+// decodeDecodedJSONIfAny unmarshals s when it is valid JSON (object, array, string, number, bool, null);
+// otherwise returns the original string.
+func decodeDecodedJSONIfAny(s string) any {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !isJSON(s) {
+		return s
+	}
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return s
+	}
+	return v
 }

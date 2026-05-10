@@ -1,7 +1,6 @@
 package mongo
 
-// client.go — MongoDB client factory
-// Provides a connected, health-checked *mongo.Client for use in cmd/ wiring.
+// client.go — MongoDB client factory with connection pool tuning.
 
 import (
 	"context"
@@ -11,10 +10,31 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// NewClient dials MongoDB, pings it, and returns a ready-to-use client.
-// Caller is responsible for calling client.Disconnect().
-func NewClient(ctx context.Context, uri string) (*mongo.Client, error) {
-	clientOpts := options.Client().ApplyURI(uri)
+// PoolOptions carries connection pool tuning parameters.
+type PoolOptions struct {
+	MaxPoolSize    uint64
+	MinPoolSize    uint64
+	MaxConnIdleTime time.Duration
+}
+
+// DefaultPoolOptions returns conservative defaults suitable for most deployments.
+func DefaultPoolOptions() PoolOptions {
+	return PoolOptions{
+		MaxPoolSize:     200,
+		MinPoolSize:     10,
+		MaxConnIdleTime: 10 * time.Minute,
+	}
+}
+
+// NewClient dials MongoDB with explicit pool tuning, pings it, and returns a
+// ready-to-use client. Caller is responsible for calling client.Disconnect().
+func NewClient(ctx context.Context, uri string, pool PoolOptions) (*mongo.Client, error) {
+	clientOpts := options.Client().
+		ApplyURI(uri).
+		SetMaxPoolSize(pool.MaxPoolSize).
+		SetMinPoolSize(pool.MinPoolSize).
+		SetMaxConnIdleTime(pool.MaxConnIdleTime)
+
 	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
 		return nil, err

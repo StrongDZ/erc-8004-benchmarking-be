@@ -9,6 +9,7 @@ package classifier
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // HybridInput is the full set of signals available at classification time.
@@ -20,6 +21,7 @@ type HybridInput struct {
 	OffchainContent  string
 	AgentDescription string
 	AgentServices    string
+	AgentTags        []string // denormalized onchain tags, e.g. ["defi","swap"]
 }
 
 // HybridResult extends the base Result with LLM-specific metadata.
@@ -28,6 +30,19 @@ type HybridResult struct {
 	LowConfidence bool            // true when 0.50 <= confidence < 0.70
 	ModelVer      string          // set when Source == "llm"
 	ValueNorm     float64         // normalised value used during classification
+}
+
+// knownConfigTag2 maps tag2 values that always signal config_feedback regardless
+// of what the LLM decides. Used as a post-hoc override for LLM fallback results.
+var knownConfigTag2 = map[string]bool{
+	"oracle-screening": true, "liveness-check": true,
+	"win-rate": true, "coverage-rate": true, "exit-rate": true,
+	"automated-screening": true, "service_quality": true,
+}
+
+// knownAppTag2 maps tag2 values that always signal app_specific.
+var knownAppTag2 = map[string]bool{
+	"sentinelnet-v1": true,
 }
 
 // HybridClassifier combines the rule engine with an optional LLM fallback.
@@ -79,7 +94,34 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 		in.OffchainContent,
 		in.AgentDescription,
 		in.AgentServices,
+		in.AgentTags,
 	)
+
+	// Post-hoc safety overrides: catch cases the LLM consistently miscategorises.
+	// Applied only when LLM outputs service_feedback — the category with the
+	// highest false-positive rate on 3B models.
+	t1lo := strings.ToLower(strings.TrimSpace(in.Tag1))
+	t2lo := strings.ToLower(strings.TrimSpace(in.Tag2))
+	if llmRes.Category == CategoryService {
+		switch {
+		case isSpam(t1lo, t2lo):
+			llmRes.Category = CategorySpam
+			llmRes.Confidence = 0.99
+			llmRes.Source = "override"
+		case isNoise(t1lo, t2lo):
+			llmRes.Category = CategoryNoise
+			llmRes.Confidence = 0.99
+			llmRes.Source = "override"
+		case knownConfigTag2[t2lo]:
+			llmRes.Category = CategoryConfig
+			llmRes.Confidence = 0.95
+			llmRes.Source = "override"
+		case knownAppTag2[t2lo]:
+			llmRes.Category = CategoryApp
+			llmRes.Confidence = 0.95
+			llmRes.Source = "override"
+		}
+	}
 
 	result := HybridResult{
 		Result: Result{

@@ -3,16 +3,22 @@ package trustrank
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	"erc-8004-benchmarking-be/internal/mq"
 	"erc-8004-benchmarking-be/internal/repository/agent"
 	configrepo "erc-8004-benchmarking-be/internal/repository/config"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/score"
-	"strings"
-	"time"
+	"erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
 // EventProcessor processes a batch of decoded events for scoring/identity/feedback.
@@ -20,9 +26,15 @@ type EventProcessor interface {
 	ProcessBatch(ctx context.Context, chainID int64, events []eventrepo.DecodedEvent) error
 }
 
+// URIPublisher publishes service-endpoint URI messages to the service_uri queue.
+// Implemented by an infrastructure adapter; defined here at the consumer site.
+type URIPublisher interface {
+	Publish(ctx context.Context, queueName string, msg any) error
+}
+
 // App orchestrates Stream 2: parallel per-chain event processing each cron tick.
 type App struct {
-	Contracts  *configrepo.ContractsRepository
+	Contracts  *contractsrepo.ContractsRepository
 	Events     *eventrepo.Repository
 	ConfigRepo *configrepo.ConfigRepository
 	Interval   time.Duration
@@ -59,22 +71,103 @@ func (x *x402SupportJSON) UnmarshalJSON(b []byte) error {
 	}
 }
 
+// registrationsJSON accepts multiple JSON shapes and extracts CAIP-10 entries.
+// Some cards send registrations as object instead of []string.
+type registrationsJSON []string
+
+func (r *registrationsJSON) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*r = nil
+		return nil
+	}
+
+	var raw any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+
+	out := make([]string, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	collectRegistrations(raw, &out, seen)
+	if len(out) == 0 {
+		*r = nil
+		return nil
+	}
+	*r = registrationsJSON(out)
+	return nil
+}
+
+func collectRegistrations(v any, out *[]string, seen map[string]struct{}) {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" || !isCaip10(s) {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		*out = append(*out, s)
+	case []any:
+		for _, item := range t {
+			collectRegistrations(item, out, seen)
+		}
+	case map[string]any:
+		// Best-effort: extract any CAIP-10 strings nested in object payloads.
+		for _, item := range t {
+			collectRegistrations(item, out, seen)
+		}
+	}
+}
+
+// updatedAtJSON accepts string or number and stores a normalized string form.
+type updatedAtJSON string
+
+func (u *updatedAtJSON) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*u = ""
+		return nil
+	}
+
+	var raw any
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+
+	switch v := raw.(type) {
+	case string:
+		*u = updatedAtJSON(strings.TrimSpace(v))
+	case float64:
+		if v == float64(int64(v)) {
+			*u = updatedAtJSON(strconv.FormatInt(int64(v), 10))
+		} else {
+			*u = updatedAtJSON(strconv.FormatFloat(v, 'f', -1, 64))
+		}
+	default:
+		*u = ""
+	}
+	return nil
+}
+
 // agentCard unmarshals the ERC-8004 agent registration file JSON (identity URI).
 // The "services" field is captured as raw JSON and parsed via ParseServices()
 // because real-world cards use many incompatible shapes (object, array-of-objects,
 // array-of-strings) and field types (skills/domains as numbers).
 // Unknown fields are captured in Extra for offchain_metadata.
 type agentCard struct {
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Domains        []string        `json:"domains"`
-	Image          string          `json:"image"`
-	ImageURI       string          `json:"imageURI"`
-	RawServices    json.RawMessage `json:"services"`
-	Active         bool            `json:"active"`
-	SupportedTrust []string        `json:"supportedTrust"`
-	X402Support    x402SupportJSON `json:"x402Support"`
-	Extra          map[string]any  `json:"-"` // populated after unmarshal
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Domains        []string          `json:"domains"`
+	Image          string            `json:"image"`
+	ImageURI       string            `json:"imageURI"`
+	RawServices    json.RawMessage   `json:"services"`
+	Active         bool              `json:"active"`
+	SupportedTrust []string          `json:"supportedTrust"`
+	X402Support    x402SupportJSON   `json:"x402Support"`
+	Registrations  registrationsJSON `json:"registrations"` // CAIP-10 identifiers (AgentURI Profile v1.3)
+	UpdatedAt      updatedAtJSON     `json:"updatedAt"`     // ISO-8601 or unix timestamp
+	Extra          map[string]any    `json:"-"`             // populated after unmarshal
 }
 
 // ParseServices parses the raw "services" JSON value tolerantly.
@@ -165,14 +258,25 @@ func parseServicesJSON(raw json.RawMessage) []agent.RegistrationService {
 	return nil
 }
 
+// cachedScale holds a detected scale with an expiry for the in-memory cache.
+type cachedScale struct {
+	Scale     string
+	ExpiresAt int64 // Unix seconds
+}
+
 // Processor implements EventProcessor with real domain logic.
 type Processor struct {
-	agentRepo    *agent.Repository
-	identityRepo *identityrepo.Repository
-	feedbackRepo *feedback.Repository
-	scoreRepo    *score.Repository
-	offchainRepo *offchain.Repository
-	formulaCfg   scoring.FormulaConfig
+	agentRepo      *agent.Repository
+	identityRepo   *identityrepo.Repository
+	feedbackRepo   *feedback.Repository
+	scoreRepo      *score.Repository
+	offchainRepo   *offchain.Repository
+	formulaCfg     scoring.FormulaConfig
+	uriPublisher   URIPublisher // may be nil; publishes service endpoint URIs asynchronously
+	tagStatsRepo   *tagstats.StatsRepository
+	tagCorrsRepo   *tagstats.CorrectionRepository
+	tagScaleCache  sync.Map // tag1 -> cachedScale
+	minSamples     int      // minimum feedbacks before scale is locked
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.
@@ -186,13 +290,15 @@ type batchState struct {
 	fbMap    map[string]*feedback.FeedbackRecord // feedback doc _id -> record
 
 	// write buffers
-	pendingIdentity  []identityrepo.IdentityChange
-	pendingFeedbacks []feedback.FeedbackRecord
-	pendingSnapshots []struct {
+	pendingIdentity    []identityrepo.IdentityChange
+	pendingFeedbacks   []feedback.FeedbackRecord
+	pendingSnapshots   []struct {
 		ChainID  int64
 		AgentID  string
 		Snapshot score.ScoreSnapshotItem
 	}
-	pendingFBUpdates []feedback.FeedbackUpdate
-	dirtyAgents      map[string]bool // agentIDs that were created or mutated
+	pendingFBUpdates   []feedback.FeedbackUpdate
+	pendingServiceURIs []mq.ServiceURIMessage   // service endpoint URIs to publish asynchronously
+	pendingTierUpdates []tagstats.TierUpdate    // tag scale votes to flush in Phase 3
+	dirtyAgents        map[string]bool          // agentIDs that were created or mutated
 }

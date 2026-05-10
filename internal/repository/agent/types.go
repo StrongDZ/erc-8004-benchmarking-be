@@ -29,9 +29,11 @@ type IdentityFields struct {
 }
 
 // OnchainMetadataValue stores decoded metadata with provenance confidence.
+// Decoded holds JSON-native values when applicable (e.g. []any for tag arrays, map for objects);
+// scalars remain string or number as decoded from the chain bytes.
 type OnchainMetadataValue struct {
 	RawHex       string `bson:"rawHex,omitempty" json:"rawHex,omitempty"`
-	Decoded      string `bson:"decoded,omitempty" json:"decoded,omitempty"`
+	Decoded      any    `bson:"decoded,omitempty" json:"decoded,omitempty"`
 	DetectedType string `bson:"detectedType,omitempty" json:"detectedType,omitempty"`
 	Confidence   string `bson:"confidence,omitempty" json:"confidence,omitempty"`
 }
@@ -42,15 +44,19 @@ type AgentDocument struct {
 	AgentID          string   `bson:"agentId"` // decimal string of uint256
 	ChainID          int64    `bson:"chainId"`
 	Owner            string   `bson:"owner"`
+	AgentWallet      string   `bson:"agentWallet,omitempty"` // EIP-712-verified wallet from setAgentWallet(); first-class field
 	AgentURI         string   `bson:"agentURI"`
 	Name             string   `bson:"name,omitempty"`
 	Domains          []string `bson:"domains,omitempty"`
 	Image            string   `bson:"image,omitempty"`
 	Description      string   `bson:"description,omitempty"`
+	Registrations    []string `bson:"registrations,omitempty"`  // CAIP-10 multi-chain identity array (AgentURI Profile v1.3)
+	CardUpdatedAt    string   `bson:"cardUpdatedAt,omitempty"`  // ISO-8601 updatedAt from agent card JSON
 	Services         []RegistrationService `bson:"services,omitempty"`
 	Active           bool     `bson:"active"`      // do not use omitempty — must persist false
 	X402Support      bool     `bson:"x402Support"` // do not use omitempty — must persist false
 	SupportedTrust   []string `bson:"supportedTrust,omitempty"`
+	LegacyWarnings   []string `bson:"legacyWarnings,omitempty"` // WA031 and other spec deprecation warnings
 	OASFSkills       []string `bson:"oasfSkills,omitempty"`   // normalized OASF skill paths for querying
 	OASFDomains      []string `bson:"oasfDomains,omitempty"`  // normalized OASF domain paths for querying
 	HasOASF          bool     `bson:"hasOASF"`                 // quick filter for OASF-supporting agents

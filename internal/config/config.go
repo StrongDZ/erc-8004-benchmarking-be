@@ -25,7 +25,13 @@ type Config struct {
 	AgentsColl       string
 	IdentityHistColl string
 	ScoreHistColl    string
-	FeedbackHistColl string
+	FeedbackHistColl    string
+	TagStatsColl        string // tag_value_stats — per-tag tier vote counters
+	TagCorrectionsColl  string // changed_tag_scales — rescale correction queue
+	RescaleDeltasColl   string // rescale_deltas — pre-computed per-agent deltas
+
+	// Tag-scale normalization
+	TagStatsMinSamples int // feedbacks required before scale is locked (default 50)
 
 	// Crawler / indexer
 	BatchSize           uint64
@@ -41,7 +47,8 @@ type Config struct {
 	RabbitMQURI      string
 	RabbitMQQueue    string // raw logs queue
 	RabbitMQURIQueue string // uri fetch queue
-	ConsumerPrefetch int    // number of unacked messages the consumer can hold at once
+	ConsumerPrefetch    int // number of unacked messages the raw-log consumer can hold at once
+	URIConsumerPrefetch int // prefetch count per chain for event_uri and service_uri consumers
 
 	URIBootstrapBatchSize  int
 	URIResolverIntervalSec int
@@ -64,6 +71,8 @@ type Config struct {
 
 	// IPFS gateway for URI resolution
 	IPFSGateway string
+	// Arweave gateway for URI resolution
+	ArweaveGateway string
 
 	// HTTPS client for URI resolver (Stream 1): long timeout tolerates cold starts on hosts like Render.
 	HTTPSFetchTimeout time.Duration
@@ -80,7 +89,7 @@ type Config struct {
 	LLMFallbackOnError          bool          // return "others" on LLM error (default true)
 	LLMKeepAlive                time.Duration // Ollama keep-alive (default 30m)
 
-	// REST API (cmd/api)
+	// REST API (cmd/workers/api)
 	APIPort              int
 	APIReadTimeout       time.Duration
 	APIWriteTimeout      time.Duration
@@ -92,6 +101,15 @@ type Config struct {
 	// Redis (realtime Pub/Sub fan-out between consumer and API WS hub)
 	RedisURL            string // e.g. redis://localhost:6379/0
 	RedisEventsChannel  string // Pub/Sub channel for decoded realtime events
+
+	// MongoDB connection pool tuning
+	MongoMaxPoolSize    uint64        // default 200
+	MongoMinPoolSize    uint64        // default 10
+	MongoMaxConnIdleMs  time.Duration // default 10m
+
+	// Rate limiting (per IP, token bucket)
+	RateLimitRPS   float64 // requests per second per IP (default 20)
+	RateLimitBurst int     // burst depth (default 40)
 }
 
 // loadDotEnv loads the first .env found walking upward from the process working directory.
@@ -130,7 +148,12 @@ func Load() (Config, error) {
 		AgentsColl:       utils.Getenv("MONGO_COLLECTION_AGENTS", "agents"),
 		IdentityHistColl: utils.Getenv("MONGO_COLLECTION_IDENTITY_HISTORY", "identity_history"),
 		ScoreHistColl:    utils.Getenv("MONGO_COLLECTION_SCORE_HISTORY", "score_history"),
-		FeedbackHistColl: utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
+		FeedbackHistColl:   utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
+		TagStatsColl:       utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
+		TagCorrectionsColl: utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
+		RescaleDeltasColl:  utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
+
+		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 50),
 
 		BatchSize:           uint64(utils.GetenvInt("CRAWLER_BATCH_SIZE", 1000)),
 		PollInterval:        time.Duration(utils.GetenvInt("CRAWLER_POLL_SECONDS", 5)) * time.Second,
@@ -144,7 +167,8 @@ func Load() (Config, error) {
 		RabbitMQURI:      utils.Getenv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),
 		RabbitMQQueue:    utils.Getenv("RABBITMQ_QUEUE", "erc8004.raw_logs"),
 		RabbitMQURIQueue: utils.Getenv("RABBITMQ_URI_QUEUE", "erc8004.agent_uri"),
-		ConsumerPrefetch: utils.GetenvInt("CONSUMER_PREFETCH", 10),
+		ConsumerPrefetch:    utils.GetenvInt("CONSUMER_PREFETCH", 10),
+		URIConsumerPrefetch: utils.GetenvInt("URI_CONSUMER_PREFETCH", 5),
 
 		URIBootstrapBatchSize:  utils.GetenvInt("URI_BOOTSTRAP_BATCH_SIZE", 1000),
 		URIResolverIntervalSec: utils.GetenvInt("URI_RESOLVER_INTERVAL_SECONDS", 30),
@@ -162,7 +186,8 @@ func Load() (Config, error) {
 
 		DecayIntervalHours: utils.GetenvInt("DECAY_INTERVAL_HOURS", 4),
 
-		IPFSGateway: utils.Getenv("IPFS_GATEWAY", "https://ipfs.io/ipfs/"),
+		IPFSGateway:    utils.Getenv("IPFS_GATEWAY", "https://ipfs.io/ipfs/"),
+		ArweaveGateway: utils.Getenv("ARWEAVE_GATEWAY", "https://arweave.net/"),
 
 		HTTPSFetchTimeout: time.Duration(utils.GetenvInt("HTTPS_FETCH_TIMEOUT_SECONDS", 90)) * time.Second,
 		HTTPSUserAgent:    utils.Getenv("HTTPS_USER_AGENT", "erc8004-uri-bootstrap/1.0"),
@@ -187,6 +212,13 @@ func Load() (Config, error) {
 
 		RedisURL:           utils.Getenv("REDIS_URL", "redis://localhost:6379/0"),
 		RedisEventsChannel: utils.Getenv("REDIS_EVENTS_CHANNEL", "erc8004:events:realtime"),
+
+		MongoMaxPoolSize:   uint64(utils.GetenvInt("MONGO_MAX_POOL_SIZE", 200)),
+		MongoMinPoolSize:   uint64(utils.GetenvInt("MONGO_MIN_POOL_SIZE", 10)),
+		MongoMaxConnIdleMs: time.Duration(utils.GetenvInt("MONGO_MAX_CONN_IDLE_MINUTES", 10)) * time.Minute,
+
+		RateLimitRPS:   utils.GetenvFloat("RATE_LIMIT_RPS", 20),
+		RateLimitBurst: utils.GetenvInt("RATE_LIMIT_BURST", 40),
 	}
 
 	if strings.TrimSpace(cfg.MongoURI) == "" {
@@ -254,6 +286,24 @@ func Load() (Config, error) {
 	}
 	if cfg.APIShutdownTimeout <= 0 {
 		return Config{}, fmt.Errorf("API_SHUTDOWN_TIMEOUT_SECONDS must be > 0")
+	}
+	if cfg.TrustRankAlpha <= 0 {
+		return Config{}, fmt.Errorf("TRUSTRANK_ALPHA must be > 0")
+	}
+	if cfg.TrustRankBeta < 0 {
+		return Config{}, fmt.Errorf("TRUSTRANK_BETA must be >= 0")
+	}
+	if cfg.TrustRankK <= 0 {
+		return Config{}, fmt.Errorf("TRUSTRANK_K must be > 0")
+	}
+	if cfg.TrustRankTBase <= 0 {
+		return Config{}, fmt.Errorf("TRUSTRANK_TBASE_DAYS must be > 0")
+	}
+	if cfg.RateLimitRPS <= 0 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_RPS must be > 0")
+	}
+	if cfg.RateLimitBurst < 1 {
+		return Config{}, fmt.Errorf("RATE_LIMIT_BURST must be >= 1")
 	}
 
 	return cfg, nil

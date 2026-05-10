@@ -21,22 +21,21 @@ import (
 
 	rabbitmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
-	"erc-8004-benchmarking-be/internal/repository/config"
+	"erc-8004-benchmarking-be/internal/repository/contracts"
 	"erc-8004-benchmarking-be/internal/repository/crawler"
 	"erc-8004-benchmarking-be/internal/utils"
 	"erc-8004-benchmarking-be/pkg/retry"
 )
 
 type crawlJob struct {
-	chainID               int64
-	rpcs                  []string
-	target                config.ContractTarget
-	chainStartBlockHeight uint64
+	chainID int64
+	rpcs    []string
+	target  contracts.ContractTarget
 }
 
 // Crawler polls EVM chains for contract events and publishes them as RawLogMessages.
 type Crawler struct {
-	contractsRepo     *config.ContractsRepository
+	contractsRepo     *contracts.ContractsRepository
 	crawlersRepo      *crawler.Repository
 	publisher         *rabbitmqinfra.Publisher
 	batchSize         uint64
@@ -45,6 +44,7 @@ type Crawler struct {
 	rpcMaxRetries     int
 	retryBackoffStart time.Duration
 	retryStrategy     retry.BackoffStrategy
+	breakers          *BreakerRegistry
 
 	jobMu    sync.Mutex
 	jobLocks map[string]*sync.Mutex
@@ -52,7 +52,7 @@ type Crawler struct {
 
 // NewCrawler constructs a Crawler with the supplied dependencies and tuning parameters.
 func NewCrawler(
-	contractsRepo *config.ContractsRepository,
+	contractsRepo *contracts.ContractsRepository,
 	crawlersRepo *crawler.Repository,
 	publisher *rabbitmqinfra.Publisher,
 	batchSize uint64,
@@ -82,6 +82,7 @@ func NewCrawler(
 		rpcMaxRetries:     rpcMaxRetries,
 		retryBackoffStart: retryBackoffStart,
 		retryStrategy:     retryStrategy,
+		breakers:          NewBreakerRegistry(DefaultBreakerConfig()),
 		jobLocks:          make(map[string]*sync.Mutex),
 	}
 }
@@ -116,10 +117,9 @@ func (c *Crawler) RunOnce(ctx context.Context) error {
 				continue
 			}
 			jobs = append(jobs, crawlJob{
-				chainID:               cfg.ChainID,
-				rpcs:                  rpcs,
-				target:                target,
-				chainStartBlockHeight: cfg.StartBlockHeight,
+				chainID: cfg.ChainID,
+				rpcs:    rpcs,
+				target:  target,
 			})
 		}
 	}
@@ -154,7 +154,13 @@ func (c *Crawler) RunOnce(ctx context.Context) error {
 
 			log.Printf("chain=%d contract=%s type=%s rpc_count=%d (crawl start)", j.chainID, addr, j.target.Type, len(j.rpcs))
 
-			if err := c.crawlEvents(ctx, j.rpcs, j.chainID, j.target, j.chainStartBlockHeight); err != nil {
+			breaker := c.breakers.Get(j.chainID)
+			if err := breaker.Allow(); err != nil {
+				log.Printf("chain=%d contract=%s circuit open, skipping: %v", j.chainID, addr, err)
+				return
+			}
+			if err := c.crawlEvents(ctx, j.rpcs, j.chainID, j.target); err != nil {
+				breaker.RecordFailure()
 				log.Printf("chain=%d contract=%s event crawl error: %v", j.chainID, addr, err)
 				wrapped := fmt.Errorf("chain=%d contract=%s: %w", j.chainID, addr, err)
 				cycleMu.Lock()
@@ -162,6 +168,8 @@ func (c *Crawler) RunOnce(ctx context.Context) error {
 					cycleErr = wrapped
 				}
 				cycleMu.Unlock()
+			} else {
+				breaker.RecordSuccess()
 			}
 		}()
 	}
@@ -196,7 +204,7 @@ func (c *Crawler) Run(ctx context.Context, livePoll, errorPoll time.Duration) {
 	}
 }
 
-func (c *Crawler) crawlEvents(ctx context.Context, rpcs []string, chainID int64, target config.ContractTarget, chainStartBlockHeight uint64) error {
+func (c *Crawler) crawlEvents(ctx context.Context, rpcs []string, chainID int64, target contracts.ContractTarget) error {
 	if len(rpcs) == 0 {
 		return fmt.Errorf("no RPC endpoints for chain=%d contract=%s", chainID, target.Address)
 	}
@@ -232,11 +240,7 @@ func (c *Crawler) crawlEvents(ctx context.Context, rpcs []string, chainID int64,
 
 	var startBlock uint64
 	if state == nil {
-		if target.StartBlock > 0 {
-			startBlock = target.StartBlock
-		} else {
-			startBlock = chainStartBlockHeight
-		}
+		startBlock = target.StartBlock
 	} else {
 		startBlock = state.LastProcessedBlock + 1
 	}

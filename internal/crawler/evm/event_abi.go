@@ -8,13 +8,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
-	"erc-8004-benchmarking-be/internal/repository/config"
+	"erc-8004-benchmarking-be/internal/repository/contracts"
 )
 
 // EventTopic0Hashes builds topic0 values for FilterLogs from JSON ABI event fragments.
 // For each non-anonymous event: keccak256("Name(type1,type2,...)") per Solidity ABI spec.
 // Anonymous events are skipped (no signature topic0 to match).
-func EventTopic0Hashes(eventABI []config.ABIEventFragment) []common.Hash {
+func EventTopic0Hashes(eventABI []contracts.ABIEventFragment) []common.Hash {
 	if len(eventABI) == 0 {
 		return nil
 	}
@@ -41,7 +41,7 @@ func EventTopic0Hashes(eventABI []config.ABIEventFragment) []common.Hash {
 }
 
 // canonicalEventSignature returns the Solidity event signature string used for topic0 hashing.
-func canonicalEventSignature(ev config.ABIEventFragment) string {
+func canonicalEventSignature(ev contracts.ABIEventFragment) string {
 	name := strings.TrimSpace(ev.Name)
 	if name == "" {
 		return ""
@@ -57,7 +57,7 @@ func canonicalEventSignature(ev config.ABIEventFragment) string {
 	return name + "(" + strings.Join(types, ",") + ")"
 }
 
-func abiInputCanonicalType(in config.ABIEventInput) string {
+func abiInputCanonicalType(in contracts.ABIEventInput) string {
 	if t := strings.TrimSpace(in.Type); t != "" {
 		return t
 	}

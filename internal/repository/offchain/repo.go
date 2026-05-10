@@ -1,7 +1,8 @@
 package offchain
 
 // repo.go — OffchainDataRepository for the "offchain_data" MongoDB collection.
-// Stores resolved URI content (JSON) or fetch errors keyed by stable hash of the URI.
+// Stores resolved URI content or fetch errors keyed by stable hash of the URI.
+// Status field encodes the fetch outcome: -1 = fetch error, 1 = fetched non-JSON, 5 = fetched JSON.
 
 import (
 	"context"
@@ -36,47 +37,79 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "uri", Value: 1}},
 			Options: options.Index().SetUnique(true).SetName("ux_uri"),
 		},
+		{
+			Keys:    bson.D{{Key: "status", Value: 1}},
+			Options: options.Index().SetName("ix_status"),
+		},
 	})
 	return err
 }
 
-// UpsertSuccess writes valid JSON text for uri (overwrites any previous row).
+// UpsertSuccess writes valid JSON content for uri (status=5).
 func (r *Repository) UpsertSuccess(ctx context.Context, uri, jsonText, sourceType, eventType, contractType string) error {
 	id := OffchainDocumentID(uri)
-	doc := OffchainData{
-		ID:           id,
-		URI:          uri,
-		Content:      jsonText,
-		SourceType:   sourceType,
-		EventType:    eventType,
-		ContractType: contractType,
-		FetchError:   "",
-		ContentSize:  len(jsonText),
-	}
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": doc}
-	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
+	update := bson.M{"$set": bson.M{
+		"_id":          id,
+		"uri":          uri,
+		"status":       StatusFetchedJSON,
+		"content":      jsonText,
+		"sourceType":   sourceType,
+		"eventType":    eventType,
+		"contractType": contractType,
+		"fetchError":   "",
+		"contentSize":  len(jsonText),
+	}}
+	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, update, options.Update().SetUpsert(true))
 	return err
 }
 
-// UpsertFailure records that uri could not be resolved or content was not valid JSON.
+// UpsertFetchedNotJSON records a successful fetch where the content is not valid JSON (status=1).
+func (r *Repository) UpsertFetchedNotJSON(ctx context.Context, uri, rawBody, sourceType, eventType, contractType string) error {
+	id := OffchainDocumentID(uri)
+	update := bson.M{"$set": bson.M{
+		"_id":          id,
+		"uri":          uri,
+		"status":       StatusFetchedNotJSON,
+		"content":      rawBody,
+		"sourceType":   sourceType,
+		"eventType":    eventType,
+		"contractType": contractType,
+		"fetchError":   "",
+		"contentSize":  len(rawBody),
+	}}
+	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, update, options.Update().SetUpsert(true))
+	return err
+}
+
+// UpsertFailure records that uri could not be fetched due to a network/HTTP error (status=-1).
 func (r *Repository) UpsertFailure(ctx context.Context, uri, sourceType, eventType, contractType, errMsg string) error {
 	id := OffchainDocumentID(uri)
-	filter := bson.M{"_id": id}
-	update := bson.M{
-		"$set": bson.M{
-			"_id":          id,
-			"uri":          uri,
-			"sourceType":   sourceType,
-			"eventType":    eventType,
-			"contractType": contractType,
-			"fetchError":   errMsg,
-			"content":      "",
-			"contentSize":  0,
-		},
-	}
-	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
+	update := bson.M{"$set": bson.M{
+		"_id":          id,
+		"uri":          uri,
+		"status":       StatusFetchFailed,
+		"content":      "",
+		"sourceType":   sourceType,
+		"eventType":    eventType,
+		"contractType": contractType,
+		"fetchError":   errMsg,
+		"contentSize":  0,
+	}}
+	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, update, options.Update().SetUpsert(true))
 	return err
+}
+
+// Exists reports whether any record (any status) exists for the given URI.
+func (r *Repository) Exists(ctx context.Context, uri string) (bool, error) {
+	id := OffchainDocumentID(uri)
+	_, err := r.FindOne(ctx, bson.M{"_id": id})
+	if err == mongodrv.ErrNoDocuments {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // FindByURIs loads offchain_data rows for the given logical URIs (matched by stable hash _id).
@@ -95,7 +128,7 @@ func (r *Repository) FindByURIs(ctx context.Context, uris []string) ([]OffchainD
 	return docs, nil
 }
 
-// HasSuccessfulFetch returns true if a document exists with non-empty JSON and no fetch error.
+// HasSuccessfulFetch returns true if a document exists with status=5 (valid JSON fetched).
 func (r *Repository) HasSuccessfulFetch(ctx context.Context, uri string) (bool, error) {
 	id := OffchainDocumentID(uri)
 	doc, err := r.FindOne(ctx, bson.M{"_id": id})
@@ -105,10 +138,10 @@ func (r *Repository) HasSuccessfulFetch(ctx context.Context, uri string) (bool, 
 	if err != nil {
 		return false, err
 	}
-	return doc.Content != "" && doc.FetchError == "", nil
+	return doc.Status == StatusFetchedJSON, nil
 }
 
-// GetContent returns the cached JSON content for a URI, or ("", false) if not available.
+// GetContent returns the cached JSON content for a URI, or ("", false) if status != 5.
 func (r *Repository) GetContent(ctx context.Context, uri string) (string, bool, error) {
 	id := OffchainDocumentID(uri)
 	doc, err := r.FindOne(ctx, bson.M{"_id": id})
@@ -118,7 +151,7 @@ func (r *Repository) GetContent(ctx context.Context, uri string) (string, bool, 
 	if err != nil {
 		return "", false, err
 	}
-	if doc.Content == "" || doc.FetchError != "" {
+	if doc.Status != StatusFetchedJSON {
 		return "", false, nil
 	}
 	return doc.Content, true, nil

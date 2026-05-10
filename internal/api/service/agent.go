@@ -15,26 +15,71 @@ import (
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
-	configrepo "erc-8004-benchmarking-be/internal/repository/config"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
+	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 )
 
-// ErrAgentNotFound is returned when an agent document is not in Mongo.
-var ErrAgentNotFound = errors.New("agent not found")
+// Sentinel errors returned by service methods — handlers map these to HTTP codes.
+var (
+	ErrAgentNotFound    = errors.New("agent not found")
+	ErrFeedbackNotFound = errors.New("feedback not found")
+	ErrInvalidInput     = errors.New("invalid input")
+)
+
+// ── Interfaces (defined at consumer site per DIP) ────────────────────────────
+
+type agentAgentRepo interface {
+	FindByAgentID(ctx context.Context, chainID int64, agentID string) (*agentrepo.AgentDocument, error)
+	FindByIDs(ctx context.Context, chainID int64, agentIDs []string) ([]agentrepo.AgentDocument, error)
+	FindRelated(ctx context.Context, chainID int64, excludeAgentID string, skills, domains []string, limit int64) ([]agentrepo.AgentDocument, error)
+}
+
+type agentFeedbackRepo interface {
+	ClassDistribution(ctx context.Context, chainID int64, agentID string) (map[string]int64, error)
+	ListFiltered(ctx context.Context, f feedbackrepo.ListFilter, skip, limit int64) ([]feedbackrepo.FeedbackRecord, int64, error)
+	ListPenalties(ctx context.Context, chainID int64, agentID, mode string, skip, limit int64) ([]feedbackrepo.FeedbackRecord, int64, error)
+	FindByAgentAndIndex(ctx context.Context, chainID int64, agentID, clientAddress string, feedbackIndex uint64) (*feedbackrepo.FeedbackRecord, error)
+	ActivityHeatmap(ctx context.Context, chainID int64, agentID string, days int) ([]feedbackrepo.HeatmapDay, error)
+}
+
+type agentScoreRepo interface {
+	FindSnapshotsInRange(ctx context.Context, chainID int64, agentID string, from, to int64, limit int64) (*scorerepo.SnapshotPage, error)
+	ListByAgent(ctx context.Context, chainID int64, agentID string, limit int64) (*scorerepo.ScoreHistory, error)
+}
+
+type agentIdentityRepo interface {
+	ListByAgent(ctx context.Context, chainID int64, agentID string) ([]identityrepo.IdentityChange, error)
+}
+
+type agentEventRepo interface {
+	FindByTxHash(ctx context.Context, txHash string) ([]eventrepo.DecodedEvent, error)
+}
+
+type agentOffchainRepo interface {
+	HasSuccessfulFetch(ctx context.Context, uri string) (bool, error)
+	GetContent(ctx context.Context, uri string) (string, bool, error)
+	FindByURIs(ctx context.Context, uris []string) ([]offchainrepo.OffchainData, error)
+}
+
+type agentContractRepo interface {
+	FindActive(ctx context.Context) ([]contractsrepo.ContractsConfig, error)
+}
 
 // AgentDeps bundles repositories used by the Agent service.
 type AgentDeps struct {
-	Agents    *agentrepo.Repository
-	Feedback  *feedbackrepo.Repository
-	Scores    *scorerepo.Repository
-	Identity  *identityrepo.Repository
-	Events    *eventrepo.Repository
-	Contracts *configrepo.ContractsRepository
+	Agents    agentAgentRepo
+	Feedback  agentFeedbackRepo
+	Scores    agentScoreRepo
+	Identity  agentIdentityRepo
+	Events    agentEventRepo
+	Offchain  agentOffchainRepo
+	Contracts agentContractRepo
 	Formula   scoring.FormulaConfig
 }
 
@@ -63,6 +108,140 @@ func (s *Agent) Profile(ctx context.Context, chainID int64, agentID string) (*dt
 	}
 	p := toAgentProfile(doc, dist, s.deps.Formula, time.Now().Unix())
 	return &p, nil
+}
+
+// ── Overview ────────────────────────────────────────────────────────────────
+
+// Overview returns the payload for the "Overview" tab: basic identity fields,
+// on/off-chain metadata, and each service's health (derived from offchain_data).
+func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*dto.AgentOverview, error) {
+	doc, err := s.deps.Agents.FindByAgentID(ctx, chainID, agentID)
+	if err != nil {
+		if errors.Is(err, mongodrv.ErrNoDocuments) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, fmt.Errorf("agent overview find: %w", err)
+	}
+
+	// Find the "Registered" tx (first identity event for this agent).
+	createdTx := ""
+	if hist, herr := s.deps.Identity.ListByAgent(ctx, chainID, agentID); herr == nil {
+		for _, h := range hist {
+			if strings.EqualFold(h.EventName, "Registered") {
+				createdTx = h.TxHash
+				break
+			}
+		}
+		// Fallback: oldest event regardless of name.
+		if createdTx == "" && len(hist) > 0 {
+			createdTx = hist[0].TxHash
+		}
+	}
+
+	// agentWallet is conventionally stored as an on-chain metadata entry.
+	agentWallet := extractAgentWallet(doc.OnchainMetadata)
+
+	// Probe service health via the offchain_data cache.
+	svcs := make([]dto.ServiceOverview, 0, len(doc.Services))
+	for _, sv := range doc.Services {
+		health, info := probeEndpointHealth(ctx, s.deps.Offchain, sv.Endpoint)
+		svcs = append(svcs, dto.ServiceOverview{
+			Name:       sv.Name,
+			Endpoint:   sv.Endpoint,
+			Version:    sv.Version,
+			Skills:     sv.Skills,
+			Domains:    sv.Domains,
+			Health:     health,
+			HealthInfo: info,
+		})
+	}
+
+	onchain := make(map[string]dto.OnchainMetadataValue, len(doc.OnchainMetadata))
+	for k, v := range doc.OnchainMetadata {
+		onchain[k] = dto.OnchainMetadataValue{
+			RawHex:       v.RawHex,
+			Decoded:      v.Decoded,
+			DetectedType: v.DetectedType,
+			Confidence:   v.Confidence,
+		}
+	}
+
+	return &dto.AgentOverview{
+		ChainID:          doc.ChainID,
+		AgentID:          doc.AgentID,
+		Owner:            doc.Owner,
+		AgentURI:         doc.AgentURI,
+		Name:             doc.Name,
+		Description:      doc.Description,
+		Image:            doc.Image,
+		Active:           doc.Active,
+		CreatedAt:        unixToRFC3339(doc.CreatedAt),
+		CreatedTx:        createdTx,
+		AgentWallet:      agentWallet,
+		Services:         svcs,
+		OnchainMetadata:  onchain,
+		OffchainMetadata: doc.OffchainMetadata,
+	}, nil
+}
+
+// onchainDecodedToString stringifies on-chain decoded metadata for display/lookup (addresses, scalars).
+func onchainDecodedToString(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		return strings.TrimSpace(fmt.Sprint(t))
+	}
+}
+
+// extractAgentWallet pulls the best candidate for the agent's wallet address
+// out of on-chain metadata, trying a few common key variants.
+func extractAgentWallet(meta map[string]agentrepo.OnchainMetadataValue) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	candidates := []string{"agentWallet", "agent_wallet", "wallet", "walletAddress", "wallet_address"}
+	for _, k := range candidates {
+		for mk, mv := range meta {
+			if strings.EqualFold(mk, k) {
+				if s := onchainDecodedToString(mv.Decoded); s != "" {
+					return s
+				}
+				if mv.RawHex != "" {
+					return mv.RawHex
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// probeEndpointHealth derives a service's health from the offchain_data cache.
+// Returns one of: "ok" | "fail" | "unknown".
+func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, endpoint string) (string, string) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" || repo == nil {
+		return "unknown", ""
+	}
+	ok, err := repo.HasSuccessfulFetch(ctx, endpoint)
+	if err != nil {
+		return "unknown", err.Error()
+	}
+	if ok {
+		return "ok", ""
+	}
+	// Not a success — inspect the stored error (if any) to decide fail vs unknown.
+	if _, found, gerr := repo.GetContent(ctx, endpoint); gerr == nil && !found {
+		// Fetch the raw row to see if a FetchError was recorded.
+		rows, rerr := repo.FindByURIs(ctx, []string{endpoint})
+		if rerr == nil && len(rows) > 0 && strings.TrimSpace(rows[0].FetchError) != "" {
+			return "fail", rows[0].FetchError
+		}
+	}
+	return "unknown", ""
 }
 
 // ── Score history ───────────────────────────────────────────────────────────
@@ -380,11 +559,6 @@ func (s *Agent) Proof(ctx context.Context, chainID int64, agentID, txHash string
 			resp.ResponseURIs = []string{str}
 		}
 	}
-	// Compose block-explorer URL from contracts config.
-	if cfg, err := s.deps.Contracts.FindOne(ctx, map[string]any{"_id": configrepo.ContractsDocumentID(chainID)}); err == nil {
-		_ = cfg
-	}
-	resp.BlockExplorerURL = explorerTxURL(chainID, hit.TxHash)
 	return resp, nil
 }
 
@@ -416,22 +590,6 @@ func matchesAgentArg(args map[string]any, agentID string) bool {
 		}
 	}
 	return false
-}
-
-// explorerTxURL returns a best-effort block explorer URL for known chains.
-func explorerTxURL(chainID int64, txHash string) string {
-	base := map[int64]string{
-		1:        "https://etherscan.io",
-		8453:     "https://basescan.org",
-		42161:    "https://arbiscan.io",
-		10:       "https://optimistic.etherscan.io",
-		137:      "https://polygonscan.com",
-		11155111: "https://sepolia.etherscan.io",
-	}[chainID]
-	if base == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/tx/%s", base, txHash)
 }
 
 // ── Radar ───────────────────────────────────────────────────────────────────

@@ -3,12 +3,14 @@ module erc-8004-benchmarking-be
 go 1.22
 
 require (
+	github.com/andybalholm/brotli v1.2.1
 	github.com/ethereum/go-ethereum v1.14.13
 	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/redis/go-redis/v9 v9.18.0
 	github.com/swaggo/http-swagger v1.3.4
-	github.com/swaggo/swag v1.16.6
 	go.mongodb.org/mongo-driver v1.17.1
 	golang.org/x/sync v0.10.0
+	golang.org/x/time v0.5.0
 )
 
 require (
@@ -21,8 +23,8 @@ require (
 	github.com/go-openapi/swag v0.19.15 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/mailru/easyjson v0.7.6 // indirect
-	github.com/redis/go-redis/v9 v9.18.0 // indirect
 	github.com/swaggo/files v1.0.1 // indirect
+	github.com/swaggo/swag v1.16.6 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
@@ -44,10 +46,10 @@ require (
 	github.com/ethereum/go-verkle v0.1.1-0.20240829091221-dffa7562dbe9 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.3
 	github.com/holiman/uint256 v1.3.1 // indirect
 	github.com/joho/godotenv v1.5.1 // direct
-	github.com/klauspost/compress v1.16.0 // indirect
+	github.com/klauspost/compress v1.16.0
 	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect

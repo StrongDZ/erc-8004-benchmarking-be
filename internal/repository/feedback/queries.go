@@ -5,6 +5,7 @@ package feedback
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -14,13 +15,13 @@ import (
 
 // ListFilter controls pagination & filtering on /agents/:id/feedbacks (§3.3).
 type ListFilter struct {
-	ChainID   int64
-	AgentID   string
-	Category  string // "service_feedback" | "config_feedback" | "app_specific" | "others" | "spam" | "noise"
-	Status    string // "accepted" | "revoked" | "spam" | "anomalous"
-	From      *time.Time
-	To        *time.Time
-	SortDesc  bool // false = ASC by blockNumber/logIndex
+	ChainID  int64
+	AgentID  string
+	Category string // "service_feedback" | "config_feedback" | "app_specific" | "others" | "spam" | "noise"
+	Status   string // "accepted" | "revoked" | "spam" | "anomalous"
+	From     *time.Time
+	To       *time.Time
+	SortDesc bool // false = ASC by blockNumber/logIndex
 }
 
 // ListFiltered returns filtered feedback records and the total count matching the filter.
@@ -159,7 +160,7 @@ func (r *Repository) ClassDistribution(ctx context.Context, chainID int64, agent
 
 // HeatmapDay is one bucket of the activity heatmap (§3.7).
 type HeatmapDay struct {
-	Date   string `json:"date"`   // YYYY-MM-DD UTC
+	Date   string `json:"date"` // YYYY-MM-DD UTC
 	Count  int64  `json:"count"`
 	Passed int64  `json:"passed"`
 	Failed int64  `json:"failed"`
@@ -244,4 +245,26 @@ func (r *Repository) Count24h(ctx context.Context, chainID int64) (int64, error)
 		q["chainId"] = chainID
 	}
 	return r.Count(ctx, q)
+}
+
+// ListByClientAddress returns paginated feedback submitted by a specific wallet address,
+// sorted newest-first (blockNumber desc). Used by GET /wallet/:address/feedbacks.
+func (r *Repository) ListByClientAddress(ctx context.Context, address string, skip, limit int64) ([]FeedbackRecord, int64, error) {
+	q := bson.M{"clientAddress": strings.TrimSpace(address)}
+
+	total, err := r.Count(ctx, q)
+	if err != nil {
+		return nil, 0, fmt.Errorf("feedback repo: wallet feedbacks count: %w", err)
+	}
+
+	opts := options.Find().
+		SetSort(bson.D{{Key: "blockNumber", Value: -1}, {Key: "logIndex", Value: -1}}).
+		SetSkip(skip).
+		SetLimit(limit)
+
+	docs, err := r.Find(ctx, q, opts)
+	if err != nil {
+		return nil, 0, fmt.Errorf("feedback repo: wallet feedbacks find: %w", err)
+	}
+	return docs, total, nil
 }

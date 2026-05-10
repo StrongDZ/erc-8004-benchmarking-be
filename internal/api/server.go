@@ -12,6 +12,7 @@ import (
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
+	apicache "erc-8004-benchmarking-be/internal/api/cache"
 	"erc-8004-benchmarking-be/internal/api/handlers"
 	"erc-8004-benchmarking-be/internal/api/middleware"
 	"erc-8004-benchmarking-be/internal/api/service"
@@ -19,10 +20,10 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
-	configrepo "erc-8004-benchmarking-be/internal/repository/config"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
@@ -39,8 +40,8 @@ type Repositories struct {
 	Events    *eventrepo.Repository
 	Offchain  *offchainrepo.Repository
 	Crawlers  *crawlerrepo.Repository
-	Contracts *configrepo.ContractsRepository
-}
+	Contracts *contractsrepo.ContractsRepository
+}		
 
 // NewRepositories wires all repositories against both the primary and analyzed databases.
 //   - Raw/crawler data (events, contracts, crawlers, offchain_data) lives in the primary DB.
@@ -57,7 +58,7 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 		Events:    eventrepo.NewRepository(primary, cfg.EventsColl),
 		Offchain:  offchainrepo.NewRepository(primary, cfg.OffchainColl),
 		Crawlers:  crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
-		Contracts: configrepo.NewContractsRepository(primary, cfg.ContractsColl),
+		Contracts: contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
 	}
 }
 
@@ -65,8 +66,9 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 type Server struct {
 	httpServer *http.Server
 	cfg        config.Config
-	hub        *wsock.Hub       // may be nil when WS is disabled
+	hub        *wsock.Hub         // may be nil when WS is disabled
 	redis      *redisinfra.Client // may be nil when realtime is disabled
+	mem        *apicache.Memory
 }
 
 // NewServer builds the router, applies middleware, and returns a ready Server.
@@ -88,13 +90,17 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	})
 	agentSvc := service.NewAgent(service.AgentDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.Scores,
-		Identity: repos.Identity, Events: repos.Events,
+		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
 		Contracts: repos.Contracts, Formula: formula,
 	})
 	oasfSvc := service.NewOASF(service.OASFDeps{Agents: repos.Agents, Formula: formula})
 	chainSvc := service.NewChain(service.ChainDeps{Contracts: repos.Contracts, Agents: repos.Agents})
 	adminSvc := service.NewAdmin(service.AdminDeps{
 		Crawlers: repos.Crawlers, Events: repos.Events, Feedback: repos.Feedback,
+		Agents: repos.Agents, Contracts: repos.Contracts,
+	})
+	walletSvc := service.NewWallet(service.WalletDeps{
+		Agents: repos.Agents, Feedback: repos.Feedback,
 	})
 
 	// Handlers
@@ -103,6 +109,14 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	oasfH := handlers.NewOASFHandler(oasfSvc)
 	chainH := handlers.NewChainHandler(chainSvc)
 	adminH := handlers.NewAdminHandler(adminSvc)
+	walletH := handlers.NewWalletHandler(walletSvc)
+
+	// Response cache — shared across endpoints with per-endpoint TTLs.
+	mem := apicache.NewMemory(30 * time.Second)
+	c30s := middleware.ResponseCache(mem, 30*time.Second)
+	c60s := middleware.ResponseCache(mem, 60*time.Second)
+	c2m := middleware.ResponseCache(mem, 2*time.Minute)
+	c5m := middleware.ResponseCache(mem, 5*time.Minute)
 
 	mux := http.NewServeMux()
 
@@ -111,37 +125,42 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.Handle("GET /swagger/", httpSwagger.WrapHandler)
 
 	// /api/v1/leaderboard*
-	mux.HandleFunc("GET /api/v1/leaderboard", lbH.List)
+	mux.Handle("GET /api/v1/leaderboard", c30s(http.HandlerFunc(lbH.List)))
 	mux.HandleFunc("GET /api/v1/leaderboard/search", lbH.Search)
-	mux.HandleFunc("GET /api/v1/leaderboard/stats", lbH.Stats)
-	mux.HandleFunc("GET /api/v1/leaderboard/rising-stars", lbH.RisingStars)
-	mux.HandleFunc("GET /api/v1/leaderboard/tags", lbH.Tags)
+	mux.Handle("GET /api/v1/leaderboard/stats", c30s(http.HandlerFunc(lbH.Stats)))
+	mux.Handle("GET /api/v1/leaderboard/rising-stars", c60s(http.HandlerFunc(lbH.RisingStars)))
+	mux.Handle("GET /api/v1/leaderboard/tags", c2m(http.HandlerFunc(lbH.Tags)))
 
 	// /api/v1/agents/...
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}", agH.Profile)
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/score-history", agH.ScoreHistory)
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}", c30s(http.HandlerFunc(agH.Profile)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/overview", c30s(http.HandlerFunc(agH.Overview)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/score-history", c30s(http.HandlerFunc(agH.ScoreHistory)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/identity-history", agH.IdentityHistory)
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/activity-heatmap", agH.ActivityHeatmap)
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/activity-heatmap", c2m(http.HandlerFunc(agH.ActivityHeatmap)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/penalties", agH.Penalties)
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/related", agH.Related)
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/radar", agH.Radar)
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/related", c60s(http.HandlerFunc(agH.Related)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/radar", c60s(http.HandlerFunc(agH.Radar)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/proof/{txHash}", agH.Proof)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/anti-spam", agH.AntiSpam)
 
 	// /api/v1/oasf/*
-	mux.HandleFunc("GET /api/v1/oasf/facets", oasfH.Facets)
-	mux.HandleFunc("GET /api/v1/oasf/skills", oasfH.Skills)
-	mux.HandleFunc("GET /api/v1/oasf/domains", oasfH.Domains)
+	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))
+	mux.Handle("GET /api/v1/oasf/skills", c2m(http.HandlerFunc(oasfH.Skills)))
+	mux.Handle("GET /api/v1/oasf/domains", c2m(http.HandlerFunc(oasfH.Domains)))
 
 	// /api/v1/chains/*
-	mux.HandleFunc("GET /api/v1/chains", chainH.List)
+	mux.Handle("GET /api/v1/chains", c5m(http.HandlerFunc(chainH.List)))
 	mux.HandleFunc("GET /api/v1/chains/{chainId}/contracts", chainH.Contracts)
+
+	// /api/v1/wallet/:address/*
+	mux.HandleFunc("GET /api/v1/wallet/{address}/feedbacks", walletH.FeedbackGiven)
 
 	// /api/v1/admin/* (gated)
 	adminAuth := middleware.AdminAuth(cfg.AdminAPIKey)
-	mux.Handle("GET /api/v1/admin/indexer-status", adminAuth(http.HandlerFunc(adminH.IndexerStatus)))
+	// Indexer status is read-only observability and intentionally public.
+	mux.HandleFunc("GET /api/v1/admin/indexer-status", adminH.IndexerStatus)
 	mux.Handle("POST /api/v1/admin/scoring/recompute", adminAuth(http.HandlerFunc(adminH.RecomputeScoring)))
 	mux.Handle("POST /api/v1/admin/simulator/start", adminAuth(http.HandlerFunc(adminH.SimulatorStart)))
 
@@ -155,18 +174,24 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// global chain below, which is safe for upgrades.
 	mux.HandleFunc("GET /api/v1/ws", wsHandler)
 
+	rlCfg := middleware.DefaultRateLimitConfig()
+	rlCfg.RequestsPerSecond = cfg.RateLimitRPS
+	rlCfg.Burst = cfg.RateLimitBurst
+
 	chain := middleware.Chain(
 		middleware.RequestID,
 		middleware.Logger,
 		middleware.Recover,
 		middleware.CORS(cfg.APIAllowedOrigins),
+		middleware.RateLimit(rlCfg),
 	)
 	handler := chain(mux)
 
 	return &Server{
-		cfg: cfg,
-		hub: hub,
+		cfg:   cfg,
+		hub:   hub,
 		redis: redis,
+		mem:   mem,
 		httpServer: &http.Server{
 			Addr:         fmt.Sprintf(":%d", cfg.APIPort),
 			Handler:      handler,
@@ -187,6 +212,11 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.hub != nil {
 		go s.hub.Run(hubCtx)
 	}
+
+	// Cache janitor — evicts expired entries every 5 minutes.
+	janitorStop := make(chan struct{})
+	defer close(janitorStop)
+	s.mem.StartJanitor(janitorStop, 5*time.Minute)
 
 	// Bridge Redis Pub/Sub -> WebSocket Hub. This is the only coupling between
 	// the consumer (publisher) and the API (subscriber) for realtime events.

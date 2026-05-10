@@ -29,6 +29,7 @@ type LeaderboardFilter struct {
 	Active   *bool
 	MinTasks int64  // totalTasks >= MinTasks when > 0
 	Query    string // free-text regex on name / description
+	Owner    string // exact owner address filter (case-insensitive)
 }
 
 // LeaderboardSort selects the Mongo sort order. Score ordering is done server-side on
@@ -127,10 +128,18 @@ func buildLeaderboardQuery(f LeaderboardFilter) bson.M {
 	}
 	if strings.TrimSpace(f.Query) != "" {
 		pattern := regexp.QuoteMeta(strings.TrimSpace(f.Query))
+		rx := bson.M{"$regex": pattern, "$options": "i"}
+		// Match name/description, substring of agentId, or any OASF skill/domain path segment.
 		q["$or"] = bson.A{
-			bson.M{"name": bson.M{"$regex": pattern, "$options": "i"}},
-			bson.M{"description": bson.M{"$regex": pattern, "$options": "i"}},
+			bson.M{"name": rx},
+			bson.M{"description": rx},
+			bson.M{"agentId": rx},
+			bson.M{"oasfSkills": rx},
+			bson.M{"oasfDomains": rx},
 		}
+	}
+	if o := strings.TrimSpace(f.Owner); o != "" {
+		q["owner"] = o
 	}
 	return q
 }
@@ -159,11 +168,11 @@ func (r *Repository) SearchByNamePrefix(ctx context.Context, chainID int64, quer
 
 // Stats bundles the metrics required by GET /leaderboard/stats (§2.4).
 type Stats struct {
-	TotalAgents       int64
-	ActiveAgents      int64
-	AvgAccScore       float64
-	MedianAccScore    float64
-	Top10AccScoreAvg  float64
+	TotalAgents      int64
+	ActiveAgents     int64
+	AvgAccScore      float64
+	MedianAccScore   float64
+	Top10AccScoreAvg float64
 }
 
 // ComputeStatsMulti runs the same aggregations as ComputeStats but across a set of

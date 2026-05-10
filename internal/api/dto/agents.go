@@ -90,7 +90,7 @@ type AgentScoring struct {
 // OnchainMetadataValue mirrors the repo type but decoupled from BSON.
 type OnchainMetadataValue struct {
 	RawHex       string `json:"rawHex,omitempty"`
-	Decoded      string `json:"decoded,omitempty"`
+	Decoded      any    `json:"decoded,omitempty"`
 	DetectedType string `json:"detectedType,omitempty"`
 	Confidence   string `json:"confidence,omitempty"`
 }
@@ -127,6 +127,40 @@ type AgentProfile struct {
 	CreatedAt        string                          `json:"createdAt,omitempty"`
 }
 
+// ServiceOverview is one service entry on /agents/:id/overview,
+// augmented with a health status derived from the offchain_data cache.
+type ServiceOverview struct {
+	Name     string   `json:"name"`
+	Endpoint string   `json:"endpoint,omitempty"`
+	Version  string   `json:"version,omitempty"`
+	Skills   []string `json:"skills,omitempty"`
+	Domains  []string `json:"domains,omitempty"`
+	// Health is "ok" when the endpoint has a cached successful fetch,
+	// "fail" when the most recent fetch attempt recorded an error,
+	// and "unknown" when the endpoint has never been probed.
+	Health     string `json:"health"`
+	HealthInfo string `json:"healthInfo,omitempty"`
+}
+
+// AgentOverview is the payload for GET /agents/:chainId/:agentId/overview.
+// It powers the "Overview" tab on the agent profile page.
+type AgentOverview struct {
+	ChainID          int64                           `json:"chainId"`
+	AgentID          string                          `json:"agentId"`
+	Owner            string                          `json:"owner,omitempty"`
+	AgentURI         string                          `json:"agentURI,omitempty"`
+	Name             string                          `json:"name,omitempty"`
+	Description      string                          `json:"description,omitempty"`
+	Image            string                          `json:"image,omitempty"`
+	Active           bool                            `json:"active"`
+	CreatedAt        string                          `json:"createdAt,omitempty"`
+	CreatedTx        string                          `json:"createdTx,omitempty"`
+	AgentWallet      string                          `json:"agentWallet,omitempty"`
+	Services         []ServiceOverview               `json:"services"`
+	OnchainMetadata  map[string]OnchainMetadataValue `json:"onchainMetadata,omitempty"`
+	OffchainMetadata map[string]any                  `json:"offchainMetadata,omitempty"`
+}
+
 // ScorePoint is one entry in /agents/:id/score-history (§3.2).
 type ScorePoint struct {
 	Timestamp  string  `json:"timestamp"` // RFC3339 UTC
@@ -154,6 +188,7 @@ type FeedbackRow struct {
 	Tag1           string                 `json:"tag1,omitempty"`
 	Tag2           string                 `json:"tag2,omitempty"`
 	Endpoint       string                 `json:"endpoint,omitempty"`
+	Unit           string                 `json:"unit,omitempty"`
 	FeedbackURI    string                 `json:"feedbackURI,omitempty"`
 	FeedbackHash   string                 `json:"feedbackHash,omitempty"`
 	FeedbackParsed map[string]any         `json:"feedbackParsed,omitempty"`
@@ -213,12 +248,20 @@ type PenaltyRow struct {
 	RevokeTxHash   string  `json:"revokeTxHash,omitempty"`
 }
 
+// WalletFeedbackRow extends FeedbackRow with cross-agent context for GET /wallet/:address/feedbacks.
+// AgentID and ChainID identify which agent the feedback was submitted to.
+type WalletFeedbackRow struct {
+	FeedbackRow
+	AgentID   string `json:"agentId"`
+	ChainID   int64  `json:"chainId"`
+	AgentName string `json:"agentName,omitempty"`
+}
+
 // ProofResponse is the /agents/:id/proof/:txHash payload (§3.10).
 type ProofResponse struct {
 	ChainID          int64          `json:"chainId"`
 	TxHash           string         `json:"txHash"`
 	BlockNumber      uint64         `json:"blockNumber"`
-	BlockExplorerURL string         `json:"blockExplorerURL,omitempty"`
 	EventName        string         `json:"eventName"`
 	ContractType     string         `json:"contractType"`
 	Args             map[string]any `json:"args,omitempty"`

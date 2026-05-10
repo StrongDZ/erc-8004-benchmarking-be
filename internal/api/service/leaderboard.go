@@ -13,16 +13,38 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
-	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
 )
 
+// ── Interfaces (defined at consumer site per DIP) ────────────────────────────
+
+type leaderboardAgentRepo interface {
+	FindLeaderboard(ctx context.Context, f agentrepo.LeaderboardFilter, sort agentrepo.LeaderboardSort, skip, limit int64) ([]agentrepo.AgentDocument, int64, error)
+	SearchByNamePrefix(ctx context.Context, chainID int64, query string, limit int64) ([]agentrepo.AgentDocument, error)
+	ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*agentrepo.Stats, error)
+	FindByIDs(ctx context.Context, chainID int64, agentIDs []string) ([]agentrepo.AgentDocument, error)
+	TopTags(ctx context.Context, chainIDs []int64, query string, limit int64) ([]agentrepo.TagCount, error)
+}
+
+type leaderboardFeedbackRepo interface {
+	TotalCountMulti(ctx context.Context, chainIDs []int64) (int64, error)
+}
+
+type leaderboardScoreRepo interface {
+	FindRisingStars(ctx context.Context, chainID int64, sinceUnix int64, limit int64) ([]scorerepo.RisingStar, error)
+}
+
+type leaderboardCrawlerRepo interface {
+	ListAll(ctx context.Context) ([]crawlerrepo.CrawlerState, error)
+	ListByChain(ctx context.Context, chainID int64) ([]crawlerrepo.CrawlerState, error)
+}
+
 // LeaderboardDeps bundles the repos used by the leaderboard service.
 type LeaderboardDeps struct {
-	Agents   *agentrepo.Repository
-	Feedback *feedbackrepo.Repository
-	Scores   *scorerepo.Repository
-	Crawlers *crawlerrepo.Repository
+	Agents   leaderboardAgentRepo
+	Feedback leaderboardFeedbackRepo
+	Scores   leaderboardScoreRepo
+	Crawlers leaderboardCrawlerRepo
 	Formula  scoring.FormulaConfig
 }
 
@@ -48,6 +70,7 @@ type ListParams struct {
 	MinScore float64
 	MinTasks int64
 	Query    string
+	Owner    string // optional owner address filter
 	Sort     agentrepo.LeaderboardSort
 	Page     int
 	Limit    int
@@ -77,6 +100,7 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 		Active:   p.Active,
 		MinTasks: p.MinTasks,
 		Query:    p.Query,
+		Owner:    p.Owner,
 	}
 	docs, total, err := s.deps.Agents.FindLeaderboard(ctx, filter, p.Sort, p.Skip, int64(p.Limit))
 	if err != nil {

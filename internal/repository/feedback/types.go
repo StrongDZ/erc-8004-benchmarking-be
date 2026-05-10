@@ -49,9 +49,13 @@ type FeedbackRecord struct {
 	PriceUSDC      float64                `bson:"priceUSDC"`
 	Wi             float64                `bson:"wi"`                     // difficulty weight at time of scoring
 	Vi             float64                `bson:"vi"`                     // validation score [0, 1]
-	Classification FeedbackClassification `bson:"classification"`         // set by classifier
-	Responses      []FeedbackResponse     `bson:"responses,omitempty"`    // ResponseAppended history
-	RevokeTxHash   string                 `bson:"revokeTxHash,omitempty"` // set when FeedbackRevoked
+	Classification FeedbackClassification `bson:"classification"`          // set by classifier
+	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
+	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet
+	Responses      []FeedbackResponse     `bson:"responses,omitempty"`     // ResponseAppended history
+	RevokeTxHash   string                 `bson:"revokeTxHash,omitempty"`  // set when FeedbackRevoked
+	IsRevoked      bool                   `bson:"isRevoked,omitempty"`     // true after FeedbackRevoked
+	RevokedAt      int64                  `bson:"revokedAt,omitempty"`     // Unix seconds of revocation event
 }
 
 // FeedbackUpdate holds a partial update for a single feedback document.

@@ -82,6 +82,11 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			},
 			Options: options.Index().SetName("idx_chain_service_name"),
 		},
+		// Index for owner-based leaderboard filtering (/leaderboard?owner=).
+		{
+			Keys:    bson.D{{Key: "owner", Value: 1}},
+			Options: options.Index().SetName("idx_owner"),
+		},
 	})
 	return err
 }
@@ -173,6 +178,20 @@ func (r *Repository) UpdateAccumulatedScore(ctx context.Context, chainID int64, 
 	_, err := r.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return fmt.Errorf("agent repo: update accumulated score %s: %w", id, err)
+	}
+	return nil
+}
+
+// IncAccumulatedScore atomically adds delta to accumulatedScore using $inc.
+// Used exclusively by the rescale worker — does NOT overwrite scoreUpdateAt so
+// live scoring is unaffected. Safe to run concurrently with ApplyTaskScore ($set).
+func (r *Repository) IncAccumulatedScore(ctx context.Context, chainID int64, agentID string, delta float64) error {
+	id := AgentDocumentID(chainID, agentID)
+	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$inc": bson.M{"accumulatedScore": delta},
+	})
+	if err != nil {
+		return fmt.Errorf("agent repo: inc accumulated score %s: %w", id, err)
 	}
 	return nil
 }

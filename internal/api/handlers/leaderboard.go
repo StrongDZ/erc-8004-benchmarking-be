@@ -32,7 +32,7 @@ func NewLeaderboardHandler(svc *service.Leaderboard) *LeaderboardHandler {
 // @Param page query int false "Page number"
 // @Param limit query int false "Page size (max 100)"
 // @Param sort query string false "score_desc|score_asc|tasks_desc|recent"
-// @Param query query string false "Search keyword"
+// @Param query query string false "Substring match on name, description, agentId, oasfSkills, oasfDomains"
 // @Success 200 {object} dto.Response
 // @Failure 400 {object} dto.Response
 // @Failure 500 {object} dto.Response
@@ -43,10 +43,19 @@ func (h *LeaderboardHandler) List(w http.ResponseWriter, r *http.Request) {
 	page, limit, skip := dto.ParsePagination(r, 50, 100)
 	sort := parseLeaderboardSort(r.URL.Query().Get("sort"))
 
+	skills := dto.ParseStringSlice(r, "skill")
+	if len(skills) == 0 {
+		skills = dto.ParseStringSlice(r, "skills")
+	}
+	domains := dto.ParseStringSlice(r, "domain")
+	if len(domains) == 0 {
+		domains = dto.ParseStringSlice(r, "domains")
+	}
+
 	params := service.ListParams{
 		ChainIDs: chainIDs,
-		Skills:   dto.ParseStringSlice(r, "skill"),
-		Domains:  dto.ParseStringSlice(r, "domain"),
+		Skills:   skills,
+		Domains:  domains,
 		Services: dto.ParseStringSlice(r, "service"),
 		Tags:     dto.ParseStringSlice(r, "tag"),
 		X402:     dto.ParseBoolPtr(r, "x402"),
@@ -55,6 +64,7 @@ func (h *LeaderboardHandler) List(w http.ResponseWriter, r *http.Request) {
 		MinScore: dto.ParseFloat(r, "minScore", 0),
 		MinTasks: dto.ParseInt64(r, "minTasks", 0),
 		Query:    strings.TrimSpace(r.URL.Query().Get("query")),
+		Owner:    strings.TrimSpace(r.URL.Query().Get("owner")),
 		Sort:     sort,
 		Page:     page,
 		Limit:    limit,

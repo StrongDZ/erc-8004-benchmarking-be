@@ -6,12 +6,19 @@ import (
 	mongorepo "erc-8004-benchmarking-be/internal/repository"
 )
 
+// Snapshot type constants.
+const (
+	SnapshotTypeDecay   = "decay"
+	SnapshotTypeEvent   = "event"
+	SnapshotTypeRescale = "rescale" // retroactive vi correction from rescale worker
+)
+
 // ScoreSnapshotItem represents a single score snapshot entry in the history array.
 type ScoreSnapshotItem struct {
 	AgentScore float64 `bson:"agent_score"` // displayed score S clamped [0, 1000]
-	Type       string  `bson:"type"`        // "decay" | "event"
+	Type       string  `bson:"type"`        // "decay" | "event" | "rescale"
 	TxHash     string  `bson:"txHash,omitempty"`
-	EventScore float64 `bson:"event_score,omitempty"` // only present when type="event"
+	EventScore float64 `bson:"event_score,omitempty"` // only present when type="event" or "rescale"
 	Timestamp  int64   `bson:"timestamp"`             // Unix seconds
 }
 

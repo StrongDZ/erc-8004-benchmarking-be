@@ -5,21 +5,46 @@ package service
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
-	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
-	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
 
+// ── Interfaces (defined at consumer site per DIP) ────────────────────────────
+
+type adminCrawlerRepo interface {
+	ListAll(ctx context.Context) ([]crawlerrepo.CrawlerState, error)
+}
+
+type adminEventRepo interface {
+	Count(ctx context.Context, filter any) (int64, error)
+}
+
+type adminFeedbackRepo interface {
+	TotalCount(ctx context.Context, chainID int64) (int64, error)
+	Count24h(ctx context.Context, chainID int64) (int64, error)
+}
+
+type adminAgentRepo interface {
+	Count(ctx context.Context, filter any) (int64, error)
+}
+
+type adminContractRepo interface {
+	FindByChainID(ctx context.Context, chainID int64) (contractsrepo.ContractsConfig, error)
+}
+
 // AdminDeps bundles the repos used by the admin service.
 type AdminDeps struct {
-	Crawlers *crawlerrepo.Repository
-	Events   *eventrepo.Repository
-	Feedback *feedbackrepo.Repository
+	Crawlers  adminCrawlerRepo
+	Events    adminEventRepo
+	Feedback  adminFeedbackRepo
+	Agents    adminAgentRepo
+	Contracts adminContractRepo
 }
 
 // Admin exposes observability endpoints gated behind ADMIN_API_KEY.
@@ -49,23 +74,42 @@ func (s *Admin) IndexerStatus(ctx context.Context) (*dto.IndexerStatus, error) {
 		if c.LastProcessedBlock > entry.LastProcessedBlock {
 			entry.LastProcessedBlock = c.LastProcessedBlock
 		}
-		if c.Status != "" {
-			entry.CrawlerStatus = c.Status
+		if c.UpdatedAt > 0 {
+			entry.LastIndexedAt = unixToRFC3339(c.UpdatedAt)
 		}
-		if c.LastError != "" {
-			entry.LastError = c.LastError
+	}
+	for chainID, entry := range byChain {
+		agentCount, err := s.deps.Agents.Count(ctx, bson.M{"chainId": chainID})
+		if err != nil {
+			return nil, fmt.Errorf("admin: agent count chain=%d: %w", chainID, err)
 		}
-		if c.ActiveRPC != "" {
-			entry.ActiveRPC = c.ActiveRPC
+		entry.AgentCount = agentCount
+
+		feedbackCount, err := s.deps.Feedback.TotalCount(ctx, chainID)
+		if err != nil {
+			return nil, fmt.Errorf("admin: feedback count chain=%d: %w", chainID, err)
 		}
-		if entry.LastUpdatedAt == "" || c.UpdatedAt > 0 {
-			entry.LastUpdatedAt = unixToRFC3339(c.UpdatedAt)
+		entry.FeedbackCount = feedbackCount
+
+		cfg, err := s.deps.Contracts.FindByChainID(ctx, chainID)
+		if err == nil {
+			for _, ct := range cfg.Contracts {
+				switch ct.Type {
+				case contractsrepo.ContractTypeIdentity:
+					entry.IdentityRegistry = ct.Address
+				case contractsrepo.ContractTypeReputation:
+					entry.ReputationRegistry = ct.Address
+				}
+			}
 		}
 	}
 	chains := make([]dto.IndexerChainStatus, 0, len(byChain))
 	for _, v := range byChain {
 		chains = append(chains, *v)
 	}
+	sort.Slice(chains, func(i, j int) bool {
+		return chains[i].ChainID < chains[j].ChainID
+	})
 
 	events24h, err := s.deps.Events.Count(ctx, bson.M{
 		"timestamp": bson.M{"$gte": nowMinus24h()},

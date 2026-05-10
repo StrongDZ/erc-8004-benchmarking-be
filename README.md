@@ -1,12 +1,12 @@
 # erc-8004-benchmarking-be
 
-Go backend for the ERC-8004 agent benchmarking platform. Ships as three cooperating
-processes plus infra:
+Go backend for the ERC-8004 agent benchmarking platform. Runtime binaries are
+organized under `cmd/workers/*`:
 
-- `cmd/api` — REST API + WebSocket fan-out (`/api/v1/*`, `/api/v1/ws`).
-- `cmd/consumer` — RabbitMQ consumer that decodes raw logs and writes events.
-- `cmd/crawler` — EVM log crawler that publishes raw logs to RabbitMQ.
-- Workers: `cmd/trustrank-worker`, `cmd/decay-worker`, `cmd/uri-bootstrap`, ...
+- `cmd/workers/api` — REST API + WebSocket fan-out (`/api/v1/*`, `/api/v1/ws`).
+- `cmd/workers/event-decoder` — RabbitMQ consumer that decodes raw logs and writes events.
+- `cmd/workers/indexer` — EVM log crawler that publishes raw logs to RabbitMQ.
+- Additional workers: `cmd/workers/trustrank`, `cmd/workers/score-decay`, `cmd/workers/uri-bootstrap`.
 
 ## Realtime event stream
 
@@ -14,14 +14,14 @@ The platform broadcasts every successfully decoded event to connected WebSocket
 clients. Flow:
 
 ```
-EVM logs → crawler → RabbitMQ → consumer (decode + upsert) → Redis Pub/Sub
+EVM logs → indexer → RabbitMQ → event-decoder (decode + upsert) → Redis Pub/Sub
                                                              ↘
                                            API server subscribes & forwards
                                                              ↘
                                            WebSocket clients (/api/v1/ws)
 ```
 
-Redis is used as a thin fan-out bus between the consumer and the API because the
+Redis is used as a thin fan-out bus between the event-decoder and the API because the
 two run as separate processes. Payload shape:
 
 ```json
@@ -48,7 +48,7 @@ affecting REST endpoints.
 ```bash
 cp .env.example .env
 docker compose up -d mongo rabbitmq redis
-go run ./cmd/api
-go run ./cmd/consumer
-go run ./cmd/crawler
+go run ./cmd/workers/api
+go run ./cmd/workers/event-decoder
+go run ./cmd/workers/indexer
 ```

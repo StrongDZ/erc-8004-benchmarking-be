@@ -8,10 +8,12 @@ package middleware
 //   - AdminAuth: X-API-Key gate for /admin/*
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"log"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -61,6 +63,31 @@ func (sr *statusRecorder) Write(b []byte) (int, error) {
 	n, err := sr.ResponseWriter.Write(b)
 	sr.bytes += n
 	return n, err
+}
+
+// Hijack preserves websocket/http1 upgrade compatibility when ResponseWriter
+// has been wrapped by middleware.
+func (sr *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := sr.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, http.ErrNotSupported
+	}
+	return hj.Hijack()
+}
+
+// Flush preserves streaming semantics when the underlying writer supports it.
+func (sr *statusRecorder) Flush() {
+	if f, ok := sr.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Push delegates HTTP/2 server push when supported by the underlying writer.
+func (sr *statusRecorder) Push(target string, opts *http.PushOptions) error {
+	if p, ok := sr.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
 }
 
 // Logger writes a single-line access log per request.
