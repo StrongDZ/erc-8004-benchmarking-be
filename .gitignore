@@ -1,4 +1,6 @@
 .env
+# Legacy: repo-local Ollama bind mount (no longer used; data lives in ~/ollama_data).
+ollama_data/
 bin/
 dist/
 *.log
@@ -7,6 +9,12 @@ dist/
 .agents
 .cursor
 docs/*
+!docs/superpowers/
+!docs/superpowers/plans/
+!docs/superpowers/plans/*.md
 tests/*
 scripts/*
 **/*_test.go
+
+# Exception: rabbitmq graceful-consume unit tests (see internal/infra/rabbitmq/graceful_consume_test.go).
+!internal/infra/rabbitmq/*_test.go
