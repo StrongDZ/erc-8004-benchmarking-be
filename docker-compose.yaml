@@ -75,6 +75,7 @@ services:
         image: erc8004-consumer:latest
         container_name: erc8004-consumer
         restart: unless-stopped
+        stop_grace_period: 3m
         depends_on:
             mongo:
                 condition: service_healthy
@@ -121,6 +122,7 @@ services:
         image: erc8004-trustrank-worker:latest
         container_name: erc8004-trustrank-worker
         restart: unless-stopped
+        stop_grace_period: 3m
         depends_on:
             mongo:
                 condition: service_healthy
@@ -171,6 +173,7 @@ services:
         image: erc8004-uri-resolver:latest
         container_name: erc8004-uri-resolver
         restart: unless-stopped
+        stop_grace_period: 3m
         depends_on:
             mongo:
                 condition: service_healthy
@@ -182,95 +185,99 @@ services:
             MONGO_URI: mongodb://mongo:27017
             RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
 
-    ollama:
-        image: ollama/ollama:latest
-        container_name: erc8004-ollama
-        restart: unless-stopped
-        ports:
-            - "127.0.0.1:11434:11434"
-        volumes:
-            - ollama_data:/root/.ollama
-        environment:
-            - OLLAMA_NUM_PARALLEL=2
-            - OLLAMA_MAX_LOADED_MODELS=1
-            - OLLAMA_KEEP_ALIVE=30m
-            - OLLAMA_HOST=0.0.0.0:11434
-        mem_limit: 4g
-        healthcheck:
-            test: ["CMD", "ollama", "list"]
-            interval: 30s
-            timeout: 10s
-            retries: 3
-            start_period: 60s
-        # Uncomment to enable NVIDIA GPU support:
-        # deploy:
-        #   resources:
-        #     reservations:
-        #       devices:
-        #         - driver: nvidia
-        #           count: 1
-        #           capabilities: [gpu]
+    # Ollama in Docker Desktop (macOS) is CPU-only — no Metal GPU. Run the Ollama
+    # desktop app on the host for GPU inference; containers use host.docker.internal:11434.
+    #
+    # Models on disk: bind mount ${HOME}/ollama_data → /root/.ollama (same layout as ~/.ollama).
+    # One-time copy from the old named Docker volume: ./scripts/migrate-ollama-docker-volume.sh
+    # Move old repo-local ./ollama_data → ~/ollama_data: ./scripts/move-repo-ollama-data-to-home.sh
+    # Do not run host Ollama and container Ollama on the same data dir at once.
+    #
+    # ollama:
+    #     image: ollama/ollama:latest
+    #     container_name: erc8004-ollama
+    #     restart: unless-stopped
+    #     ports:
+    #         - "127.0.0.1:11434:11434"
+    #     volumes:
+    #         - ${HOME}/ollama_data:/root/.ollama
+    #     environment:
+    #         - OLLAMA_NUM_PARALLEL=2
+    #         - OLLAMA_MAX_LOADED_MODELS=1
+    #         - OLLAMA_KEEP_ALIVE=30m
+    #         - OLLAMA_HOST=0.0.0.0:11434
+    #     mem_limit: 12g
+    #     healthcheck:
+    #         test: ["CMD", "ollama", "list"]
+    #         interval: 30s
+    #         timeout: 10s
+    #         retries: 3
+    #         start_period: 60s
+    #     # Linux + NVIDIA only (not Docker Desktop for Mac):
+    #     # deploy:
+    #     #   resources:
+    #     #     reservations:
+    #     #       devices:
+    #     #         - driver: nvidia
+    #     #           count: 1
+    #     #           capabilities: [gpu]
+    #
+    # ollama-pull:
+    #     image: ollama/ollama:latest
+    #     container_name: erc8004-ollama-pull
+    #     depends_on:
+    #         ollama:
+    #             condition: service_healthy
+    #     entrypoint: >
+    #         sh -c "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:3b-instruct-q4_K_M && echo 'Model ready.'"
+    #     environment:
+    #         - OLLAMA_HOST=ollama:11434
+    #     restart: "no"
+    #
+    # ollama-pull-bench:
+    #     image: ollama/ollama:latest
+    #     container_name: erc8004-ollama-pull-bench
+    #     depends_on:
+    #         ollama:
+    #             condition: service_healthy
+    #     entrypoint: >
+    #         sh -c "OLLAMA_HOST=ollama:11434 ollama pull qwen3:1.7b &&
+    #                OLLAMA_HOST=ollama:11434 ollama pull qwen3:8b &&
+    #                OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:3b &&
+    #                echo 'Benchmark models ready.'"
+    #     environment:
+    #         - OLLAMA_HOST=ollama:11434
+    #     restart: "no"
+    #     profiles: ["bench"]
 
-    ollama-pull:
-        image: ollama/ollama:latest
-        container_name: erc8004-ollama-pull
-        depends_on:
-            ollama:
-                condition: service_healthy
-        entrypoint: >
-            sh -c "OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:3b-instruct-q4_K_M && echo 'Model ready.'"
-        environment:
-            - OLLAMA_HOST=ollama:11434
-        restart: "no"
-
-    ollama-pull-bench:
-        image: ollama/ollama:latest
-        container_name: erc8004-ollama-pull-bench
-        depends_on:
-            ollama:
-                condition: service_healthy
-        entrypoint: >
-            sh -c "OLLAMA_HOST=ollama:11434 ollama pull qwen3:1.7b &&
-                   OLLAMA_HOST=ollama:11434 ollama pull qwen3:8b &&
-                   OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:3b &&
-                   echo 'Benchmark models ready.'"
-        environment:
-            - OLLAMA_HOST=ollama:11434
-        restart: "no"
-        profiles: ["bench"]
-
-    classifier-bench-mongo:
-        image: golang:1.22-alpine
-        container_name: erc8004-classifier-bench-mongo
-        working_dir: /workspace
-        volumes:
-            - ./:/workspace
-            - go_mod_cache:/go/pkg/mod
-            - go_build_cache:/root/.cache/go-build
-            - bench_output:/workspace/scripts/output
-        depends_on:
-            mongo:
-                condition: service_healthy
-            ollama:
-                condition: service_healthy
-            ollama-pull-bench:
-                condition: service_completed_successfully
-        env_file:
-            - .env
-        environment:
-            MONGO_URI: mongodb://mongo:27017
-            LLM_BASE_URL: http://ollama:11434
-            CGO_ENABLED: "0"
-        command: >
-            sh -c "go run ./cmd/tools/classifier-bench-mongo --per-bucket=200 --out=./scripts/output/classifier_eval.csv"
-        restart: "no"
-        profiles: ["bench"]
+    # classifier-bench-mongo:
+    #     image: golang:1.22-alpine
+    #     container_name: erc8004-classifier-bench-mongo
+    #     working_dir: /workspace
+    #     volumes:
+    #         - ./:/workspace
+    #         - go_mod_cache:/go/pkg/mod
+    #         - go_build_cache:/root/.cache/go-build
+    #         - bench_output:/workspace/scripts/output
+    #     depends_on:
+    #         mongo:
+    #             condition: service_healthy
+    #     env_file:
+    #         - .env
+    #     environment:
+    #         MONGO_URI: mongodb://mongo:27017
+    #         # Host Ollama (Metal on macOS). Requires Ollama app running on the machine.
+    #         LLM_BASE_URL: http://host.docker.internal:11434
+    #         CGO_ENABLED: "0"
+    #     command: >
+    #         sh -c "go run ./cmd/tools/classifier-bench-mongo --per-bucket=200 --out=./scripts/output/classifier_eval.csv"
+    #     restart: "no"
+    #     profiles: ["bench"]
 
 volumes:
     mongo_data:
     rabbitmq_data:
     redis_data:
-    ollama_data:
     go_mod_cache:
     go_build_cache:
     bench_output:
