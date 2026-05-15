@@ -78,6 +78,20 @@ func GracefulConsumeLoop(
 	}
 }
 
+// DrainPrefetchedDeliveries processes deliveries already received on the client after Basic.Cancel
+// (or while winding down) until the channel closes, DrainDeadline elapses, or each message is handled.
+// runCtx is typically already canceled. Each delivery is passed to onDelivery with a handler context from
+// DetachedHandlerContext(runCtx, …), matching the drain phase of GracefulConsumeLoop.
+func DrainPrefetchedDeliveries(
+	runCtx context.Context,
+	deliveries <-chan amqp091.Delivery,
+	params GracefulConsumeParams,
+	onDelivery func(hctx context.Context, d amqp091.Delivery) error,
+) error {
+	p := normalizeGracefulConsumeParams(params)
+	return drainGracefulConsume(runCtx, deliveries, p, onDelivery)
+}
+
 func drainGracefulConsume(
 	runCtx context.Context,
 	deliveries <-chan amqp091.Delivery,
