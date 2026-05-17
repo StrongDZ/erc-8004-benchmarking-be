@@ -1,13 +1,13 @@
 basePath: /api/v1
 definitions:
-  erc-8004-benchmarking-be_internal_api_dto.Error:
+  dto.Error:
     properties:
       code:
         type: string
       message:
         type: string
     type: object
-  erc-8004-benchmarking-be_internal_api_dto.Meta:
+  dto.Meta:
     properties:
       limit:
         type: integer
@@ -16,13 +16,13 @@ definitions:
       total:
         type: integer
     type: object
-  erc-8004-benchmarking-be_internal_api_dto.Response:
+  dto.Response:
     properties:
       data: {}
       error:
-        $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Error'
+        $ref: '#/definitions/dto.Error'
       meta:
-        $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Meta'
+        $ref: '#/definitions/dto.Meta'
       requestId:
         type: string
       success:
@@ -43,15 +43,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       security:
       - ApiKeyAuth: []
       summary: Indexer status
@@ -65,11 +65,11 @@ paths:
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "501":
           description: Not Implemented
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       security:
       - ApiKeyAuth: []
       summary: Recompute scoring (v2 placeholder)
@@ -83,11 +83,11 @@ paths:
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "501":
           description: Not Implemented
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       security:
       - ApiKeyAuth: []
       summary: Start simulator (v2 placeholder)
@@ -112,19 +112,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent profile
       tags:
       - agents
@@ -151,19 +151,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent activity heatmap
       tags:
       - agents
@@ -186,7 +186,7 @@ paths:
         "501":
           description: Not Implemented
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent anti-spam (v2 placeholder)
       tags:
       - agents
@@ -237,19 +237,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent feedback list
       tags:
       - agents
@@ -277,19 +277,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent feedback detail
       tags:
       - agents
@@ -312,20 +312,55 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent identity history
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/overview:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent overview tab (basic info + services health + metadata)
       tags:
       - agents
   /agents/{chainId}/{agentId}/penalties:
@@ -359,19 +394,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent penalties
       tags:
       - agents
@@ -399,19 +434,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent proof by transaction
       tags:
       - agents
@@ -434,19 +469,19 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Agent radar
       tags:
       - agents
@@ -477,71 +512,20 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Related agents
-      tags:
-      - agents
-  /agents/{chainId}/{agentId}/score-history:
-    get:
-      parameters:
-      - description: Chain ID
-        in: path
-        name: chainId
-        required: true
-        type: integer
-      - description: Agent ID
-        in: path
-        name: agentId
-        required: true
-        type: string
-      - description: RFC3339 start time
-        in: query
-        name: from
-        type: string
-      - description: RFC3339 end time
-        in: query
-        name: to
-        type: string
-      - description: raw|1h|1d
-        in: query
-        name: resolution
-        type: string
-      - description: Max points
-        in: query
-        name: limit
-        type: integer
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
-      summary: Agent score history
       tags:
       - agents
   /chains:
@@ -552,11 +536,11 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: List supported chains
       tags:
       - chains
@@ -574,15 +558,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: List chain contract addresses
       tags:
       - chains
@@ -607,7 +591,7 @@ paths:
         in: query
         name: sort
         type: string
-      - description: Search keyword
+      - description: Substring match on name, description, agentId, oasfSkills, oasfDomains
         in: query
         name: query
         type: string
@@ -617,15 +601,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: List leaderboard
       tags:
       - leaderboard
@@ -652,15 +636,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Rising stars
       tags:
       - leaderboard
@@ -688,15 +672,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Search leaderboard
       tags:
       - leaderboard
@@ -715,16 +699,43 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Leaderboard stats
+      tags:
+      - leaderboard
+  /leaderboard/tags:
+    get:
+      description: Returns the most common tags across agents. Supports multi-chain
+        filter and search.
+      parameters:
+      - description: Chain ID(s), comma-separated
+        in: query
+        name: chainId
+        type: string
+      - description: Case-insensitive prefix/substring filter
+        in: query
+        name: q
+        type: string
+      - description: Max results (1..200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Top agent tags
       tags:
       - leaderboard
   /oasf/domains:
@@ -762,15 +773,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Browse agents by domains/skills
       tags:
       - oasf
@@ -801,15 +812,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: OASF facets tree
       tags:
       - oasf
@@ -848,18 +859,79 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
         "500":
           description: Internal Server Error
           schema:
-            $ref: '#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response'
+            $ref: '#/definitions/dto.Response'
       summary: Browse agents by skills/domains
       tags:
       - oasf
+  /offchain-by-uri:
+    get:
+      parameters:
+      - description: Logical URI (ipfs://, https://, …)
+        in: query
+        name: uri
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Off-chain URI cache
+      tags:
+      - agents
+  /wallet/{address}/feedbacks:
+    get:
+      description: Returns all feedback submitted by a wallet address across all agents.
+      parameters:
+      - description: Wallet address (hex)
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (max 100, default 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Wallet feedback given
+      tags:
+      - wallet
 schemes:
 - http
 - https

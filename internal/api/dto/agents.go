@@ -3,7 +3,17 @@ package dto
 // agents.go — Public DTOs for agent-facing endpoints.
 // These mirror the JSON shapes in docs/API_SPEC_v1.md §2.1, §3.1–§3.11.
 
+// ScoreBreakdown surfaces the 4 component scores that compose the trust score.
+// All values normalized to [0, 100].
+type ScoreBreakdown struct {
+	Reputation float64 `json:"reputation"`
+	Services   float64 `json:"services"`
+	Publisher  float64 `json:"publisher"`
+	Compliance float64 `json:"compliance"`
+}
+
 // AgentRow is one row of /leaderboard (§2.1) and /leaderboard/search (§2.2, trimmed via JSON tags).
+// TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentRow struct {
 	Rank             int            `json:"rank,omitempty"`
 	ChainID          int64          `json:"chainId"`
@@ -11,8 +21,11 @@ type AgentRow struct {
 	Name             string         `json:"name,omitempty"`
 	Image            string         `json:"image,omitempty"`
 	Owner            string         `json:"owner,omitempty"`
+	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
 	TrustScore       float64        `json:"trustScore"`
+	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
 	ReputationScore float64        `json:"reputationScore"`
+	ScoreBreakdown  ScoreBreakdown `json:"scoreBreakdown"`
 	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
 	ConsecutiveFails int64          `json:"consecutiveFails"`
 	TotalTasks       int64          `json:"totalTasks"`
@@ -74,9 +87,14 @@ type RisingStarRow struct {
 }
 
 // AgentScoring is the scoring sub-object on /agents/:id (§3.1).
+// TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentScoring struct {
+	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
 	TrustScore        float64          `json:"trustScore"`
+	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
+	// Distinct from ScoreBreakdown.Reputation which is the normalized [0, 100] reputation component.
 	ReputationScore   float64          `json:"reputationScore"`
+	ScoreBreakdown    ScoreBreakdown   `json:"scoreBreakdown"`
 	ScoreUpdateAt     int64            `json:"scoreUpdateAt"`
 	ConsecutiveFails  int64            `json:"consecutiveFails"`
 	Penalty           float64          `json:"penalty"`

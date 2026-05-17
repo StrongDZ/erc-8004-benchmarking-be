@@ -14,9 +14,14 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/identity"
 )
 
-// toAgentRow applies lazy decay (§1.4) and projects the document into AgentRow.
+// toAgentRow projects the document into AgentRow using the pre-computed compositeScore.
 func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentRow {
-	trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, nowUnix, cfg)
+	breakdown := dto.ScoreBreakdown{
+		Reputation: round2(d.ReputationNorm),
+		Services:   round2(d.ServicesScore),
+		Publisher:  round2(d.PublisherScore),
+		Compliance: round2(d.ComplianceScore),
+	}
 	services := make([]dto.AgentService, 0, len(d.Services))
 	for _, s := range d.Services {
 		services = append(services, dto.AgentService{
@@ -28,13 +33,14 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 		})
 	}
 	return dto.AgentRow{
-		ChainID:         d.ChainID,
-		AgentID:         d.AgentID,
-		Name:            d.Name,
-		Image:           d.Image,
-		Owner:           d.Owner,
-		TrustScore:      round2(trust),
-		ReputationScore: round2(d.ReputationScore),
+		ChainID:          d.ChainID,
+		AgentID:          d.AgentID,
+		Name:             d.Name,
+		Image:            d.Image,
+		Owner:            d.Owner,
+		TrustScore:       round2(d.CompositeScore),
+		ReputationScore:  round2(d.ReputationScore),
+		ScoreBreakdown:   breakdown,
 		ScoreUpdateAt:    d.ScoreUpdateAt,
 		ConsecutiveFails: d.ConsecutiveFails,
 		TotalTasks:       d.TotalTasks,
@@ -53,10 +59,15 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 	}
 }
 
-// toAgentProfile builds the full profile payload, including lazy-decayed scoring.
+// toAgentProfile builds the full profile payload using the pre-computed compositeScore.
 func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentProfile {
-	trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, nowUnix, cfg)
 	penalty := scoring.ComputePenalty(d.ConsecutiveFails, cfg.Gamma, cfg.Theta)
+	breakdown := dto.ScoreBreakdown{
+		Reputation: round2(d.ReputationNorm),
+		Services:   round2(d.ServicesScore),
+		Publisher:  round2(d.PublisherScore),
+		Compliance: round2(d.ComplianceScore),
+	}
 
 	services := make([]dto.AgentService, 0, len(d.Services))
 	for _, s := range d.Services {
@@ -99,8 +110,9 @@ func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.F
 		OffchainMetadata: d.OffchainMetadata,
 		CreatedAt:        unixToRFC3339(d.CreatedAt),
 		Scoring: dto.AgentScoring{
-			TrustScore:      round2(trust),
-			ReputationScore: round2(d.ReputationScore),
+			TrustScore:        round2(d.CompositeScore),
+			ReputationScore:   round2(d.ReputationScore),
+			ScoreBreakdown:    breakdown,
 			ScoreUpdateAt:     d.ScoreUpdateAt,
 			ConsecutiveFails:  d.ConsecutiveFails,
 			Penalty:           round2(penalty),

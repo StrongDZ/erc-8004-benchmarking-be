@@ -33,19 +33,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -69,13 +69,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "501": {
                         "description": "Not Implemented",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -99,13 +99,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "501": {
                         "description": "Not Implemented",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -140,25 +140,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -199,25 +199,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -252,7 +252,7 @@ const docTemplate = `{
                     "501": {
                         "description": "Not Implemented",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -329,25 +329,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -389,25 +389,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -442,25 +442,78 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/agents/{chainId}/{agentId}/overview": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agents"
+                ],
+                "summary": "Agent overview tab (basic info + services health + metadata)",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Chain ID",
+                        "name": "chainId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent ID",
+                        "name": "agentId",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -513,25 +566,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -573,25 +626,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -626,25 +679,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -691,102 +744,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
-                        }
-                    }
-                }
-            }
-        },
-        "/agents/{chainId}/{agentId}/score-history": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "agents"
-                ],
-                "summary": "Agent score history",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Chain ID",
-                        "name": "chainId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Agent ID",
-                        "name": "agentId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "RFC3339 start time",
-                        "name": "from",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "RFC3339 end time",
-                        "name": "to",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "raw|1h|1d",
-                        "name": "resolution",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Max points",
-                        "name": "limit",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -805,13 +781,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -839,19 +815,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -895,7 +871,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Search keyword",
+                        "description": "Substring match on name, description, agentId, oasfSkills, oasfDomains",
                         "name": "query",
                         "in": "query"
                     }
@@ -904,19 +880,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -957,19 +933,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1011,19 +987,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1052,19 +1028,59 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/leaderboard/tags": {
+            "get": {
+                "description": "Returns the most common tags across agents. Supports multi-chain filter and search.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "leaderboard"
+                ],
+                "summary": "Top agent tags",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chain ID(s), comma-separated",
+                        "name": "chainId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Case-insensitive prefix/substring filter",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (1..200)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1123,19 +1139,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1182,19 +1198,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1253,19 +1269,112 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Response"
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/offchain-by-uri": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agents"
+                ],
+                "summary": "Off-chain URI cache",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Logical URI (ipfs://, https://, …)",
+                        "name": "uri",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/wallet/{address}/feedbacks": {
+            "get": {
+                "description": "Returns all feedback submitted by a wallet address across all agents.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "wallet"
+                ],
+                "summary": "Wallet feedback given",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Wallet address (hex)",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number (default 1)",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size (max 100, default 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/dto.Response"
                         }
                     }
                 }
@@ -1273,7 +1382,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "erc-8004-benchmarking-be_internal_api_dto.Error": {
+        "dto.Error": {
             "type": "object",
             "properties": {
                 "code": {
@@ -1284,7 +1393,7 @@ const docTemplate = `{
                 }
             }
         },
-        "erc-8004-benchmarking-be_internal_api_dto.Meta": {
+        "dto.Meta": {
             "type": "object",
             "properties": {
                 "limit": {
@@ -1298,15 +1407,15 @@ const docTemplate = `{
                 }
             }
         },
-        "erc-8004-benchmarking-be_internal_api_dto.Response": {
+        "dto.Response": {
             "type": "object",
             "properties": {
                 "data": {},
                 "error": {
-                    "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Error"
+                    "$ref": "#/definitions/dto.Error"
                 },
                 "meta": {
-                    "$ref": "#/definitions/erc-8004-benchmarking-be_internal_api_dto.Meta"
+                    "$ref": "#/definitions/dto.Meta"
                 },
                 "requestId": {
                     "type": "string"

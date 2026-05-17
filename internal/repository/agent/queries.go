@@ -51,13 +51,13 @@ func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, s
 	var sortDoc bson.D
 	switch sort {
 	case SortScoreAsc:
-		sortDoc = bson.D{{Key: "reputationScore", Value: 1}}
+		sortDoc = bson.D{{Key: "compositeScore", Value: 1}}
 	case SortTasksDesc:
 		sortDoc = bson.D{{Key: "totalTasks", Value: -1}}
 	case SortRecent:
 		sortDoc = bson.D{{Key: "createdAt", Value: -1}}
 	default:
-		sortDoc = bson.D{{Key: "reputationScore", Value: -1}}
+		sortDoc = bson.D{{Key: "compositeScore", Value: -1}}
 	}
 
 	total, err := r.Count(ctx, query)

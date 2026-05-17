@@ -118,13 +118,8 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 		}
 		rows = append(rows, row)
 	}
-	// Re-sort by decayed trustScore when caller asked for a score-based order to make
-	// the displayed ranking monotonic even if lazy decay slightly reorders rows.
-	if p.Sort == agentrepo.SortScoreDesc || p.Sort == "" {
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].TrustScore > rows[j].TrustScore })
-	} else if p.Sort == agentrepo.SortScoreAsc {
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].TrustScore < rows[j].TrustScore })
-	}
+	// compositeScore is pre-computed by the score-refresh worker and the Mongo sort is
+	// authoritative; no client-side re-sort is needed.
 	// Assign ranks based on absolute position within the page (page 1 starts at 1).
 	for i := range rows {
 		rows[i].Rank = int(p.Skip) + i + 1
@@ -139,16 +134,14 @@ func (s *Leaderboard) Search(ctx context.Context, chainID int64, q string, limit
 	if err != nil {
 		return nil, fmt.Errorf("leaderboard search: %w", err)
 	}
-	now := time.Now().Unix()
 	out := make([]dto.AgentSearchRow, 0, len(docs))
 	for _, d := range docs {
-		trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, now, s.deps.Formula)
 		out = append(out, dto.AgentSearchRow{
 			ChainID:    d.ChainID,
 			AgentID:    d.AgentID,
 			Name:       d.Name,
 			Image:      d.Image,
-			TrustScore: round2(trust),
+			TrustScore: round2(d.CompositeScore),
 		})
 	}
 	return out, nil
