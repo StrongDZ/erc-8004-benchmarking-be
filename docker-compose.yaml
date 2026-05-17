@@ -133,13 +133,13 @@ services:
         environment:
             MONGO_URI: mongodb://mongo:27017
 
-    decay-worker:
+    score-worker:
         build:
             context: .
             dockerfile: Dockerfile
-            target: decay-worker
-        image: erc8004-decay-worker:latest
-        container_name: erc8004-decay-worker
+            target: score-worker
+        image: erc8004-score-worker:latest
+        container_name: erc8004-score-worker
         restart: unless-stopped
         depends_on:
             mongo:

@@ -11,12 +11,14 @@ import (
 // Event is the minimal representation of a decoded on-chain event needed by this package.
 // App layer is responsible for mapping from repository types to this struct.
 type Event struct {
-	EventName string
-	Args      map[string]any
-	ChainID   int64
-	TxHash    string
-	LogIndex  uint
-	DecodedAt int64
+	EventName    string
+	Args         map[string]any
+	ChainID      int64
+	TxHash       string
+	BlockNumber  uint64
+	LogIndex     uint
+	DecodedAt    int64
+	ContractType string
 }
 
 // ExtractURIFromEvent returns the URI carried by identity or reputation events that include URI payloads.
@@ -39,11 +41,14 @@ func ExtractURIFromEvent(event Event) (string, bool) {
 // eventID must be pre-computed by the caller (e.g. repository.EventDocumentID).
 func BuildAgentURIMessage(event Event, uri, source, eventID string) mq.AgentURIMessage {
 	return mq.AgentURIMessage{
-		URI:       uri,
-		ChainID:   event.ChainID,
-		EventID:   eventID,
-		DecodedAt: event.DecodedAt,
-		EventName: event.EventName,
-		Source:    source,
+		URI:          uri,
+		ChainID:      event.ChainID,
+		EventID:      eventID,
+		BlockNumber:  event.BlockNumber,
+		LogIndex:     event.LogIndex,
+		DecodedAt:    event.DecodedAt,
+		EventName:    event.EventName,
+		ContractType: event.ContractType,
+		Source:       source,
 	}
 }

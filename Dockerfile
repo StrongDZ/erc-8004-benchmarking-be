@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
 
@@ -11,16 +11,15 @@ RUN go mod download
 
 COPY . .
 
-# OpenAPI / Swagger — cmd/workers/api embeds generated package docs/swagger (see blank import in cmd/workers/api/main.go).
-# docs/ is gitignored locally; image build must regenerate so Docker builds work from a clean clone.
-RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6 && \
-	/go/bin/swag init -g cmd/workers/api/main.go -o docs/swagger --parseDependency --parseInternal
+# OpenAPI / Swagger — cmd/workers/api embeds generated package swagger (see blank import in cmd/workers/api/main.go).
+# swag CLI is pinned via the `tool` directive in go.mod; version stays in lockstep with the library require line.
+RUN go tool swag init -g cmd/workers/api/main.go -o swagger --parseDependency --parseInternal
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/indexer ./cmd/workers/indexer
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/event-decoder ./cmd/workers/event-decoder
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/api ./cmd/workers/api
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustrank ./cmd/workers/trustrank
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/score-decay ./cmd/workers/score-decay
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/score-refresh ./cmd/workers/score-refresh
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/uri-bootstrap ./cmd/workers/uri-bootstrap
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rescale ./cmd/workers/rescale
 
@@ -45,9 +44,9 @@ FROM base-runtime AS trustrank-worker
 COPY --from=builder /out/trustrank /usr/local/bin/trustrank-worker
 ENTRYPOINT ["/usr/local/bin/trustrank-worker"]
 
-FROM base-runtime AS decay-worker
-COPY --from=builder /out/score-decay /usr/local/bin/decay-worker
-ENTRYPOINT ["/usr/local/bin/decay-worker"]
+FROM base-runtime AS score-worker
+COPY --from=builder /out/score-refresh /usr/local/bin/score-worker
+ENTRYPOINT ["/usr/local/bin/score-worker"]
 
 FROM base-runtime AS uri-bootstrap
 COPY --from=builder /out/uri-bootstrap /usr/local/bin/uri-bootstrap

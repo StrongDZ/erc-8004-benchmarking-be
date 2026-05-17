@@ -16,13 +16,18 @@ type TierCounts struct {
 	Unbounded int64 `bson:"unbounded"` // |real| > 100
 }
 
-// TagValueStats stores the running tier-vote counters for a tag1 value.
-// One document per tag1. _id == tag1 string.
+// TagPairKey returns the composite _id for a (tag1, tag2) pair.
+// tag2 may be empty ("starred:" is a valid key).
+func TagPairKey(tag1, tag2 string) string { return tag1 + ":" + tag2 }
+
+// TagValueStats stores the running tier-vote counters for a (tag1, tag2) pair.
+// One document per pair. _id == TagPairKey(tag1, tag2).
 type TagValueStats struct {
 	ID            string     `bson:"_id"`
 	Tag1          string     `bson:"tag1"`
-	Count         int64      `bson:"count"`        // total non-empty feedbacks
-	EmptyCount    int64      `bson:"emptyCount"`   // feedbacks with value=""
+	Tag2          string     `bson:"tag2"`
+	Count         int64      `bson:"count"`         // total non-empty feedbacks
+	EmptyCount    int64      `bson:"emptyCount"`    // feedbacks with value=""
 	TierCounts    TierCounts `bson:"tierCounts"`
 	DetectedScale string     `bson:"detectedScale"` // "" | "binary" | "star5" | "star10" | "pct100" | "unbounded"
 	ScaleVersion  int64      `bson:"scaleVersion"`  // increments on each scale change
@@ -41,11 +46,12 @@ const (
 )
 
 // ScaleChangeCorrection is written to changed_tag_scales when the detected scale for a
-// tag1 changes. It drives the rescale worker (Phase 1–4 retroactive correction).
-// _id == "{tag1}:v{scaleVersion}".
+// (tag1, tag2) pair changes. It drives the rescale worker (Phase 1–4 retroactive correction).
+// _id == "{tag1}:{tag2}:v{scaleVersion}".
 type ScaleChangeCorrection struct {
 	ID   string `bson:"_id"`
 	Tag1 string `bson:"tag1"`
+	Tag2 string `bson:"tag2"`
 
 	OldScale string `bson:"oldScale"` // "" means first detection (null → newScale)
 	NewScale string `bson:"newScale"`
@@ -81,6 +87,7 @@ type RescaleDelta struct {
 // and flushed in Phase 3 of the trustrank batch.
 type TierUpdate struct {
 	Tag1    string
+	Tag2    string
 	Tier    string // "" when value is empty
 	IsEmpty bool
 }

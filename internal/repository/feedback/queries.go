@@ -56,7 +56,7 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 	q := bson.M{"chainId": f.ChainID, "agentId": f.AgentID}
 
 	if f.Category != "" {
-		q["classification.category"] = f.Category
+		q["classification.rule.category"] = f.Category
 	}
 	switch f.Status {
 	case "revoked":
@@ -66,12 +66,12 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 			bson.M{"revokeTxHash": bson.M{"$exists": false}},
 			bson.M{"revokeTxHash": ""},
 		}
-		q["classification.category"] = bson.M{"$nin": []string{"spam", "noise"}}
+		q["classification.rule.category"] = bson.M{"$nin": []string{"spam", "noise"}}
 	case "spam":
-		q["classification.category"] = bson.M{"$in": []string{"spam", "noise"}}
+		q["classification.rule.category"] = bson.M{"$in": []string{"spam", "noise"}}
 	case "anomalous":
 		q["vi"] = 0
-		q["classification.category"] = bson.M{"$nin": []string{"spam", "noise"}}
+		q["classification.rule.category"] = bson.M{"$nin": []string{"spam", "noise"}}
 	}
 	if f.From != nil || f.To != nil {
 		rng := bson.M{}

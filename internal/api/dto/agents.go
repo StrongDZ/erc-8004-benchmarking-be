@@ -182,6 +182,7 @@ type FeedbackRow struct {
 	ClientAddress  string                 `json:"clientAddress"`
 	Value          string                 `json:"value"`
 	ValueDecimals  uint8                  `json:"valueDecimals"`
+	ValueScale     string                 `json:"valueScale,omitempty"`
 	Vi             float64                `json:"vi"`
 	Wi             float64                `json:"wi"`
 	PriceUSDC      float64                `json:"priceUSDC"`
@@ -196,16 +197,28 @@ type FeedbackRow struct {
 	TxHash         string                 `json:"txHash"`
 	BlockNumber    uint64                 `json:"blockNumber"`
 	Timestamp      string                 `json:"timestamp"`
+	TimestampUnix  int64                  `json:"timestampUnix,omitempty"` // event time, Unix seconds (omitted when unknown)
 	RevokeTxHash   string                 `json:"revokeTxHash,omitempty"`
 	Responses      []FeedbackResponse     `json:"responses,omitempty"`
 }
 
+// RuleClassification mirrors the rule-engine verdict for API consumers.
+type RuleClassification struct {
+	Category string `json:"category"`
+}
+
+// FallbackClassification mirrors the LLM fallback verdict — present only when
+// the LLM fallback actually ran.
+type FallbackClassification struct {
+	Category   string  `json:"category"`
+	Reason     string  `json:"reason,omitempty"`
+	Confidence float64 `json:"confidence"`
+}
+
 // FeedbackClassification is the JSON-facing view of classifier output.
 type FeedbackClassification struct {
-	Category      string  `json:"category"`
-	Confidence    float64 `json:"confidence"`
-	Source        string  `json:"source"`
-	NormalizedTag string  `json:"normalizedTag,omitempty"`
+	Rule     RuleClassification      `json:"rule"`
+	Fallback *FallbackClassification `json:"fallback,omitempty"`
 }
 
 // FeedbackResponse is one replay of a responseAppended event.
@@ -259,12 +272,12 @@ type WalletFeedbackRow struct {
 
 // ProofResponse is the /agents/:id/proof/:txHash payload (§3.10).
 type ProofResponse struct {
-	ChainID          int64          `json:"chainId"`
-	TxHash           string         `json:"txHash"`
-	BlockNumber      uint64         `json:"blockNumber"`
-	EventName        string         `json:"eventName"`
-	ContractType     string         `json:"contractType"`
-	Args             map[string]any `json:"args,omitempty"`
-	FeedbackURI      string         `json:"feedbackURI,omitempty"`
-	ResponseURIs     []string       `json:"responseURIs,omitempty"`
+	ChainID      int64          `json:"chainId"`
+	TxHash       string         `json:"txHash"`
+	BlockNumber  uint64         `json:"blockNumber"`
+	EventName    string         `json:"eventName"`
+	ContractType string         `json:"contractType"`
+	Args         map[string]any `json:"args,omitempty"`
+	FeedbackURI  string         `json:"feedbackURI,omitempty"`
+	ResponseURIs []string       `json:"responseURIs,omitempty"`
 }

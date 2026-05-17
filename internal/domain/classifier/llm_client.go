@@ -78,6 +78,10 @@ func (c *LLMClient) PromptVersion() PromptVersion {
 
 // Classify sends a classification request to the LLM.
 // On any error or invalid response it returns category="others" with source="fallback".
+//
+// endpoint and scale are optional enrichment fields surfaced into the user
+// message. Pass "" to omit either — older callers can keep doing so without
+// behaviour change.
 func (c *LLMClient) Classify(
 	ctx context.Context,
 	tag1, tag2 string,
@@ -86,6 +90,8 @@ func (c *LLMClient) Classify(
 	agentDescription string,
 	agentServices string,
 	agentTags []string,
+	endpoint string,
+	scale string,
 ) LLMResult {
 	llmCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -95,9 +101,9 @@ func (c *LLMClient) Classify(
 
 	switch c.mode {
 	case ModeOllama:
-		raw, err = c.callOllama(llmCtx, tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags)
+		raw, err = c.callOllama(llmCtx, tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags, endpoint, scale)
 	case ModeLlamaCpp:
-		raw, err = c.callLlamaCpp(llmCtx, tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags)
+		raw, err = c.callLlamaCpp(llmCtx, tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags, endpoint, scale)
 	default:
 		err = fmt.Errorf("unknown LLM mode: %s", c.mode)
 	}
@@ -152,6 +158,8 @@ func (c *LLMClient) callOllama(
 	agentDescription string,
 	agentServices string,
 	agentTags []string,
+	endpoint string,
+	scale string,
 ) (string, error) {
 	payload := map[string]any{
 		"model": c.model,
@@ -159,7 +167,8 @@ func (c *LLMClient) callOllama(
 			{"role": "system", "content": systemPromptFor(c.promptVersion)},
 			{"role": "user", "content": userMessageFor(c.promptVersion,
 				tag1, tag2, valueNorm,
-				offchainContent, agentDescription, agentServices, agentTags)},
+				offchainContent, agentDescription, agentServices, agentTags,
+				endpoint, scale)},
 		},
 		"stream": false,
 		// Structured output: forces category to a valid enum at the grammar level.
@@ -230,6 +239,8 @@ func (c *LLMClient) callLlamaCpp(
 	agentDescription string,
 	agentServices string,
 	agentTags []string,
+	endpoint string,
+	scale string,
 ) (string, error) {
 	payload := map[string]any{
 		"model": c.model,
@@ -237,7 +248,8 @@ func (c *LLMClient) callLlamaCpp(
 			{"role": "system", "content": systemPromptFor(c.promptVersion)},
 			{"role": "user", "content": userMessageFor(c.promptVersion,
 				tag1, tag2, valueNorm,
-				offchainContent, agentDescription, agentServices, agentTags)},
+				offchainContent, agentDescription, agentServices, agentTags,
+				endpoint, scale)},
 		},
 		"temperature": 0.0,
 		"max_tokens":  128,
@@ -379,15 +391,36 @@ func sanitizePromptField(s string) string {
 }
 
 // BuildUserMessage builds the v1 user turn. Layout is one labelled field per
-// line (tag1, tag2, value, offchain, agent_description, agent_services,
-// agent_tags). Kept stable for the original (qwen2.5-7B+) prompt and for
-// diagnostic tooling. agent_tags line is omitted when agentTags is empty.
-func BuildUserMessage(tag1, tag2 string, valueNorm float64, offchainContent, agentDescription, agentServices string, agentTags []string) string {
+// line. Kept stable for the original (qwen2.5-7B+) prompt and for diagnostic
+// tooling. Optional fields are omitted when empty:
+//
+//   tag1: …
+//   tag2: …
+//   value: 0.95
+//   scale: pct100               (omitted if empty)
+//   endpoint: api.example.com   (omitted if empty)
+//   offchain: …                 (always shown; "(none)" placeholder)
+//   agent_description: …
+//   agent_services: …
+//   agent_tags: …               (omitted if empty)
+//
+// endpoint and scale are surfaced when the bench / runtime caller supplies
+// them. Older callers pass "" and the prompt stays identical to the previous
+// schema for backward compatibility.
+func BuildUserMessage(
+	tag1, tag2 string,
+	valueNorm float64,
+	offchainContent, agentDescription, agentServices string,
+	agentTags []string,
+	endpoint, scale string,
+) string {
 	tag1 = sanitizePromptField(tag1)
 	tag2 = sanitizePromptField(tag2)
 	offchainContent = sanitizePromptField(offchainContent)
 	agentDescription = sanitizePromptField(agentDescription)
 	agentServices = sanitizePromptField(agentServices)
+	endpoint = sanitizePromptField(endpoint)
+	scale = sanitizePromptField(scale)
 
 	if offchainContent == "" {
 		offchainContent = "(none)"
@@ -399,41 +432,87 @@ func BuildUserMessage(tag1, tag2 string, valueNorm float64, offchainContent, age
 		agentServices = "(not available)"
 	}
 
-	base := fmt.Sprintf(
-		"tag1: %s\ntag2: %s\nvalue: %.4f\noffchain: %s\nagent_description: %s\nagent_services: %s",
-		tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices,
-	)
-	if len(agentTags) > 0 {
-		base += "\nagent_tags: " + strings.Join(agentTags, ", ")
+	var b strings.Builder
+	fmt.Fprintf(&b, "tag1: %s\ntag2: %s\nvalue: %.4f", tag1, tag2, valueNorm)
+	if scale != "" {
+		fmt.Fprintf(&b, "\nscale: %s", scale)
 	}
-	return base
+	if endpoint != "" {
+		fmt.Fprintf(&b, "\nendpoint: %s", EndpointHost(endpoint))
+	}
+	fmt.Fprintf(&b, "\noffchain: %s\nagent_description: %s\nagent_services: %s",
+		offchainContent, agentDescription, agentServices)
+	if len(agentTags) > 0 {
+		fmt.Fprintf(&b, "\nagent_tags: %s", strings.Join(agentTags, ", "))
+	}
+	return b.String()
+}
+
+// EndpointHost strips scheme + path from an endpoint URL so the prompt sees
+// only the host. For a free-text endpoint that's not a URL it returns the
+// trimmed string unchanged. The host alone is the useful signal — full URLs
+// burn tokens without adding classification value.
+func EndpointHost(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return ""
+	}
+	// Strip scheme.
+	if i := strings.Index(ep, "://"); i >= 0 {
+		ep = ep[i+3:]
+	}
+	// Strip path / query / fragment after first separator.
+	for _, sep := range []string{"/", "?", "#"} {
+		if i := strings.Index(ep, sep); i >= 0 {
+			ep = ep[:i]
+		}
+	}
+	return ep
 }
 
 // Compact-3B field length caps. Tuned so a typical input lands well under
-// ~180 tokens and a worst-case input still fits comfortably in a 3B model's
+// ~240 tokens and a worst-case input still fits comfortably in a 3B model's
 // short prompt budget.
+//
+// AgentDesc was bumped from 80 to 200 chars in Track B1 — the 80-char cap was
+// dropping critical disambiguation context (e.g. agent 17 microtasking on
+// Celo vs an unrelated DeFi vault), causing the 3B classifier to over-predict
+// service_feedback / others on app_specific domain-op tags.
 const (
-	compactAgentDescMaxRunes = 80
+	compactAgentDescMaxRunes = 200
 	compactDomainsMaxItems   = 5
 	compactServicesMaxRunes  = 60
-	compactNoteMaxRunes      = 120
+	compactNoteMaxRunes      = 160
 )
 
 // BuildUserMessageCompact3B builds a natural-language compact user turn for
 // the compact-3B prompt. Layout:
 //
-//	agent: <description summary>; domains: <leaves>[; tags: <onchain tags>]
-//	t1=<humanized>; t2=<humanized>; score=<v>
-//	note: <offchain summary>
+//	agent: <description summary>; domains: <leaves>[; tags: <onchain tags>][; endpoint: host]
+//	t1=<humanized>; t2=<humanized>; score=<v>[; scale=<tier>]
+//	note: <schema-aware offchain summary>
+//
+// Track B1 enrichment vs the original compact-3B build:
+//   - agent_description budget raised 80 → 200 chars (compactAgentDescMaxRunes)
+//   - endpoint host surfaced inline on the agent header when provided
+//   - tag-scale tier (binary|star5|star10|pct100|unbounded) appended to the
+//     scoreline so the LLM can interpret the value type (e.g. 1 means
+//     "passed" under binary, "1 star" under star5)
+//   - offchain note now uses SummarizeJSONLikeSchema, preserving JSON KEY
+//     NAMES (validationType=…; slashingConditions=[3 items]) instead of
+//     flattening to value-only text — schema names are strong category
+//     signals (validation* → config, perDomain → config, comment → service).
 //
 // Mechanical identifiers in tag1/tag2 are humanized (snake/kebab/camel split,
-// lowercased). agent_description is summarized (whitespace collapsed,
-// truncated). agent_services is mined for OASF domain leaves; if none are
-// found, a short raw snippet is shown instead. offchain content is parsed
-// leniently as JSON when applicable. agentTags are appended inline to the
-// agent header when non-empty (capped at compactDomainsMaxItems).
-func BuildUserMessageCompact3B(tag1, tag2 string, valueNorm float64,
-	offchainContent, agentDescription, agentServices string, agentTags []string) string {
+// lowercased). agentTags are appended inline to the agent header when
+// non-empty (capped at compactDomainsMaxItems).
+func BuildUserMessageCompact3B(
+	tag1, tag2 string,
+	valueNorm float64,
+	offchainContent, agentDescription, agentServices string,
+	agentTags []string,
+	endpoint, scale string,
+) string {
 	t1 := HumanizeIdentifier(tag1)
 	if t1 == "" {
 		t1 = "<EMPTY>"
@@ -461,29 +540,34 @@ func BuildUserMessageCompact3B(tag1, tag2 string, valueNorm float64,
 		}
 		ctx += "; tags: " + strings.Join(tags, ", ")
 	}
+	if host := EndpointHost(endpoint); host != "" {
+		ctx += "; endpoint: " + host
+	}
 
-	note := SummarizeJSONLike(offchainContent, compactNoteMaxRunes)
+	note := SummarizeJSONLikeSchema(offchainContent, compactNoteMaxRunes)
 	if note == "" {
 		note = "(none)"
 	}
 
-	return fmt.Sprintf(
-		"agent: %s%s\nt1=%s; t2=%s; score=%.2f\nnote: %s",
-		desc, ctx, t1, t2, valueNorm, note,
-	)
+	scoreLine := fmt.Sprintf("t1=%s; t2=%s; score=%.2f", t1, t2, valueNorm)
+	if s := strings.TrimSpace(scale); s != "" {
+		scoreLine += "; scale=" + s
+	}
+
+	return fmt.Sprintf("agent: %s%s\n%s\nnote: %s", desc, ctx, scoreLine, note)
 }
 
 // BuildPrompt is kept for diagnostics/tests. It composes the v1 system prompt
 // with the v1 user message; the runtime path constructs separate system+user
 // messages and respects the configured PromptVersion.
-func BuildPrompt(tag1, tag2 string, valueNorm float64, offchainContent, agentDescription, agentServices string, agentTags []string) string {
+func BuildPrompt(tag1, tag2 string, valueNorm float64, offchainContent, agentDescription, agentServices string, agentTags []string, endpoint, scale string) string {
 	return "[SYSTEM]\n" + llmSystemPrompt + "\n\n[USER]\n" +
-		BuildUserMessage(tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags)
+		BuildUserMessage(tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags, endpoint, scale)
 }
 
 // BuildPromptCompact3B is the diagnostic counterpart to BuildPrompt for the
 // compact-3B variant.
-func BuildPromptCompact3B(tag1, tag2 string, valueNorm float64, offchainContent, agentDescription, agentServices string, agentTags []string) string {
+func BuildPromptCompact3B(tag1, tag2 string, valueNorm float64, offchainContent, agentDescription, agentServices string, agentTags []string, endpoint, scale string) string {
 	return "[SYSTEM]\n" + llmSystemPromptCompact3B + "\n\n[USER]\n" +
-		BuildUserMessageCompact3B(tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags)
+		BuildUserMessageCompact3B(tag1, tag2, valueNorm, offchainContent, agentDescription, agentServices, agentTags, endpoint, scale)
 }

@@ -1,6 +1,8 @@
 package main
 
-// score-decay — Luồng 3: mỗi N giờ, materialize time decay cho tất cả agents.
+// score-refresh — Periodic worker: every ScoreRefreshCron, replays feedback_history
+// per agent to compute accumulatedScore and delta snapshots (24h / 7d / 30d),
+// then upserts agent_score_stats and syncs agent.accumulatedScore.
 
 import (
 	"context"
@@ -8,14 +10,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	scoredecayapp "erc-8004-benchmarking-be/internal/app/scoredecay"
+	scorerefreshapp "erc-8004-benchmarking-be/internal/app/scorerefresh"
 	"erc-8004-benchmarking-be/internal/config"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
+	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
+	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
 func main() {
@@ -27,7 +29,11 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	mc, err := mongoclient.NewClient(ctx, cfg.MongoURI, mongoclient.PoolOptions{MaxPoolSize: cfg.MongoMaxPoolSize, MinPoolSize: cfg.MongoMinPoolSize, MaxConnIdleTime: cfg.MongoMaxConnIdleMs})
+	mc, err := mongoclient.NewClient(ctx, cfg.MongoURI, mongoclient.PoolOptions{
+		MaxPoolSize:     cfg.MongoMaxPoolSize,
+		MinPoolSize:     cfg.MongoMinPoolSize,
+		MaxConnIdleTime: cfg.MongoMaxConnIdleMs,
+	})
 	if err != nil {
 		log.Fatalf("mongo connect: %v", err)
 	}
@@ -35,13 +41,14 @@ func main() {
 
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
 	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
-	scores := scorerepo.NewRepository(analyzedDB, cfg.ScoreHistColl)
+	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
+	scoreStats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
 
 	if err := agents.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("agents indexes: %v", err)
 	}
-	if err := scores.EnsureIndexes(ctx); err != nil {
-		log.Fatalf("score_history indexes: %v", err)
+	if err := scoreStats.EnsureIndexes(ctx); err != nil {
+		log.Fatalf("score_stats indexes: %v", err)
 	}
 
 	formulaCfg := scoring.FormulaConfig{
@@ -54,12 +61,10 @@ func main() {
 		SBase:     0.0,
 	}
 
-	interval := time.Duration(cfg.DecayIntervalHours) * time.Hour
+	app := scorerefreshapp.NewApp(agents, feedbacks, scoreStats, formulaCfg, cfg.ScoreRefreshCron)
 
-	app := scoredecayapp.NewApp(agents, scores, formulaCfg, interval)
-
-	log.Printf("score-decay started interval=%s", interval)
+	log.Printf("score-refresh started cron=%q", cfg.ScoreRefreshCron)
 	if err := app.Run(ctx); err != nil && err != context.Canceled {
-		log.Printf("score-decay stopped: %v", err)
+		log.Printf("score-refresh stopped: %v", err)
 	}
 }

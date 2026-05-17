@@ -26,39 +26,39 @@ import (
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
+	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // Repositories groups all read-side repos the API depends on.
 type Repositories struct {
-	Agents    *agentrepo.Repository
-	Feedback  *feedbackrepo.Repository
-	Scores    *scorerepo.Repository
-	Identity  *identityrepo.Repository
-	Events    *eventrepo.Repository
-	Offchain  *offchainrepo.Repository
-	Crawlers  *crawlerrepo.Repository
-	Contracts *contractsrepo.ContractsRepository
-}		
+	Agents     *agentrepo.Repository
+	Feedback   *feedbackrepo.Repository
+	ScoreStats *scorestatsrepo.Repository
+	Identity   *identityrepo.Repository
+	Events     *eventrepo.Repository
+	Offchain   *offchainrepo.Repository
+	Crawlers   *crawlerrepo.Repository
+	Contracts  *contractsrepo.ContractsRepository
+}
 
 // NewRepositories wires all repositories against both the primary and analyzed databases.
 //   - Raw/crawler data (events, contracts, crawlers, offchain_data) lives in the primary DB.
-//   - Analyzed data (agents, feedback_history, identity_history, score_history) lives in
+//   - Analyzed data (agents, feedback_history, identity_history, agent_score_stats) lives in
 //     the analyzed DB.
 func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 	primary := client.Database(cfg.MongoDatabase)
 	analyzed := client.Database(cfg.AnalyzedDatabase)
 	return &Repositories{
-		Agents:    agentrepo.NewRepository(analyzed, cfg.AgentsColl),
-		Feedback:  feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
-		Scores:    scorerepo.NewRepository(analyzed, cfg.ScoreHistColl),
-		Identity:  identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
-		Events:    eventrepo.NewRepository(primary, cfg.EventsColl),
-		Offchain:  offchainrepo.NewRepository(primary, cfg.OffchainColl),
-		Crawlers:  crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
-		Contracts: contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
+		Agents:     agentrepo.NewRepository(analyzed, cfg.AgentsColl),
+		Feedback:   feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
+		ScoreStats: scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
+		Identity:   identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
+		Events:     eventrepo.NewRepository(primary, cfg.EventsColl),
+		Offchain:   offchainrepo.NewRepository(primary, cfg.OffchainColl),
+		Crawlers:   crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
+		Contracts:  contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
 	}
 }
 
@@ -85,11 +85,11 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 
 	// Services
 	lbSvc := service.NewLeaderboard(service.LeaderboardDeps{
-		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.Scores,
+		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.ScoreStats,
 		Crawlers: repos.Crawlers, Formula: formula,
 	})
 	agentSvc := service.NewAgent(service.AgentDeps{
-		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.Scores,
+		Agents: repos.Agents, Feedback: repos.Feedback, ScoreStats: repos.ScoreStats,
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
 		Contracts: repos.Contracts, Formula: formula,
 	})
@@ -134,9 +134,9 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// /api/v1/agents/...
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}", c30s(http.HandlerFunc(agH.Profile)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/overview", c30s(http.HandlerFunc(agH.Overview)))
-	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/score-history", c30s(http.HandlerFunc(agH.ScoreHistory)))
-	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
+mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
+	mux.HandleFunc("GET /api/v1/offchain-by-uri", agH.OffchainByURI)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/activity-heatmap", c2m(http.HandlerFunc(agH.ActivityHeatmap)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/penalties", agH.Penalties)

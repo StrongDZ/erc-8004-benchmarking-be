@@ -13,7 +13,6 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
-	"erc-8004-benchmarking-be/internal/repository/score"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/utils"
 )
@@ -60,9 +59,14 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		log.Printf("processor: anomalous value detected (persisting, no scoring): chain=%d agent=%s value=%q", bs.chainID, agentID, value)
 	}
 
-	// Compute real value and normalize using dynamically detected scale.
+	// Compute real value and normalize using dynamically detected scale for this (tag1, tag2) pair.
+	// When scale is not yet detected, infer it from the value itself via AssignTier instead of
+	// defaulting to pct100, which would severely underweight non-percentage feedback (e.g. star5=5 → 0.05).
 	real, realOK := classifier.RawValueToReal(value, int(valueDecimals))
-	scale := p.lookupScale(tag1)
+	scale := p.lookupScale(tag1, tag2)
+	if scale == "" && realOK {
+		scale = classifier.AssignTier(real)
+	}
 	var vi float64
 	if !realOK || isAnomalous {
 		vi = 0.0
@@ -72,7 +76,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 
 	// Record a tier vote for Phase 3 stats flush (only for service_feedback category).
 	if cls.Category == classifier.CategoryService {
-		tu := tagstats.TierUpdate{Tag1: tag1, IsEmpty: !realOK}
+		tu := tagstats.TierUpdate{Tag1: tag1, Tag2: tag2, IsEmpty: !realOK}
 		if realOK {
 			tu.Tier = classifier.AssignTier(real)
 		}
@@ -106,7 +110,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		FeedbackParsed: feedbackParsed,
 		PriceUSDC:      priceUSDC,
 		Wi:             wi,
-		Vi:             vi,
+		ValueScale:     scale,
 		IsSelfFeedback: isSelf,
 		Type:           "reputation_feedback",
 		BlockNumber:    ev.BlockNumber,
@@ -114,10 +118,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		LogIndex:       ev.LogIndex,
 		Timestamp:      ev.Timestamp,
 		Classification: feedback.FeedbackClassification{
-			Category:      string(cls.Category),
-			Confidence:    cls.Confidence,
-			Source:        cls.Source,
-			NormalizedTag: cls.NormalizedTag,
+			Rule: feedback.RuleClassification{Category: string(cls.Category)},
 		},
 	}
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
@@ -143,7 +144,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	newTotalTasks := agentDoc.TotalTasks + 1
 
 	var newPassed, newFailed, newConsecFails int64
-	if vi >= 0.5 {
+	if vi >= 0.40 {
 		newPassed = agentDoc.TotalPassed + 1
 		newFailed = agentDoc.TotalFailed
 		newConsecFails = 0
@@ -151,6 +152,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		newPassed = agentDoc.TotalPassed
 		newFailed = agentDoc.TotalFailed + 1
 		newConsecFails = agentDoc.ConsecutiveFails + 1
+		// Bake the progressive penalty directly into accumulatedScore (unified write path).
+		newAcc -= scoring.ComputePenalty(newConsecFails, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
 	}
 
 	agentDoc.AccumulatedScore = newAcc
@@ -160,23 +163,6 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	agentDoc.TotalPassed = newPassed
 	agentDoc.TotalFailed = newFailed
 	bs.dirtyAgents[agentID] = true
-
-	displayScore := scoring.ComputeCurrentScore(newAcc, ev.Timestamp, newConsecFails, ev.Timestamp, bs.formulaCfg)
-	bs.pendingSnapshots = append(bs.pendingSnapshots, struct {
-		ChainID  int64
-		AgentID  string
-		Snapshot score.ScoreSnapshotItem
-	}{
-		ChainID: bs.chainID,
-		AgentID: agentID,
-		Snapshot: score.ScoreSnapshotItem{
-			AgentScore: displayScore,
-			Type:       "event",
-			TxHash:     ev.TxHash,
-			EventScore: wi * vi,
-			Timestamp:  ev.Timestamp,
-		},
-	})
 }
 
 func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
@@ -188,6 +174,8 @@ func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eve
 	}
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 
+	// Mark the feedback as revoked. Score correction is handled by the next
+	// score-refresh cycle which replays feedback_history excluding revoked records.
 	bs.pendingFBUpdates = append(bs.pendingFBUpdates, feedback.FeedbackUpdate{
 		ID: fbID,
 		Update: bson.M{
@@ -196,36 +184,6 @@ func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eve
 				"isRevoked":    true,
 				"revokedAt":    ev.Timestamp,
 			},
-		},
-	})
-
-	fb := bs.fbMap[fbID]
-	if fb == nil {
-		log.Printf("processor: feedback revoked but record not found: chain=%d agent=%s idx=%d", bs.chainID, agentID, feedbackIndex)
-		return
-	}
-
-	agentDoc := p.getOrCreateAgent(bs, agentID, ev.Timestamp)
-
-	newAcc := scoring.RevertFeedbackScore(agentDoc.AccumulatedScore, agentDoc.ScoreUpdateAt, fb.Wi, fb.Vi, fb.Timestamp, ev.Timestamp, bs.formulaCfg)
-	agentDoc.AccumulatedScore = newAcc
-	agentDoc.ScoreUpdateAt = ev.Timestamp
-	bs.dirtyAgents[agentID] = true
-
-	displayScore := scoring.ComputeCurrentScore(newAcc, ev.Timestamp, agentDoc.ConsecutiveFails, ev.Timestamp, bs.formulaCfg)
-	bs.pendingSnapshots = append(bs.pendingSnapshots, struct {
-		ChainID  int64
-		AgentID  string
-		Snapshot score.ScoreSnapshotItem
-	}{
-		ChainID: bs.chainID,
-		AgentID: agentID,
-		Snapshot: score.ScoreSnapshotItem{
-			AgentScore: displayScore,
-			Type:       "event",
-			TxHash:     ev.TxHash,
-			EventScore: -(fb.Wi * fb.Vi),
-			Timestamp:  ev.Timestamp,
 		},
 	})
 }
@@ -259,20 +217,20 @@ func (p *Processor) handleResponseAppended(bs *batchState, agentID string, ev ev
 	})
 }
 
-// lookupScale returns the detected scale for a tag1 from the in-memory cache.
-// On cache miss it queries tag_value_stats; if tagStatsRepo is nil or the tag
-// has not yet reached MIN_SAMPLES it returns "" (falls back to pct100).
-func (p *Processor) lookupScale(tag1 string) string {
+// lookupScale returns the detected scale for a (tag1, tag2) pair from the in-memory cache.
+// On cache miss it queries tag_value_stats; returns "" when not yet detected (caller should infer via AssignTier).
+func (p *Processor) lookupScale(tag1, tag2 string) string {
 	const cacheTTLSecs = 300 // 5 minutes
 
+	cacheKey := tagstats.TagPairKey(tag1, tag2)
 	now := time.Now().Unix()
 
-	if v, ok := p.tagScaleCache.Load(tag1); ok {
+	if v, ok := p.tagScaleCache.Load(cacheKey); ok {
 		cs := v.(cachedScale)
 		if cs.ExpiresAt > now {
 			return cs.Scale
 		}
-		p.tagScaleCache.Delete(tag1)
+		p.tagScaleCache.Delete(cacheKey)
 	}
 
 	if p.tagStatsRepo == nil {
@@ -280,13 +238,13 @@ func (p *Processor) lookupScale(tag1 string) string {
 	}
 
 	// Background context: cache miss query should not block the processing pipeline long.
-	doc, err := p.tagStatsRepo.GetByTag1(context.Background(), tag1)
+	doc, err := p.tagStatsRepo.GetByTagPair(context.Background(), tag1, tag2)
 	if err != nil || doc == nil {
 		return ""
 	}
 
 	scale := doc.DetectedScale
-	p.tagScaleCache.Store(tag1, cachedScale{Scale: scale, ExpiresAt: now + cacheTTLSecs})
+	p.tagScaleCache.Store(cacheKey, cachedScale{Scale: scale, ExpiresAt: now + cacheTTLSecs})
 	return scale
 }
 

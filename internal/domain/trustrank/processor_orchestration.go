@@ -21,7 +21,6 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
-	"erc-8004-benchmarking-be/internal/repository/score"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/utils"
 )
@@ -34,7 +33,6 @@ func NewProcessor(
 	agentRepo *agent.Repository,
 	identityRepo *identityrepo.Repository,
 	feedbackRepo *feedback.Repository,
-	scoreRepo *score.Repository,
 	offchainRepo *offchain.Repository,
 	formulaCfg scoring.FormulaConfig,
 	uriPublisher URIPublisher,
@@ -46,7 +44,6 @@ func NewProcessor(
 		agentRepo:    agentRepo,
 		identityRepo: identityRepo,
 		feedbackRepo: feedbackRepo,
-		scoreRepo:    scoreRepo,
 		offchainRepo: offchainRepo,
 		formulaCfg:   formulaCfg,
 		uriPublisher: uriPublisher,
@@ -256,10 +253,6 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 		return fmt.Errorf("flush feedback updates: %w", err)
 	}
 
-	if err := p.scoreRepo.BulkAppendSnapshots(ctx, bs.pendingSnapshots); err != nil {
-		return fmt.Errorf("flush score snapshots: %w", err)
-	}
-
 	// Flush tag tier votes and detect scale changes (best-effort; errors logged, not fatal).
 	if p.tagStatsRepo != nil && len(bs.pendingTierUpdates) > 0 {
 		if err := p.flushTierStats(ctx, bs); err != nil {
@@ -288,23 +281,23 @@ func (p *Processor) flushTierStats(ctx context.Context, bs *batchState) error {
 		return fmt.Errorf("bulk increment tiers: %w", err)
 	}
 
-	// Collect unique tag1s that received votes in this batch.
-	tag1Set := make(map[string]bool, len(bs.pendingTierUpdates))
+	// Collect unique (tag1, tag2) pairs that received non-empty votes in this batch.
+	pairSet := make(map[string]bool, len(bs.pendingTierUpdates))
 	for _, u := range bs.pendingTierUpdates {
 		if !u.IsEmpty {
-			tag1Set[u.Tag1] = true
+			pairSet[tagstats.TagPairKey(u.Tag1, u.Tag2)] = true
 		}
 	}
-	if len(tag1Set) == 0 {
+	if len(pairSet) == 0 {
 		return nil
 	}
-	tag1s := make([]string, 0, len(tag1Set))
-	for t := range tag1Set {
-		tag1s = append(tag1s, t)
+	keys := make([]string, 0, len(pairSet))
+	for k := range pairSet {
+		keys = append(keys, k)
 	}
 
 	// Re-fetch updated stats to run scale detection.
-	statsDocs, err := p.tagStatsRepo.GetByTag1s(ctx, tag1s)
+	statsDocs, err := p.tagStatsRepo.GetByKeys(ctx, keys)
 	if err != nil {
 		return fmt.Errorf("re-fetch stats: %w", err)
 	}
@@ -320,20 +313,21 @@ func (p *Processor) flushTierStats(ctx context.Context, bs *batchState) error {
 		}
 
 		// Scale changed: persist the new scale and enqueue a correction.
-		if err := p.tagStatsRepo.SetDetectedScale(ctx, doc.Tag1, newScale, nowUnix); err != nil {
-			log.Printf("processor: set detected scale %s: %v", doc.Tag1, err)
+		if err := p.tagStatsRepo.SetDetectedScale(ctx, doc.Tag1, doc.Tag2, newScale, nowUnix); err != nil {
+			log.Printf("processor: set detected scale %s:%s: %v", doc.Tag1, doc.Tag2, err)
 			continue
 		}
 		// Invalidate cache so next batch picks up the new scale.
-		p.tagScaleCache.Delete(doc.Tag1)
+		p.tagScaleCache.Delete(tagstats.TagPairKey(doc.Tag1, doc.Tag2))
 
 		if p.tagCorrsRepo == nil {
 			continue
 		}
-		corrID := fmt.Sprintf("%s:v%d", doc.Tag1, doc.ScaleVersion+1)
+		corrID := fmt.Sprintf("%s:%s:v%d", doc.Tag1, doc.Tag2, doc.ScaleVersion+1)
 		corr := tagstats.ScaleChangeCorrection{
 			ID:         corrID,
 			Tag1:       doc.Tag1,
+			Tag2:       doc.Tag2,
 			OldScale:   doc.DetectedScale,
 			NewScale:   newScale,
 			DetectedAt: nowUnix,

@@ -64,10 +64,12 @@ type toolResult struct {
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
+// server routes each allowed collection name to the database that actually owns it.
+// Raw indexer data (events, contracts, crawlers, offchain_data, config) lives in the
+// primary DB; analyzed/scored data (agents, *_history) lives in the analyzed DB.
 type server struct {
-	db               *mongo.Database
 	viewDB           *mongo.Database
-	allowCollections map[string]struct{}
+	allowCollections map[string]*mongo.Database
 }
 
 func main() {
@@ -89,22 +91,26 @@ func main() {
 	}
 	defer func() { _ = mc.Disconnect(context.Background()) }()
 
+	// Stderr only (stdout is MCP JSON-RPC). Helps debug wrong host/port vs Docker.
+	log.Printf("mcp: mongo ping ok primaryDB=%q analyzedDB=%q events=%q agents=%q",
+		cfg.MongoDatabase, cfg.AnalyzedDatabase, cfg.EventsColl, cfg.AgentsColl)
+
+	primaryDB := mc.Database(cfg.MongoDatabase)
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
 	viewDB := mc.Database("view")
 
 	srv := &server{
-		db:     analyzedDB,
 		viewDB: viewDB,
-		allowCollections: map[string]struct{}{
-			cfg.ContractsColl:    {},
-			cfg.CrawlersColl:     {},
-			cfg.EventsColl:       {},
-			cfg.OffchainColl:     {},
-			cfg.ConfigColl:       {},
-			cfg.AgentsColl:       {},
-			cfg.IdentityHistColl: {},
-			cfg.ScoreHistColl:    {},
-			cfg.FeedbackHistColl: {},
+		allowCollections: map[string]*mongo.Database{
+			cfg.ContractsColl:    primaryDB,
+			cfg.CrawlersColl:     primaryDB,
+			cfg.EventsColl:       primaryDB,
+			cfg.OffchainColl:     primaryDB,
+			cfg.ConfigColl:       primaryDB,
+			cfg.AgentsColl:       analyzedDB,
+			cfg.IdentityHistColl: analyzedDB,
+			cfg.ScoreHistColl:    analyzedDB,
+			cfg.FeedbackHistColl: analyzedDB,
 		},
 	}
 
@@ -309,7 +315,8 @@ func (s *server) toolQueryCollectionReadonly(ctx context.Context, args map[strin
 	if strings.HasPrefix(collection, "$") {
 		return toolResult{}, fmt.Errorf("invalid collection name")
 	}
-	if _, ok := s.allowCollections[collection]; !ok {
+	db, ok := s.allowCollections[collection]
+	if !ok || db == nil {
 		return toolResult{}, fmt.Errorf("collection %q is not allowed", collection)
 	}
 
@@ -338,7 +345,8 @@ func (s *server) toolQueryCollectionReadonly(ctx context.Context, args map[strin
 		findOptions.SetSort(sortDoc)
 	}
 
-	cur, err := s.db.Collection(collection).Find(ctx, filter, findOptions)
+	coll := db.Collection(collection)
+	cur, err := coll.Find(ctx, filter, findOptions)
 	if err != nil {
 		return toolResult{}, fmt.Errorf("query_collection_readonly find: %w", err)
 	}
@@ -350,6 +358,7 @@ func (s *server) toolQueryCollectionReadonly(ctx context.Context, args map[strin
 	}
 
 	out := map[string]any{
+		"database":   db.Name(),
 		"collection": collection,
 		"limit":      limit,
 		"skip":       skip,
@@ -357,7 +366,7 @@ func (s *server) toolQueryCollectionReadonly(ctx context.Context, args map[strin
 		"documents":  docs,
 	}
 	if includeCount {
-		total, err := s.db.Collection(collection).CountDocuments(ctx, filter)
+		total, err := coll.CountDocuments(ctx, filter)
 		if err != nil {
 			return toolResult{}, fmt.Errorf("query_collection_readonly count: %w", err)
 		}

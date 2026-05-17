@@ -19,7 +19,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	_ "erc-8004-benchmarking-be/docs/swagger"
+	_ "erc-8004-benchmarking-be/swagger"
 	"erc-8004-benchmarking-be/internal/api"
 	"erc-8004-benchmarking-be/internal/config"
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"

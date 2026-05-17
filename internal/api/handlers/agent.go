@@ -66,49 +66,10 @@ func (h *AgentHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, out)
 }
 
-// ScoreHistory handles GET /agents/:chainId/:agentId/score-history (Â§3.2).
-// @Summary Agent score history
-// @Tags agents
-// @Produce json
-// @Param chainId path int true "Chain ID"
-// @Param agentId path string true "Agent ID"
-// @Param from query string false "RFC3339 start time"
-// @Param to query string false "RFC3339 end time"
-// @Param resolution query string false "raw|1h|1d"
-// @Param limit query int false "Max points"
-// @Success 200 {object} dto.Response
-// @Failure 400 {object} dto.Response
-// @Failure 404 {object} dto.Response
-// @Failure 500 {object} dto.Response
-// @Router /agents/{chainId}/{agentId}/score-history [get]
-func (h *AgentHandler) ScoreHistory(w http.ResponseWriter, r *http.Request) {
-	chainID, agentID, ok := h.parseAgentPath(w, r)
-	if !ok {
-		return
-	}
-	from, to, err := dto.ParseTimeRange(r)
-	if err != nil {
-		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, err.Error())
-		return
-	}
-	res := r.URL.Query().Get("resolution")
-	limit := dto.ParseInt64(r, "limit", 1000)
-	out, err := h.svc.ScoreHistory(r.Context(), service.ScoreHistoryParams{
-		ChainID:    chainID,
-		AgentID:    agentID,
-		From:       from,
-		To:         to,
-		Resolution: res,
-		Limit:      limit,
-	})
-	if err != nil {
-		writeServiceErr(w, r, err)
-		return
-	}
-	dto.SuccessMeta(w, r, dto.ScoreHistoryResult{Points: out.Points}, &dto.Meta{Total: out.Total})
-}
 
 // Feedbacks handles GET /agents/:chainId/:agentId/feedbacks (Â§3.3).
+// Response rows use dto.FeedbackRow: classification.rule is always set; classification.fallback
+// is present only when the LLM fallback ran (see internal/api/service/mapper.go toFeedbackRow).
 // @Summary Agent feedback list
 // @Tags agents
 // @Produce json
@@ -384,6 +345,29 @@ func (h *AgentHandler) AntiSpam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dto.Fail(w, r, http.StatusNotImplemented, dto.CodeNotImplemented, "anti-spam endpoint is not implemented in v1")
+}
+
+// OffchainByURI handles GET /offchain-by-uri?uri=… (offchain_data cache for a feedback / URI string).
+// @Summary Off-chain URI cache
+// @Tags agents
+// @Produce json
+// @Param uri query string true "Logical URI (ipfs://, https://, …)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /offchain-by-uri [get]
+func (h *AgentHandler) OffchainByURI(w http.ResponseWriter, r *http.Request) {
+	uri := strings.TrimSpace(r.URL.Query().Get("uri"))
+	if uri == "" {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "query parameter uri is required")
+		return
+	}
+	out, err := h.svc.OffchainDataByURI(r.Context(), uri)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
 }
 
 // parseAgentPath extracts (chainId, agentId) or writes a 400 and returns ok=false.

@@ -85,10 +85,16 @@ func (c *ServiceURIConsumer) RunChain(ctx context.Context, chainID int64) error 
 		}
 
 		// Always ack — service URI fetch is best-effort, no retry.
-		c.handleMessage(hctx, msg)
+		c.HandleServiceURI(hctx, msg)
 		_ = d.Ack(false)
 		return nil
 	})
+}
+
+// HandleServiceURI fetches the service endpoint URI and writes the result to offchain_data.
+// Used by RunChain and ServiceURIConsumerPool workers.
+func (c *ServiceURIConsumer) HandleServiceURI(ctx context.Context, msg mq.ServiceURIMessage) {
+	c.handleMessage(ctx, msg)
 }
 
 // handleMessage fetches the service endpoint URI and writes the result to offchain_data.

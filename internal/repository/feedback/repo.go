@@ -52,7 +52,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
-				{Key: "classification.category", Value: 1},
+				{Key: "classification.rule.category", Value: 1},
 			},
 			Options: options.Index().SetName("idx_chain_category"),
 		},
@@ -75,14 +75,14 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "tag1", Value: 1},
-				{Key: "classification.category", Value: 1},
+				{Key: "classification.rule.category", Value: 1},
 				{Key: "isRevoked", Value: 1},
 				{Key: "timestamp", Value: 1},
 			},
 			Options: options.Index().
 				SetName("idx_tag1_category_revoked_ts").
 				SetPartialFilterExpression(bson.M{
-					"classification.category": "service_feedback",
+					"classification.rule.category": "service_feedback",
 					"isRevoked":               false,
 				}),
 		},
@@ -194,15 +194,15 @@ func (r *Repository) BulkUpdate(ctx context.Context, updates []FeedbackUpdate) e
 	return nil
 }
 
-// ViUpdate carries the document ID and the corrected Vi value for BulkUpdateVi.
-type ViUpdate struct {
-	ID    string
-	ViNew float64
+// ScaleUpdate carries the document ID and the new valueScale for BulkUpdateValueScale.
+type ScaleUpdate struct {
+	ID       string
+	NewScale string
 }
 
-// BulkUpdateVi sets Vi to the corrected scale value on multiple feedback documents.
+// BulkUpdateValueScale sets ValueScale on multiple feedback documents.
 // Called by the rescale worker Phase 3. The $set is idempotent — safe to retry.
-func (r *Repository) BulkUpdateVi(ctx context.Context, updates []ViUpdate) error {
+func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUpdate) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -210,29 +210,30 @@ func (r *Repository) BulkUpdateVi(ctx context.Context, updates []ViUpdate) error
 	for _, u := range updates {
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": u.ID}).
-			SetUpdate(bson.M{"$set": bson.M{"vi": u.ViNew}}))
+			SetUpdate(bson.M{"$set": bson.M{"valueScale": u.NewScale}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	if err != nil {
-		return fmt.Errorf("feedback repo: bulk update vi: %w", err)
+		return fmt.Errorf("feedback repo: bulk update value scale: %w", err)
 	}
 	return nil
 }
 
-// FindServiceFeedbacksByTag1 returns all non-revoked service feedbacks for a tag1
-// whose timestamp is before beforeUnix. Used by the rescale worker Phase 1.
-func (r *Repository) FindServiceFeedbacksByTag1(ctx context.Context, tag1 string, beforeUnix int64) ([]FeedbackRecord, error) {
+// FindServiceFeedbacksByTagPair returns all non-revoked service feedbacks for a (tag1, tag2) pair
+// whose timestamp is before beforeUnix. Used by the rescale worker Phase 1 and 3.
+func (r *Repository) FindServiceFeedbacksByTagPair(ctx context.Context, tag1, tag2 string, beforeUnix int64) ([]FeedbackRecord, error) {
 	filter := bson.M{
-		"tag1":                    tag1,
-		"classification.category": "service_feedback",
-		"isRevoked":               false,
-		"isSelfFeedback":          false,
-		"timestamp":               bson.M{"$lt": beforeUnix},
+		"tag1":                         tag1,
+		"tag2":                         tag2,
+		"classification.rule.category": "service_feedback",
+		"isRevoked":                    false,
+		"isSelfFeedback":               false,
+		"timestamp":                    bson.M{"$lt": beforeUnix},
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "agentId", Value: 1}})
 	docs, err := r.Find(ctx, filter, opts)
 	if err != nil {
-		return nil, fmt.Errorf("feedback repo: find service by tag1 %q: %w", tag1, err)
+		return nil, fmt.Errorf("feedback repo: find service by tag pair %q:%q: %w", tag1, tag2, err)
 	}
 	return docs, nil
 }

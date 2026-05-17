@@ -20,6 +20,7 @@ func NewWalletHandler(svc *service.Wallet) *WalletHandler { return &WalletHandle
 
 // FeedbackGiven handles GET /wallet/{address}/feedbacks.
 // Returns paginated feedback submitted by the given wallet address, enriched with agent name.
+// Each row matches dto.FeedbackRow (classification.rule + optional classification.fallback), same as GET /agents/.../feedbacks.
 // @Summary Wallet feedback given
 // @Description Returns all feedback submitted by a wallet address across all agents.
 // @Tags wallet

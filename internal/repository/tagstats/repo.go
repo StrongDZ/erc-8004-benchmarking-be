@@ -41,18 +41,22 @@ func (r *StatsRepository) BulkIncrementTiers(ctx context.Context, updates []Tier
 
 	now := time.Now().Unix()
 
-	// Collapse updates: group by tag1 to reduce round trips.
+	// Collapse updates: group by (tag1, tag2) pair to reduce round trips.
+	type pairKey = string // TagPairKey(tag1, tag2)
 	type tagAccum struct {
+		tag1       string
+		tag2       string
 		count      int64
 		emptyCount int64
 		tiers      map[string]int64 // tier -> delta
 	}
-	grouped := make(map[string]*tagAccum, len(updates))
+	grouped := make(map[pairKey]*tagAccum, len(updates))
 	for _, u := range updates {
-		acc := grouped[u.Tag1]
+		key := TagPairKey(u.Tag1, u.Tag2)
+		acc := grouped[key]
 		if acc == nil {
-			acc = &tagAccum{tiers: make(map[string]int64)}
-			grouped[u.Tag1] = acc
+			acc = &tagAccum{tag1: u.Tag1, tag2: u.Tag2, tiers: make(map[string]int64)}
+			grouped[key] = acc
 		}
 		if u.IsEmpty {
 			acc.emptyCount++
@@ -65,7 +69,7 @@ func (r *StatsRepository) BulkIncrementTiers(ctx context.Context, updates []Tier
 	}
 
 	var models []mongodrv.WriteModel
-	for tag1, acc := range grouped {
+	for key, acc := range grouped {
 		inc := bson.M{"lastUpdatedAt": now}
 		if acc.count > 0 {
 			inc["count"] = acc.count
@@ -77,10 +81,10 @@ func (r *StatsRepository) BulkIncrementTiers(ctx context.Context, updates []Tier
 			inc["tierCounts."+tier] = delta
 		}
 		models = append(models, mongodrv.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": tag1}).
+			SetFilter(bson.M{"_id": key}).
 			SetUpdate(bson.M{
 				"$inc": inc,
-				"$setOnInsert": bson.M{"tag1": tag1},
+				"$setOnInsert": bson.M{"tag1": acc.tag1, "tag2": acc.tag2},
 			}).
 			SetUpsert(true))
 	}
@@ -92,21 +96,22 @@ func (r *StatsRepository) BulkIncrementTiers(ctx context.Context, updates []Tier
 	return nil
 }
 
-// GetByTag1s fetches the current stats for a set of tag1 values (after a flush).
-func (r *StatsRepository) GetByTag1s(ctx context.Context, tag1s []string) ([]TagValueStats, error) {
-	if len(tag1s) == 0 {
+// GetByKeys fetches the current stats for a set of (tag1, tag2) composite keys.
+func (r *StatsRepository) GetByKeys(ctx context.Context, keys []string) ([]TagValueStats, error) {
+	if len(keys) == 0 {
 		return nil, nil
 	}
-	docs, err := r.Find(ctx, bson.M{"_id": bson.M{"$in": tag1s}})
+	docs, err := r.Find(ctx, bson.M{"_id": bson.M{"$in": keys}})
 	if err != nil {
-		return nil, fmt.Errorf("tagstats: get by tag1s: %w", err)
+		return nil, fmt.Errorf("tagstats: get by keys: %w", err)
 	}
 	return docs, nil
 }
 
-// SetDetectedScale atomically updates detectedScale and increments scaleVersion.
+// SetDetectedScale atomically updates detectedScale and increments scaleVersion for a (tag1, tag2) pair.
 // lockedAt is set only when the scale is first detected (lockedAt == 0).
-func (r *StatsRepository) SetDetectedScale(ctx context.Context, tag1, newScale string, nowUnix int64) error {
+func (r *StatsRepository) SetDetectedScale(ctx context.Context, tag1, tag2, newScale string, nowUnix int64) error {
+	key := TagPairKey(tag1, tag2)
 	update := bson.M{
 		"$set": bson.M{
 			"detectedScale": newScale,
@@ -115,7 +120,7 @@ func (r *StatsRepository) SetDetectedScale(ctx context.Context, tag1, newScale s
 		"$inc": bson.M{"scaleVersion": 1},
 	}
 	// Set lockedAt only the first time (i.e., when lockedAt is missing/zero).
-	_, err := r.UpdateOne(ctx, bson.M{"_id": tag1, "lockedAt": bson.M{"$in": bson.A{0, nil}}},
+	_, err := r.UpdateOne(ctx, bson.M{"_id": key, "lockedAt": bson.M{"$in": bson.A{0, nil}}},
 		bson.M{
 			"$set": bson.M{
 				"detectedScale": newScale,
@@ -128,18 +133,18 @@ func (r *StatsRepository) SetDetectedScale(ctx context.Context, tag1, newScale s
 		return err
 	}
 	// Also run unconditionally for subsequent scale changes (lockedAt already set).
-	_, err = r.UpdateOne(ctx, bson.M{"_id": tag1, "lockedAt": bson.M{"$gt": 0}}, update)
+	_, err = r.UpdateOne(ctx, bson.M{"_id": key, "lockedAt": bson.M{"$gt": 0}}, update)
 	return err
 }
 
-// GetByTag1 fetches a single TagValueStats document.
-func (r *StatsRepository) GetByTag1(ctx context.Context, tag1 string) (*TagValueStats, error) {
-	doc, err := r.FindOne(ctx, bson.M{"_id": tag1})
+// GetByTagPair fetches a single TagValueStats document for a (tag1, tag2) pair.
+func (r *StatsRepository) GetByTagPair(ctx context.Context, tag1, tag2 string) (*TagValueStats, error) {
+	doc, err := r.FindOne(ctx, bson.M{"_id": TagPairKey(tag1, tag2)})
 	if err != nil {
 		if err == mongodrv.ErrNoDocuments {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("tagstats: get %s: %w", tag1, err)
+		return nil, fmt.Errorf("tagstats: get %s:%s: %w", tag1, tag2, err)
 	}
 	return &doc, nil
 }

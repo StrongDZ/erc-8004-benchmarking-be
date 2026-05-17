@@ -44,7 +44,7 @@ func NewApp(consumer *rabbitmq.Consumer, eventsRepo *eventrepo.Repository, redis
 
 // Run blocks until ctx is cancelled, processing messages from the raw-logs queue.
 func (a *App) Run(ctx context.Context) error {
-	return a.consumer.Consume(ctx, func(msg mq.RawLogMessage) error {
+	return a.consumer.Consume(ctx, func(ctx context.Context, msg mq.RawLogMessage) error {
 		eventName, args, err := evmdecoder.DecodeLog(msg)
 		if err != nil {
 			return nil

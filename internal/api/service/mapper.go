@@ -7,16 +7,16 @@ import (
 	"time"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/repository/agent"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/identity"
-	"erc-8004-benchmarking-be/internal/repository/score"
 )
 
 // toAgentRow applies lazy decay (§1.4) and projects the document into AgentRow.
 func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentRow {
-	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, d.ConsecutiveFails, nowUnix, cfg)
+	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, nowUnix, cfg)
 	services := make([]dto.AgentService, 0, len(d.Services))
 	for _, s := range d.Services {
 		services = append(services, dto.AgentService{
@@ -55,7 +55,7 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 
 // toAgentProfile builds the full profile payload, including lazy-decayed scoring.
 func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentProfile {
-	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, d.ConsecutiveFails, nowUnix, cfg)
+	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, nowUnix, cfg)
 	penalty := scoring.ComputePenalty(d.ConsecutiveFails, cfg.Gamma, cfg.Theta)
 
 	services := make([]dto.AgentService, 0, len(d.Services))
@@ -131,7 +131,8 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		ClientAddress:  r.ClientAddress,
 		Value:          r.Value,
 		ValueDecimals:  r.ValueDecimals,
-		Vi:             r.Vi,
+		ValueScale:     r.ValueScale,
+		Vi:             computeVi(r),
 		Wi:             round2(r.Wi),
 		PriceUSDC:      r.PriceUSDC,
 		Tag1:           r.Tag1,
@@ -142,17 +143,35 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		FeedbackHash:   r.FeedbackHash,
 		FeedbackParsed: r.FeedbackParsed,
 		Classification: dto.FeedbackClassification{
-			Category:      r.Classification.Category,
-			Confidence:    r.Classification.Confidence,
-			Source:        r.Classification.Source,
-			NormalizedTag: r.Classification.NormalizedTag,
+			Rule: dto.RuleClassification{Category: r.Classification.Rule.Category},
+			Fallback: func() *dto.FallbackClassification {
+				if r.Classification.Fallback == nil {
+					return nil
+				}
+				return &dto.FallbackClassification{
+					Category:   r.Classification.Fallback.Category,
+					Reason:     r.Classification.Fallback.Reason,
+					Confidence: r.Classification.Fallback.Confidence,
+				}
+			}(),
 		},
-		TxHash:       r.TxHash,
-		BlockNumber:  r.BlockNumber,
-		Timestamp:    unixToRFC3339(r.Timestamp),
-		RevokeTxHash: r.RevokeTxHash,
-		Responses:    resp,
+		TxHash:        r.TxHash,
+		BlockNumber:   r.BlockNumber,
+		Timestamp:     unixToRFC3339(r.Timestamp),
+		TimestampUnix: r.Timestamp,
+		RevokeTxHash:  r.RevokeTxHash,
+		Responses:     resp,
 	}
+}
+
+// computeVi recomputes the validation score at runtime from the stored raw value and scale.
+// vi is not persisted — ValueScale is the source of truth.
+func computeVi(r feedback.FeedbackRecord) float64 {
+	real, ok := classifier.RawValueToReal(r.Value, int(r.ValueDecimals))
+	if !ok {
+		return 0.0
+	}
+	return classifier.NormalizeValueWithScale(real, r.ValueScale)
 }
 
 // toIdentityEvent projects one identity change.
@@ -169,16 +188,6 @@ func toIdentityEvent(c identity.IdentityChange) dto.IdentityEvent {
 	}
 }
 
-// toScorePoint projects one score_snapshot item.
-func toScorePoint(s score.ScoreSnapshotItem) dto.ScorePoint {
-	return dto.ScorePoint{
-		Timestamp:  unixToRFC3339(s.Timestamp),
-		Score:      round2(s.AgentScore),
-		Type:       s.Type,
-		TxHash:     s.TxHash,
-		EventScore: round2(s.EventScore),
-	}
-}
 
 // ── small helpers ───────────────────────────────────────────────────────────
 

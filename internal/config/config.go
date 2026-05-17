@@ -29,6 +29,10 @@ type Config struct {
 	TagStatsColl        string // tag_value_stats — per-tag tier vote counters
 	TagCorrectionsColl  string // changed_tag_scales — rescale correction queue
 	RescaleDeltasColl   string // rescale_deltas — pre-computed per-agent deltas
+	ScoreStatsColl      string // agent_score_stats — periodic materialized view
+
+	// Score-refresh worker
+	ScoreRefreshCron string // cron expression, default "*/30 * * * *"
 
 	// Tag-scale normalization
 	TagStatsMinSamples int // feedbacks required before scale is locked (default 50)
@@ -48,12 +52,15 @@ type Config struct {
 	RabbitMQQueue    string // raw logs queue
 	RabbitMQURIQueue string // uri fetch queue
 	ConsumerPrefetch    int // number of unacked messages the raw-log consumer can hold at once
-	URIConsumerPrefetch int // prefetch count per chain for event_uri and service_uri consumers
+	URIConsumerPrefetch int // prefetch per AMQP channel: event_uri consumer; service_uri pool has one reader channel per chain with this prefetch
+
+	// ServiceURIConsumerWorkers is the shared HTTP worker pool size for all uri.{chain}.service_uri queues (trustrank).
+	ServiceURIConsumerWorkers int
 
 	URIBootstrapBatchSize  int
 	URIResolverIntervalSec int
 
-	// TrustRank worker (Flow 2): cron scan decoded events per chain, batch + sub-batch by contractType.
+	// TrustRank worker (Flow 2): pause between full passes; first pass runs at worker startup.
 	TrustRankInterval             time.Duration
 	TrustRankEventBatchSize       int64 // Mongo page size per chain (block/log order).
 	TrustRankContractTypeSubBatch int   // max events per handler call within one contractType slice.
@@ -152,8 +159,11 @@ func Load() (Config, error) {
 		TagStatsColl:       utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
 		TagCorrectionsColl: utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
 		RescaleDeltasColl:  utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
+		ScoreStatsColl:     utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
 
-		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 50),
+		ScoreRefreshCron: utils.Getenv("SCORE_REFRESH_CRON", "*/30 * * * *"),
+
+		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 1),
 
 		BatchSize:           uint64(utils.GetenvInt("CRAWLER_BATCH_SIZE", 1000)),
 		PollInterval:        time.Duration(utils.GetenvInt("CRAWLER_POLL_SECONDS", 5)) * time.Second,
@@ -169,6 +179,7 @@ func Load() (Config, error) {
 		RabbitMQURIQueue: utils.Getenv("RABBITMQ_URI_QUEUE", "erc8004.agent_uri"),
 		ConsumerPrefetch:    utils.GetenvInt("CONSUMER_PREFETCH", 10),
 		URIConsumerPrefetch: utils.GetenvInt("URI_CONSUMER_PREFETCH", 5),
+		ServiceURIConsumerWorkers: utils.GetenvInt("SERVICE_URI_CONSUMER_WORKERS", 8),
 
 		URIBootstrapBatchSize:  utils.GetenvInt("URI_BOOTSTRAP_BATCH_SIZE", 1000),
 		URIResolverIntervalSec: utils.GetenvInt("URI_RESOLVER_INTERVAL_SECONDS", 30),
@@ -253,6 +264,12 @@ func Load() (Config, error) {
 	}
 	if strings.TrimSpace(cfg.RabbitMQURI) == "" {
 		return Config{}, fmt.Errorf("RABBITMQ_URI must not be empty")
+	}
+	if cfg.ServiceURIConsumerWorkers < 1 {
+		cfg.ServiceURIConsumerWorkers = 8
+	}
+	if cfg.ServiceURIConsumerWorkers > 256 {
+		cfg.ServiceURIConsumerWorkers = 256
 	}
 	if strings.TrimSpace(cfg.RabbitMQURIQueue) == "" {
 		return Config{}, fmt.Errorf("RABBITMQ_URI_QUEUE must not be empty")

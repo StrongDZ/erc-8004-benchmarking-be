@@ -93,7 +93,11 @@ const secondsPerDay = 86400.0
 // ApplyTaskScore performs an O(1) incremental score update (write path, §3.2).
 //
 // It decays the existing accumulatedScore forward to tNowUnix, then adds the new
-// feedback contribution (wᵢ·vᵢ). The caller must write the returned value to MongoDB.
+// feedback contribution wᵢ·(vᵢ − 0.40). vi = 0.40 is neutral (zero contribution);
+// vi > 0.40 increases the score; vi < 0.40 decreases it.
+//
+// NOTE: This function does NOT apply the consecutive-failure penalty. When vi < 0.40,
+// the caller must additionally subtract ComputePenalty(newConsecFails, cfg.Gamma, cfg.Theta).
 //
 // accScore:       current accumulatedScore stored in the agent document.
 // lastUpdateUnix: Unix seconds of the last score update.
@@ -111,7 +115,8 @@ func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNow
 	}
 
 	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	return decayed + wi*vi
+	effectiveVi := vi - 0.40
+	return decayed + wi*effectiveVi
 }
 
 // ComputeCurrentScore performs lazy decay evaluation (read path, §3.6).
@@ -119,16 +124,16 @@ func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNow
 // Returns the displayed score S clamped to (-∞, 1000]; negative scores are allowed.
 // This value is for display only — NEVER write it back to MongoDB as accumulatedScore.
 //
-// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight)
-// rather than the true per-task wᵢ mix. This intentionally under-decays high-wᵢ tasks
-// at read time in exchange for O(1) computation. The write path (ApplyTaskScore) is exact.
+// The consecutive-failure penalty is now baked into accumulatedScore at write time
+// (see ApplyTaskScore + ComputePenalty), so this function applies pure decay only.
 //
-// accScore:         stored accumulatedScore.
-// lastUpdateUnix:   Unix seconds of last score update.
-// consecutiveFails: current consecutive failure count.
-// nowUnix:          current Unix seconds.
-// cfg:              formula parameters.
-func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, consecutiveFails int64, nowUnix int64, cfg FormulaConfig) float64 {
+// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight).
+//
+// accScore:       stored accumulatedScore (penalty already included).
+// lastUpdateUnix: Unix seconds of last score update.
+// nowUnix:        current Unix seconds.
+// cfg:            formula parameters.
+func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, nowUnix int64, cfg FormulaConfig) float64 {
 	lambda := ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
 
 	deltaDays := float64(nowUnix-lastUpdateUnix) / secondsPerDay
@@ -137,38 +142,6 @@ func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, consecutiveFail
 	}
 
 	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
-	score := cfg.SBase + decayed - penalty
-	return math.Min(1000.0, score)
+	return math.Min(1000.0, cfg.SBase+decayed)
 }
 
-// RevertFeedbackScore subtracts a previously scored feedback's residual contribution
-// in O(1) time (§3.7, used when FeedbackRevoked is processed).
-//
-// accScore:              current accumulatedScore.
-// lastUpdateUnix:        Unix seconds of the agent's last score update.
-// wi:                    difficulty weight of the feedback being revoked.
-// vi:                    validation score of the feedback being revoked.
-// feedbackTimestampUnix: Unix seconds when the original feedback was applied.
-// nowUnix:               current Unix seconds.
-// cfg:                   formula parameters.
-func RevertFeedbackScore(accScore float64, lastUpdateUnix int64, wi, vi float64, feedbackTimestampUnix int64, nowUnix int64, cfg FormulaConfig) float64 {
-	avgWi := math.Max(wi, cfg.Alpha)
-	lambda := ComputeDecayRate(avgWi, cfg.TBaseDays)
-
-	// Decay the full accumulated score forward to now.
-	deltaDaysTotal := float64(nowUnix-lastUpdateUnix) / secondsPerDay
-	if deltaDaysTotal < 0 {
-		deltaDaysTotal = 0
-	}
-	decayed := accScore * ComputeDecayFactor(lambda, deltaDaysTotal)
-
-	// Compute what the revoked feedback's residual contribution is at nowUnix.
-	deltaDaysFeedback := float64(nowUnix-feedbackTimestampUnix) / secondsPerDay
-	if deltaDaysFeedback < 0 {
-		deltaDaysFeedback = 0
-	}
-	residual := wi * vi * ComputeDecayFactor(lambda, deltaDaysFeedback)
-
-	return decayed - residual
-}

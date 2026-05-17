@@ -52,16 +52,19 @@ type RawLogMessage struct {
 	IngestedAt      int64                        `json:"ingestedAt"` // crawler write time, Unix seconds UTC
 }
 
-// AgentURIMessage is published to uri.{chainID}.event_uri by:
-// - bootstrap URI producer (historical events <= decodedAt watermark)
-// - decode consumer live stream (new identity URI events)
+// AgentURIMessage is published to uri.{chainID}.event_uri by the uri-bootstrap
+// producer (historical scan). BlockNumber and LogIndex identify the source event
+// position for the consumer-driven uri_fetched cursor.
 type AgentURIMessage struct {
-	URI       string `json:"uri"`
-	ChainID   int64  `json:"chainId"`
-	EventID   string `json:"eventId"` // EventDocumentID(chainId, txHash, logIndex)
-	DecodedAt int64  `json:"decodedAt"`
-	EventName string `json:"eventName,omitempty"`
-	Source    string `json:"source"` // bootstrap | live
+	URI          string `json:"uri"`
+	ChainID      int64  `json:"chainId"`
+	EventID      string `json:"eventId"` // EventDocumentID(chainId, txHash, logIndex)
+	BlockNumber  uint64 `json:"blockNumber"`
+	LogIndex     uint   `json:"logIndex"`
+	DecodedAt    int64  `json:"decodedAt"`
+	EventName    string `json:"eventName,omitempty"`
+	ContractType string `json:"contractType,omitempty"` // identity | reputation | validation (from decoded event)
+	Source       string `json:"source"`                 // bootstrap | live
 }
 
 // ServiceURIMessage is published to uri.{chainID}.service_uri by the TrustRank processor

@@ -184,8 +184,8 @@ func printPromptSizeReport(samples []evalSample) {
 	fmt.Fprintln(tw, "case\tv1 chars\tv1 ~tok\tcompact chars\tcompact ~tok\tdelta")
 	var totalV1, totalV2 int
 	for _, s := range samples {
-		v1 := classifier.BuildPrompt(s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags)
-		v2 := classifier.BuildPromptCompact3B(s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags)
+		v1 := classifier.BuildPrompt(s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags, "", "")
+		v2 := classifier.BuildPromptCompact3B(s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags, "", "")
 		v1c := utf8.RuneCountInString(v1)
 		v2c := utf8.RuneCountInString(v2)
 		totalV1 += v1c
@@ -215,11 +215,11 @@ func printPromptSizeReport(samples []evalSample) {
 // systemPromptV1Sample / systemPromptCompact3BSample — extract just the system
 // portion from BuildPrompt / BuildPromptCompact3B for the size report.
 func systemPromptV1Sample() string {
-	full := classifier.BuildPrompt("", "", 0, "", "", "", nil)
+	full := classifier.BuildPrompt("", "", 0, "", "", "", nil, "", "")
 	return splitSystem(full)
 }
 func systemPromptCompact3BSample() string {
-	full := classifier.BuildPromptCompact3B("", "", 0, "", "", "", nil)
+	full := classifier.BuildPromptCompact3B("", "", 0, "", "", "", nil, "", "")
 	return splitSystem(full)
 }
 func splitSystem(s string) string {
@@ -248,7 +248,7 @@ func runOnline(ctx context.Context, c *classifier.LLMClient, samples []evalSampl
 	for _, s := range samples {
 		stats.total++
 		start := time.Now()
-		res := c.Classify(ctx, s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags)
+		res := c.Classify(ctx, s.tag1, s.tag2, s.valueNorm, s.offchainContent, s.agentDescription, s.agentServices, s.agentTags, "", "")
 		stats.totalLatency += time.Since(start)
 		if res.Source == "llm" {
 			stats.validJSON++

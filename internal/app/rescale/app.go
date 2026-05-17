@@ -25,7 +25,6 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -36,7 +35,6 @@ type App struct {
 	mongoClient  *mongodrv.Client
 	agentRepo    *agentrepo.Repository
 	feedbackRepo *feedbackrepo.Repository
-	scoreRepo    *scorerepo.Repository
 	corrRepo     *tagstats.CorrectionRepository
 	deltaRepo    *tagstats.DeltaRepository
 	formulaCfg   scoring.FormulaConfig
@@ -48,7 +46,6 @@ func NewApp(
 	mongoClient *mongodrv.Client,
 	agentRepo *agentrepo.Repository,
 	feedbackRepo *feedbackrepo.Repository,
-	scoreRepo *scorerepo.Repository,
 	corrRepo *tagstats.CorrectionRepository,
 	deltaRepo *tagstats.DeltaRepository,
 	formulaCfg scoring.FormulaConfig,
@@ -58,7 +55,6 @@ func NewApp(
 		mongoClient:  mongoClient,
 		agentRepo:    agentRepo,
 		feedbackRepo: feedbackRepo,
-		scoreRepo:    scoreRepo,
 		corrRepo:     corrRepo,
 		deltaRepo:    deltaRepo,
 		formulaCfg:   formulaCfg,
@@ -118,9 +114,9 @@ func (a *App) processCorrection(ctx context.Context, rec *tagstats.ScaleChangeCo
 		return fmt.Errorf("phase 2 apply deltas: %w", err)
 	}
 
-	// ── Phase 3: Update feedback Vi (idempotent bulk write) ──────────────────
-	if err := a.updateFeedbackVi(ctx, rec); err != nil {
-		return fmt.Errorf("phase 3 update vi: %w", err)
+	// ── Phase 3: Update feedback ValueScale (idempotent bulk write) ─────────
+	if err := a.updateFeedbackScale(ctx, rec); err != nil {
+		return fmt.Errorf("phase 3 update value scale: %w", err)
 	}
 
 	// ── Phase 4: Mark done ────────────────────────────────────────────────────
@@ -130,7 +126,7 @@ func (a *App) processCorrection(ctx context.Context, rec *tagstats.ScaleChangeCo
 // ── Phase 1 ───────────────────────────────────────────────────────────────────
 
 func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrection) error {
-	fbs, err := a.feedbackRepo.FindServiceFeedbacksByTag1(ctx, rec.Tag1, rec.DetectedAt)
+	fbs, err := a.feedbackRepo.FindServiceFeedbacksByTagPair(ctx, rec.Tag1, rec.Tag2, rec.DetectedAt)
 	if err != nil {
 		return err
 	}
@@ -143,7 +139,6 @@ func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 		delta   float64
 	}
 	agentDeltas := make(map[string]*agentInfo, len(fbs)/4)
-	viUpdates := make(map[string]float64, len(fbs)) // fbID -> vi_new
 
 	for i := range fbs {
 		fb := &fbs[i]
@@ -151,8 +146,10 @@ func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 		if !ok {
 			continue
 		}
+		// viOld is derived from the scale stored on the feedback (= rec.OldScale equivalent).
+		// vi is not stored directly — always computed from raw value + valueScale.
+		viOld := classifier.NormalizeValueWithScale(real, fb.ValueScale)
 		viNew := classifier.NormalizeValueWithScale(real, rec.NewScale)
-		viOld := fb.Vi
 		if viNew == viOld {
 			continue
 		}
@@ -172,7 +169,6 @@ func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 			agentDeltas[fb.AgentID] = ai
 		}
 		ai.delta += contribution
-		viUpdates[fb.ID] = viNew
 	}
 
 	// Write pre-computed deltas to rescale_deltas collection.
@@ -191,11 +187,6 @@ func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 	if err := a.deltaRepo.BulkUpsertDeltas(ctx, deltas); err != nil {
 		return err
 	}
-
-	// Store vi_new values in correction doc for Phase 3 access (small enough for doc storage).
-	// Since MongoDB has 16MB document limit, large corrections write a marker and
-	// Phase 3 re-computes vi_new on the fly from the new scale.
-	_ = viUpdates // vi_new is recomputed in Phase 3 from rec.NewScale (deterministic)
 
 	return a.corrRepo.SetDeltaSnapshotReady(ctx, rec.ID, int64(len(agentDeltas)))
 }
@@ -246,19 +237,7 @@ func (a *App) applyOneDelta(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 			return nil, err
 		}
 
-		// 2. Append rescale snapshot to score history.
-		ag, err := a.agentRepo.FindOne(sessCtx, map[string]any{"chainId": d.ChainID, "agentId": d.AgentID})
-		if err == nil {
-			displayScore := scoring.ComputeCurrentScore(ag.AccumulatedScore, ag.ScoreUpdateAt, ag.ConsecutiveFails, time.Now().Unix(), a.formulaCfg)
-			_ = a.scoreRepo.AppendSnapshot(sessCtx, d.ChainID, d.AgentID, scorerepo.ScoreSnapshotItem{
-				AgentScore: displayScore,
-				Type:       scorerepo.SnapshotTypeRescale,
-				EventScore: d.Delta,
-				Timestamp:  time.Now().Unix(),
-			})
-		}
-
-		// 3. Mark delta as applied.
+		// 2. Mark delta as applied (score correction picked up by score-refresh worker on next cycle).
 		if err := a.deltaRepo.MarkApplied(sessCtx, d.ID); err != nil {
 			return nil, err
 		}
@@ -276,27 +255,22 @@ func (a *App) applyOneDelta(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 
 // ── Phase 3 ───────────────────────────────────────────────────────────────────
 
-func (a *App) updateFeedbackVi(ctx context.Context, rec *tagstats.ScaleChangeCorrection) error {
-	fbs, err := a.feedbackRepo.FindServiceFeedbacksByTag1(ctx, rec.Tag1, rec.DetectedAt)
+func (a *App) updateFeedbackScale(ctx context.Context, rec *tagstats.ScaleChangeCorrection) error {
+	fbs, err := a.feedbackRepo.FindServiceFeedbacksByTagPair(ctx, rec.Tag1, rec.Tag2, rec.DetectedAt)
 	if err != nil {
 		return err
 	}
 
-	var updates []feedbackrepo.ViUpdate
+	var updates []feedbackrepo.ScaleUpdate
 	for i := range fbs {
 		fb := &fbs[i]
-		real, ok := classifier.RawValueToReal(fb.Value, int(fb.ValueDecimals))
-		if !ok {
-			continue
+		if fb.ValueScale == rec.NewScale {
+			continue // already up to date (idempotent)
 		}
-		viNew := classifier.NormalizeValueWithScale(real, rec.NewScale)
-		if viNew == fb.Vi {
-			continue
-		}
-		updates = append(updates, feedbackrepo.ViUpdate{ID: fb.ID, ViNew: viNew})
+		updates = append(updates, feedbackrepo.ScaleUpdate{ID: fb.ID, NewScale: rec.NewScale})
 	}
 
-	if err := a.feedbackRepo.BulkUpdateVi(ctx, updates); err != nil {
+	if err := a.feedbackRepo.BulkUpdateValueScale(ctx, updates); err != nil {
 		return err
 	}
 	return a.corrRepo.IncrFeedbacksRescaled(ctx, rec.ID, int64(len(updates)))
