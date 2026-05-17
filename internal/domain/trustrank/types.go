@@ -156,6 +156,7 @@ func (u *updatedAtJSON) UnmarshalJSON(b []byte) error {
 // Unknown fields are captured in Extra for offchain_metadata.
 type agentCard struct {
 	Name           string            `json:"name"`
+	Type           string            `json:"type"`
 	Description    string            `json:"description"`
 	Domains        []string          `json:"domains"`
 	Image          string            `json:"image"`

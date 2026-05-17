@@ -200,6 +200,7 @@ func (p *Processor) applyIdentityFromURI(bs *batchState, agentID, uri string) {
 
 	doc.AgentURI = uri
 	doc.Name = card.Name
+	doc.Type = strings.TrimSpace(card.Type)
 	doc.Image = img
 	doc.Domains = card.Domains
 	doc.Description = card.Description

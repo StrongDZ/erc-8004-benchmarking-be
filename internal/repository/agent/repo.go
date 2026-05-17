@@ -152,6 +152,7 @@ func (r *Repository) UpdateIdentity(ctx context.Context, chainID int64, agentID 
 	update := bson.M{"$set": bson.M{
 		"agentURI":       id.AgentURI,
 		"name":           id.Name,
+		"type":           id.Type,
 		"image":          id.Image,
 		"domains":        id.Domains,
 		"description":    id.Description,

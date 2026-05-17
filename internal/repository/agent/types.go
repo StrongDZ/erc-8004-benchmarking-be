@@ -19,6 +19,7 @@ type RegistrationService struct {
 type IdentityFields struct {
 	AgentURI       string
 	Name           string
+	Type           string
 	Image          string
 	Domains        []string
 	Description    string
@@ -47,6 +48,7 @@ type AgentDocument struct {
 	AgentWallet      string   `bson:"agentWallet,omitempty"` // EIP-712-verified wallet from setAgentWallet(); first-class field
 	AgentURI         string   `bson:"agentURI"`
 	Name             string   `bson:"name,omitempty"`
+	Type             string   `bson:"type,omitempty"`
 	Domains          []string `bson:"domains,omitempty"`
 	Image            string   `bson:"image,omitempty"`
 	Description      string   `bson:"description,omitempty"`
