@@ -2,7 +2,7 @@ package scorerefresh
 
 // app.go — Periodic score-refresh worker.
 // Every cronExpr cycle: replay feedback_history per agent → upsert agent_score_stats
-// + sync agent.reputationScore with the exact replay result.
+// + sync agent.reputationScore and composite breakdown with the exact replay result.
 
 import (
 	"context"
@@ -15,16 +15,21 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
+	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
 // App runs the periodic score-refresh cycle.
 type App struct {
-	agents     *agentrepo.Repository
-	feedbacks  *feedbackrepo.Repository
-	scoreStats *scorestats.Repository
-	formulaCfg scoring.FormulaConfig
-	cronExpr   string
+	agents            *agentrepo.Repository
+	feedbacks         *feedbackrepo.Repository
+	scoreStats        *scorestats.Repository
+	offchain          *offchainrepo.Repository
+	formulaCfg        scoring.FormulaConfig
+	compositeWeights  scoring.CompositeWeights
+	complianceWeights scoring.ComplianceWeights
+	publisherProvider scoring.PublisherScoreProvider
+	cronExpr          string
 }
 
 // NewApp creates a new scorerefresh App.
@@ -32,15 +37,23 @@ func NewApp(
 	agents *agentrepo.Repository,
 	feedbacks *feedbackrepo.Repository,
 	scoreStats *scorestats.Repository,
+	offchain *offchainrepo.Repository,
 	formulaCfg scoring.FormulaConfig,
+	compositeWeights scoring.CompositeWeights,
+	complianceWeights scoring.ComplianceWeights,
+	publisherProvider scoring.PublisherScoreProvider,
 	cronExpr string,
 ) *App {
 	return &App{
-		agents:     agents,
-		feedbacks:  feedbacks,
-		scoreStats: scoreStats,
-		formulaCfg: formulaCfg,
-		cronExpr:   cronExpr,
+		agents:            agents,
+		feedbacks:         feedbacks,
+		scoreStats:        scoreStats,
+		offchain:          offchain,
+		formulaCfg:        formulaCfg,
+		compositeWeights:  compositeWeights,
+		complianceWeights: complianceWeights,
+		publisherProvider: publisherProvider,
+		cronExpr:          cronExpr,
 	}
 }
 
@@ -74,14 +87,35 @@ func (a *App) runCycle(ctx context.Context) {
 			break
 		}
 
-		statsBatch := make([]scorestats.AgentScoreStats, 0, len(agents))
+		// Collect all service endpoints across the batch for a single bulk fetch.
+		var allEndpoints []string
 		for _, ag := range agents {
+			for _, s := range ag.Services {
+				if s.Endpoint != "" {
+					allEndpoints = append(allEndpoints, s.Endpoint)
+				}
+			}
+		}
+		offchainStatus, err := BulkFetchOffchainStatus(ctx, a.offchain, allEndpoints)
+		if err != nil {
+			log.Printf("score-refresh: bulk offchain fetch skip=%d: %v", skip, err)
+			// Non-fatal: proceed with empty map (services score will be 0).
+			offchainStatus = map[string]int{}
+		}
+
+		statsBatch := make([]scorestats.AgentScoreStats, 0, len(agents))
+		for i := range agents {
+			ag := &agents[i]
 			fbs, err := a.feedbacks.ListByAgent(ctx, ag.ChainID, ag.AgentID)
 			if err != nil {
 				log.Printf("score-refresh: feedbacks chain=%d agent=%s: %v", ag.ChainID, ag.AgentID, err)
 				continue
 			}
-			stats := replayAgent(ag.ChainID, ag.AgentID, fbs, now, a.formulaCfg)
+			stats := replayAgent(
+				ctx, ag, fbs, now,
+				a.formulaCfg, offchainStatus,
+				a.publisherProvider, a.compositeWeights, a.complianceWeights,
+			)
 			statsBatch = append(statsBatch, stats)
 		}
 
@@ -89,10 +123,17 @@ func (a *App) runCycle(ctx context.Context) {
 			log.Printf("score-refresh: bulk upsert stats: %v", err)
 		}
 
-		// Sync agent.reputationScore with the authoritative replay result.
+		// Sync agent.reputationScore + composite breakdown with the authoritative replay result.
 		for _, stats := range statsBatch {
 			if err := a.agents.UpdateReputationScore(ctx, stats.ChainID, stats.AgentID, stats.Score, now); err != nil {
 				log.Printf("score-refresh: update rep score chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
+			}
+			if err := a.agents.UpdateCompositeBreakdown(
+				ctx, stats.ChainID, stats.AgentID,
+				stats.CompositeScore, stats.ReputationNorm,
+				stats.ServicesScore, stats.PublisherScore, stats.ComplianceScore,
+			); err != nil {
+				log.Printf("score-refresh: update composite chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
 			}
 		}
 
