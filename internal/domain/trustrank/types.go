@@ -266,16 +266,17 @@ type cachedScale struct {
 
 // Processor implements EventProcessor with real domain logic.
 type Processor struct {
-	agentRepo     *agent.Repository
-	identityRepo  *identityrepo.Repository
-	feedbackRepo  *feedback.Repository
-	offchainRepo  *offchain.Repository
-	formulaCfg    scoring.FormulaConfig
-	uriPublisher  URIPublisher // may be nil; publishes service endpoint URIs asynchronously
-	tagStatsRepo  *tagstats.StatsRepository
-	tagCorrsRepo  *tagstats.CorrectionRepository
-	tagScaleCache sync.Map // tag1 -> cachedScale
-	minSamples    int      // minimum feedbacks before scale is locked
+	agentRepo        *agent.Repository
+	identityRepo     *identityrepo.Repository
+	feedbackRepo     *feedback.Repository
+	offchainRepo     *offchain.Repository
+	formulaCfg       scoring.FormulaConfig
+	compositeWeights scoring.CompositeWeights
+	uriPublisher     URIPublisher // may be nil; publishes service endpoint URIs asynchronously
+	tagStatsRepo     *tagstats.StatsRepository
+	tagCorrsRepo     *tagstats.CorrectionRepository
+	tagScaleCache    sync.Map // tag1 -> cachedScale
+	minSamples       int      // minimum feedbacks before scale is locked
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.

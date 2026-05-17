@@ -122,7 +122,14 @@ func main() {
 		SBase:     0.0,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, offchain, formulaCfg, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
+	compositeWeights := scoring.CompositeWeights{
+		Reputation: cfg.ScoreWeightReputation,
+		Services:   cfg.ScoreWeightServices,
+		Publisher:  cfg.ScoreWeightPublisher,
+		Compliance: cfg.ScoreWeightCompliance,
+	}
+
+	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,

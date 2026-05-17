@@ -163,6 +163,22 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	agentDoc.TotalPassed = newPassed
 	agentDoc.TotalFailed = newFailed
 	bs.dirtyAgents[agentID] = true
+
+	// Recompute composite using newly-updated rep + cached S/P/C from last refresh cycle.
+	// On first feedback (before any refresh has run), cached components default to 0/50/0.
+	repNorm := scoring.NormalizeReputation(newRep)
+	services := agentDoc.ServicesScore     // cached from last score-refresh
+	publisher := agentDoc.PublisherScore   // cached from last score-refresh
+	compliance := agentDoc.ComplianceScore // cached from last score-refresh
+	if publisher == 0 {
+		// Initialize neutral if not yet populated by refresh cycle.
+		publisher = 50.0
+	}
+	composite := scoring.ComputeCompositeScore(repNorm, services, publisher, compliance, p.compositeWeights)
+	if err := p.agentRepo.UpdateCompositeBreakdown(context.Background(), bs.chainID, agentID, composite, repNorm, services, publisher, compliance); err != nil {
+		log.Printf("trustrank: update composite breakdown chain=%d agent=%s: %v", bs.chainID, agentID, err)
+		// non-fatal — refresh worker will eventually fix
+	}
 }
 
 func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {

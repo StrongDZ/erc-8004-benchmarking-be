@@ -35,21 +35,23 @@ func NewProcessor(
 	feedbackRepo *feedback.Repository,
 	offchainRepo *offchain.Repository,
 	formulaCfg scoring.FormulaConfig,
+	compositeWeights scoring.CompositeWeights,
 	uriPublisher URIPublisher,
 	tagStatsRepo *tagstats.StatsRepository,
 	tagCorrsRepo *tagstats.CorrectionRepository,
 	minSamples int,
 ) *Processor {
 	return &Processor{
-		agentRepo:    agentRepo,
-		identityRepo: identityRepo,
-		feedbackRepo: feedbackRepo,
-		offchainRepo: offchainRepo,
-		formulaCfg:   formulaCfg,
-		uriPublisher: uriPublisher,
-		tagStatsRepo: tagStatsRepo,
-		tagCorrsRepo: tagCorrsRepo,
-		minSamples:   minSamples,
+		agentRepo:        agentRepo,
+		identityRepo:     identityRepo,
+		feedbackRepo:     feedbackRepo,
+		offchainRepo:     offchainRepo,
+		formulaCfg:       formulaCfg,
+		compositeWeights: compositeWeights,
+		uriPublisher:     uriPublisher,
+		tagStatsRepo:     tagStatsRepo,
+		tagCorrsRepo:     tagCorrsRepo,
+		minSamples:       minSamples,
 	}
 }
 
