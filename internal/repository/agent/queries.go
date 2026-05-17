@@ -157,7 +157,7 @@ func (r *Repository) SearchByNamePrefix(ctx context.Context, chainID int64, quer
 		"name":    bson.M{"$regex": pattern, "$options": "i"},
 	}
 	opts := options.Find().
-		SetSort(bson.D{{Key: "reputationScore", Value: -1}}).
+		SetSort(bson.D{{Key: "compositeScore", Value: -1}}).
 		SetLimit(limit)
 	docs, err := r.Find(ctx, filter, opts)
 	if err != nil {
@@ -202,7 +202,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 		{{Key: "$match", Value: match}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$reputationScore"},
+			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
 	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
@@ -212,11 +212,11 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 
 	top10Pipeline := mongodrv.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$sort", Value: bson.D{{Key: "reputationScore", Value: -1}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "compositeScore", Value: -1}}}},
 		{{Key: "$limit", Value: 10}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$reputationScore"},
+			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
 	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
@@ -244,10 +244,10 @@ func (r *Repository) computeMedianReputationScoreMulti(ctx context.Context, matc
 	}
 	mid := total / 2
 	opts := options.Find().
-		SetSort(bson.D{{Key: "reputationScore", Value: 1}}).
+		SetSort(bson.D{{Key: "compositeScore", Value: 1}}).
 		SetSkip(mid).
 		SetLimit(1).
-		SetProjection(bson.M{"reputationScore": 1})
+		SetProjection(bson.M{"compositeScore": 1})
 	docs, err := r.Find(ctx, match, opts)
 	if err != nil {
 		return 0, err
@@ -255,7 +255,7 @@ func (r *Repository) computeMedianReputationScoreMulti(ctx context.Context, matc
 	if len(docs) == 0 {
 		return 0, nil
 	}
-	return docs[0].ReputationScore, nil
+	return docs[0].CompositeScore, nil
 }
 
 // TagCount is one entry of /leaderboard/tags aggregation output.
@@ -330,7 +330,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 		{{Key: "$match", Value: bson.M{"chainId": chainID}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$reputationScore"},
+			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
 	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
@@ -340,11 +340,11 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 
 	top10Pipeline := mongodrv.Pipeline{
 		{{Key: "$match", Value: bson.M{"chainId": chainID}}},
-		{{Key: "$sort", Value: bson.D{{Key: "reputationScore", Value: -1}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "compositeScore", Value: -1}}}},
 		{{Key: "$limit", Value: 10}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$reputationScore"},
+			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
 	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
@@ -374,10 +374,10 @@ func (r *Repository) computeMedianReputationScore(ctx context.Context, chainID, 
 	}
 	mid := total / 2
 	opts := options.Find().
-		SetSort(bson.D{{Key: "reputationScore", Value: 1}}).
+		SetSort(bson.D{{Key: "compositeScore", Value: 1}}).
 		SetSkip(mid).
 		SetLimit(1).
-		SetProjection(bson.M{"reputationScore": 1})
+		SetProjection(bson.M{"compositeScore": 1})
 	docs, err := r.Find(ctx, bson.M{"chainId": chainID}, opts)
 	if err != nil {
 		return 0, err
@@ -385,7 +385,7 @@ func (r *Repository) computeMedianReputationScore(ctx context.Context, chainID, 
 	if len(docs) == 0 {
 		return 0, nil
 	}
-	return docs[0].ReputationScore, nil
+	return docs[0].CompositeScore, nil
 }
 
 // runScalarAgg runs a pipeline whose final $group emits one document with a numeric
