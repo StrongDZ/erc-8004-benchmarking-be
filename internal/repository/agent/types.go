@@ -67,6 +67,11 @@ type AgentDocument struct {
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
 	ReputationScore float64  `bson:"reputationScore"`
 	ScoreUpdateAt    int64    `bson:"scoreUpdateAt"` // Unix seconds of last score update
+	CompositeScore  float64  `bson:"compositeScore"`
+	ReputationNorm  float64  `bson:"reputationNorm"`
+	ServicesScore   float64  `bson:"servicesScore"`
+	PublisherScore  float64  `bson:"publisherScore"`
+	ComplianceScore float64  `bson:"complianceScore"`
 	ConsecutiveFails int64    `bson:"consecutiveFails"`
 	TotalTasks       int64    `bson:"totalTasks"`
 	TotalPassed      int64    `bson:"totalPassed"`

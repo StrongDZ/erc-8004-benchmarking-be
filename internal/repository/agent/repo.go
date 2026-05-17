@@ -87,6 +87,11 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "owner", Value: 1}},
 			Options: options.Index().SetName("idx_owner"),
 		},
+		// Index for leaderboard sort by composite score.
+		{
+			Keys:    bson.D{{Key: "compositeScore", Value: -1}},
+			Options: options.Index().SetName("idx_compositeScore_desc"),
+		},
 	})
 	return err
 }
@@ -179,6 +184,31 @@ func (r *Repository) UpdateReputationScore(ctx context.Context, chainID int64, a
 	_, err := r.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return fmt.Errorf("agent repo: update reputation score %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateCompositeBreakdown atomically writes composite + 4 component scores.
+// Called by score-refresh worker each cycle, and by the write path after
+// reputation updates.
+func (r *Repository) UpdateCompositeBreakdown(
+	ctx context.Context,
+	chainID int64,
+	agentID string,
+	composite, reputationNorm, services, publisher, compliance float64,
+) error {
+	docID := AgentDocumentID(chainID, agentID)
+	filter := bson.M{"_id": docID}
+	update := bson.M{"$set": bson.M{
+		"compositeScore":  composite,
+		"reputationNorm":  reputationNorm,
+		"servicesScore":   services,
+		"publisherScore":  publisher,
+		"complianceScore": compliance,
+	}}
+	_, err := r.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return fmt.Errorf("agent repo: update composite breakdown %s: %w", docID, err)
 	}
 	return nil
 }

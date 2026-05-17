@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +74,16 @@ type Config struct {
 	TrustRankTBase float64 // §3.3 half-life base in days (default 15.0)
 	PenaltyGamma   float64 // §3.4 penalty base (default 5.0)
 	PenaltyTheta   float64 // §3.4 penalty exponent (default 2.0)
+
+	// Composite score blend weights (sum must ≈ 1.0). Defaults: 0.5/0.2/0.2/0.1.
+	ScoreWeightReputation float64
+	ScoreWeightServices   float64
+	ScoreWeightPublisher  float64
+	ScoreWeightCompliance float64
+
+	// Compliance tier totals (sum must ≈ 100). Defaults: 80/20.
+	ComplianceTier1Weight float64
+	ComplianceTier2Weight float64
 
 	// Decay cron
 	DecayIntervalHours int // how often the decay cron fires (default 4)
@@ -194,6 +206,13 @@ func Load() (Config, error) {
 		TrustRankTBase: utils.GetenvFloat("TRUSTRANK_TBASE_DAYS", 15.0),
 		PenaltyGamma:   utils.GetenvFloat("PENALTY_GAMMA", 5.0),
 		PenaltyTheta:   utils.GetenvFloat("PENALTY_THETA", 2.0),
+
+		ScoreWeightReputation: utils.GetenvFloat("SCORE_WEIGHT_REPUTATION", 0.5),
+		ScoreWeightServices:   utils.GetenvFloat("SCORE_WEIGHT_SERVICES",   0.2),
+		ScoreWeightPublisher:  utils.GetenvFloat("SCORE_WEIGHT_PUBLISHER",  0.2),
+		ScoreWeightCompliance: utils.GetenvFloat("SCORE_WEIGHT_COMPLIANCE", 0.1),
+		ComplianceTier1Weight: utils.GetenvFloat("COMPLIANCE_TIER1_WEIGHT", 80.0),
+		ComplianceTier2Weight: utils.GetenvFloat("COMPLIANCE_TIER2_WEIGHT", 20.0),
 
 		DecayIntervalHours: utils.GetenvInt("DECAY_INTERVAL_HOURS", 4),
 
@@ -321,6 +340,17 @@ func Load() (Config, error) {
 	}
 	if cfg.RateLimitBurst < 1 {
 		return Config{}, fmt.Errorf("RATE_LIMIT_BURST must be >= 1")
+	}
+
+	// Validate composite score blend weights sum ≈ 1.0.
+	compositeSum := cfg.ScoreWeightReputation + cfg.ScoreWeightServices + cfg.ScoreWeightPublisher + cfg.ScoreWeightCompliance
+	if math.Abs(compositeSum-1.0) > 0.001 {
+		log.Printf("WARNING: composite score weights sum to %.4f (expected 1.0); check SCORE_WEIGHT_* env vars", compositeSum)
+	}
+	// Validate compliance tier weights sum ≈ 100.0.
+	tierSum := cfg.ComplianceTier1Weight + cfg.ComplianceTier2Weight
+	if math.Abs(tierSum-100.0) > 0.1 {
+		log.Printf("WARNING: compliance tier weights sum to %.2f (expected 100.0); check COMPLIANCE_TIER*_WEIGHT env vars", tierSum)
 	}
 
 	return cfg, nil
