@@ -71,7 +71,7 @@ type ScaleChangeCorrection struct {
 	ErrorMsg   string `bson:"errorMsg,omitempty"`
 }
 
-// RescaleDelta stores the pre-computed accumulatedScore delta for one agent, keyed to a correction.
+// RescaleDelta stores the pre-computed reputationScore delta for one agent, keyed to a correction.
 // Written in Phase 1 (compute), consumed in Phase 2 (apply). One doc per (correctionID, agentID).
 // _id == "{correctionID}:{agentID}".
 type RescaleDelta struct {

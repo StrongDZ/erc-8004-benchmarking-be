@@ -142,7 +142,7 @@ func (s *Leaderboard) Search(ctx context.Context, chainID int64, q string, limit
 	now := time.Now().Unix()
 	out := make([]dto.AgentSearchRow, 0, len(docs))
 	for _, d := range docs {
-		trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, now, s.deps.Formula)
+		trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, now, s.deps.Formula)
 		out = append(out, dto.AgentSearchRow{
 			ChainID:    d.ChainID,
 			AgentID:    d.AgentID,

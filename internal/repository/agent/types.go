@@ -65,7 +65,7 @@ type AgentDocument struct {
 	Tags             []string `bson:"tags,omitempty"`          // denormalized from onchainMetadata.tags for filtering
 	OnchainMetadata  map[string]OnchainMetadataValue `bson:"onchainMetadata,omitempty"` // from MetadataSet events
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
-	AccumulatedScore float64  `bson:"accumulatedScore"`
+	ReputationScore float64  `bson:"reputationScore"`
 	ScoreUpdateAt    int64    `bson:"scoreUpdateAt"` // Unix seconds of last score update
 	ConsecutiveFails int64    `bson:"consecutiveFails"`
 	TotalTasks       int64    `bson:"totalTasks"`

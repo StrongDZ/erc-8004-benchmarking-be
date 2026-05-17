@@ -376,10 +376,10 @@ func (p *Processor) getOrCreateAgent(bs *batchState, agentID string, timestamp i
 		return doc
 	}
 	doc = &agent.AgentDocument{
-		AgentID:          agentID,
-		ChainID:          bs.chainID,
-		AccumulatedScore: 0,
-		ScoreUpdateAt:    timestamp,
+		AgentID:         agentID,
+		ChainID:         bs.chainID,
+		ReputationScore: 0,
+		ScoreUpdateAt:   timestamp,
 	}
 	bs.agentMap[agentID] = doc
 	bs.dirtyAgents[agentID] = true

@@ -16,7 +16,7 @@ import (
 
 // LeaderboardFilter expresses the server-side filterable attributes of /leaderboard.
 // Score-based ("minScore") filters are applied in the handler after lazy decay because
-// the stored accumulatedScore is a pre-decay quantity.
+// the stored reputationScore is a pre-decay quantity.
 type LeaderboardFilter struct {
 	ChainID  int64    // deprecated single-chain shortcut; prefer ChainIDs
 	ChainIDs []int64  // OR logic across chainId; overrides ChainID when non-empty
@@ -33,7 +33,7 @@ type LeaderboardFilter struct {
 }
 
 // LeaderboardSort selects the Mongo sort order. Score ordering is done server-side on
-// accumulatedScore (a close proxy for the displayed score before decay/penalty).
+// reputationScore (a close proxy for the displayed score before decay/penalty).
 type LeaderboardSort string
 
 const (
@@ -51,13 +51,13 @@ func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, s
 	var sortDoc bson.D
 	switch sort {
 	case SortScoreAsc:
-		sortDoc = bson.D{{Key: "accumulatedScore", Value: 1}}
+		sortDoc = bson.D{{Key: "reputationScore", Value: 1}}
 	case SortTasksDesc:
 		sortDoc = bson.D{{Key: "totalTasks", Value: -1}}
 	case SortRecent:
 		sortDoc = bson.D{{Key: "createdAt", Value: -1}}
 	default:
-		sortDoc = bson.D{{Key: "accumulatedScore", Value: -1}}
+		sortDoc = bson.D{{Key: "reputationScore", Value: -1}}
 	}
 
 	total, err := r.Count(ctx, query)
@@ -157,7 +157,7 @@ func (r *Repository) SearchByNamePrefix(ctx context.Context, chainID int64, quer
 		"name":    bson.M{"$regex": pattern, "$options": "i"},
 	}
 	opts := options.Find().
-		SetSort(bson.D{{Key: "accumulatedScore", Value: -1}}).
+		SetSort(bson.D{{Key: "reputationScore", Value: -1}}).
 		SetLimit(limit)
 	docs, err := r.Find(ctx, filter, opts)
 	if err != nil {
@@ -202,7 +202,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 		{{Key: "$match", Value: match}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$accumulatedScore"},
+			"avg": bson.M{"$avg": "$reputationScore"},
 		}}},
 	}
 	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
@@ -212,11 +212,11 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 
 	top10Pipeline := mongodrv.Pipeline{
 		{{Key: "$match", Value: match}},
-		{{Key: "$sort", Value: bson.D{{Key: "accumulatedScore", Value: -1}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "reputationScore", Value: -1}}}},
 		{{Key: "$limit", Value: 10}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$accumulatedScore"},
+			"avg": bson.M{"$avg": "$reputationScore"},
 		}}},
 	}
 	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
@@ -224,7 +224,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 		return nil, fmt.Errorf("agent repo: stats top10: %w", err)
 	}
 
-	median, err := r.computeMedianAccScoreMulti(ctx, match, total)
+	median, err := r.computeMedianReputationScoreMulti(ctx, match, total)
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats median: %w", err)
 	}
@@ -238,16 +238,16 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 	}, nil
 }
 
-func (r *Repository) computeMedianAccScoreMulti(ctx context.Context, match bson.M, total int64) (float64, error) {
+func (r *Repository) computeMedianReputationScoreMulti(ctx context.Context, match bson.M, total int64) (float64, error) {
 	if total <= 0 {
 		return 0, nil
 	}
 	mid := total / 2
 	opts := options.Find().
-		SetSort(bson.D{{Key: "accumulatedScore", Value: 1}}).
+		SetSort(bson.D{{Key: "reputationScore", Value: 1}}).
 		SetSkip(mid).
 		SetLimit(1).
-		SetProjection(bson.M{"accumulatedScore": 1})
+		SetProjection(bson.M{"reputationScore": 1})
 	docs, err := r.Find(ctx, match, opts)
 	if err != nil {
 		return 0, err
@@ -255,7 +255,7 @@ func (r *Repository) computeMedianAccScoreMulti(ctx context.Context, match bson.
 	if len(docs) == 0 {
 		return 0, nil
 	}
-	return docs[0].AccumulatedScore, nil
+	return docs[0].ReputationScore, nil
 }
 
 // TagCount is one entry of /leaderboard/tags aggregation output.
@@ -314,7 +314,7 @@ func (r *Repository) TopTags(ctx context.Context, chainIDs []int64, query string
 }
 
 // ComputeStats runs three small aggregations over the agents collection for one chain.
-// All figures are based on accumulatedScore — the handler may replace them with
+// All figures are based on reputationScore — the handler may replace them with
 // lazy-decayed display scores if needed (current impl returns raw accumulated).
 func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, error) {
 	total, err := r.Count(ctx, bson.M{"chainId": chainID})
@@ -330,7 +330,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 		{{Key: "$match", Value: bson.M{"chainId": chainID}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$accumulatedScore"},
+			"avg": bson.M{"$avg": "$reputationScore"},
 		}}},
 	}
 	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
@@ -340,11 +340,11 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 
 	top10Pipeline := mongodrv.Pipeline{
 		{{Key: "$match", Value: bson.M{"chainId": chainID}}},
-		{{Key: "$sort", Value: bson.D{{Key: "accumulatedScore", Value: -1}}}},
+		{{Key: "$sort", Value: bson.D{{Key: "reputationScore", Value: -1}}}},
 		{{Key: "$limit", Value: 10}},
 		{{Key: "$group", Value: bson.M{
 			"_id": nil,
-			"avg": bson.M{"$avg": "$accumulatedScore"},
+			"avg": bson.M{"$avg": "$reputationScore"},
 		}}},
 	}
 	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
@@ -352,7 +352,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 		return nil, fmt.Errorf("agent repo: stats top10: %w", err)
 	}
 
-	median, err := r.computeMedianAccScore(ctx, chainID, total)
+	median, err := r.computeMedianReputationScore(ctx, chainID, total)
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats median: %w", err)
 	}
@@ -366,18 +366,18 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 	}, nil
 }
 
-// computeMedianAccScore uses $sort + $skip + $limit (O(n log n) in Mongo but simple).
+// computeMedianReputationScore uses $sort + $skip + $limit (O(n log n) in Mongo but simple).
 // For large collections, consider precomputing on the decay worker.
-func (r *Repository) computeMedianAccScore(ctx context.Context, chainID, total int64) (float64, error) {
+func (r *Repository) computeMedianReputationScore(ctx context.Context, chainID, total int64) (float64, error) {
 	if total <= 0 {
 		return 0, nil
 	}
 	mid := total / 2
 	opts := options.Find().
-		SetSort(bson.D{{Key: "accumulatedScore", Value: 1}}).
+		SetSort(bson.D{{Key: "reputationScore", Value: 1}}).
 		SetSkip(mid).
 		SetLimit(1).
-		SetProjection(bson.M{"accumulatedScore": 1})
+		SetProjection(bson.M{"reputationScore": 1})
 	docs, err := r.Find(ctx, bson.M{"chainId": chainID}, opts)
 	if err != nil {
 		return 0, err
@@ -385,7 +385,7 @@ func (r *Repository) computeMedianAccScore(ctx context.Context, chainID, total i
 	if len(docs) == 0 {
 		return 0, nil
 	}
-	return docs[0].AccumulatedScore, nil
+	return docs[0].ReputationScore, nil
 }
 
 // runScalarAgg runs a pipeline whose final $group emits one document with a numeric
@@ -420,7 +420,7 @@ func runScalarAgg(ctx context.Context, coll *mongodrv.Collection, pipeline mongo
 }
 
 // FindRelated returns agents that share any OASF skill or domain with the given agent,
-// ordered by accumulatedScore desc, excluding the agent itself.
+// ordered by reputationScore desc, excluding the agent itself.
 func (r *Repository) FindRelated(ctx context.Context, chainID int64, excludeAgentID string, skills, domains []string, limit int64) ([]AgentDocument, error) {
 	if len(skills) == 0 && len(domains) == 0 {
 		return nil, nil
@@ -438,7 +438,7 @@ func (r *Repository) FindRelated(ctx context.Context, chainID int64, excludeAgen
 		"$or":     or,
 	}
 	opts := options.Find().
-		SetSort(bson.D{{Key: "accumulatedScore", Value: -1}}).
+		SetSort(bson.D{{Key: "reputationScore", Value: -1}}).
 		SetLimit(limit)
 	docs, err := r.Find(ctx, filter, opts)
 	if err != nil {

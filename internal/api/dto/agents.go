@@ -12,7 +12,7 @@ type AgentRow struct {
 	Image            string         `json:"image,omitempty"`
 	Owner            string         `json:"owner,omitempty"`
 	TrustScore       float64        `json:"trustScore"`
-	AccumulatedScore float64        `json:"accumulatedScore"`
+	ReputationScore float64        `json:"reputationScore"`
 	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
 	ConsecutiveFails int64          `json:"consecutiveFails"`
 	TotalTasks       int64          `json:"totalTasks"`
@@ -76,7 +76,7 @@ type RisingStarRow struct {
 // AgentScoring is the scoring sub-object on /agents/:id (§3.1).
 type AgentScoring struct {
 	TrustScore        float64          `json:"trustScore"`
-	AccumulatedScore  float64          `json:"accumulatedScore"`
+	ReputationScore   float64          `json:"reputationScore"`
 	ScoreUpdateAt     int64            `json:"scoreUpdateAt"`
 	ConsecutiveFails  int64            `json:"consecutiveFails"`
 	Penalty           float64          `json:"penalty"`

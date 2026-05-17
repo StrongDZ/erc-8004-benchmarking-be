@@ -35,9 +35,9 @@ func (p *Processor) handleRegistered(bs *batchState, agentID string, ev eventrep
 	doc := bs.agentMap[agentID]
 	if doc == nil {
 		doc = &agent.AgentDocument{
-			AgentID:          agentID,
-			ChainID:          bs.chainID,
-			AccumulatedScore: 0,
+			AgentID:         agentID,
+			ChainID:         bs.chainID,
+			ReputationScore: 0,
 		}
 		bs.agentMap[agentID] = doc
 	}

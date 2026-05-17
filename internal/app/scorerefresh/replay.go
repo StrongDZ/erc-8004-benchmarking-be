@@ -1,7 +1,7 @@
 package scorerefresh
 
 // replay.go — Pure one-pass O(M) replay of an agent's feedback history.
-// Computes accumulatedScore (with penalty baked in) and delta snapshots at
+// Computes reputationScore (with penalty baked in) and delta snapshots at
 // T-30d, T-7d, T-24h milestones, yielding AgentScoreStats in a single pass.
 
 import (
@@ -34,12 +34,12 @@ func replayAgent(
 	milestones := [3]int64{now - 30*86400, now - 7*86400, now - 86400}
 
 	lambda := scoring.ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
-	acc := 0.0
+	rep := 0.0
 	lastTs := int64(0)
 	mIdx := 0
 	consecFails := int64(0)
 
-	var snapshots [3]float64 // acc value (interpolated) at each milestone
+	var snapshots [3]float64 // rep value (interpolated) at each milestone
 	var eventScores []float64
 
 	for _, fb := range feedbacks {
@@ -60,34 +60,34 @@ func replayAgent(
 		vi := classifier.NormalizeValueWithScale(real, fb.ValueScale)
 
 		// Record milestones that fall strictly before this event.
-		// Snapshot = acc decayed from lastTs to the milestone (score just before this event).
-		// When lastTs == 0 (no prior service events), acc == 0, so snapshots stay 0 ("thì thôi").
+		// Snapshot = rep decayed from lastTs to the milestone (score just before this event).
+		// When lastTs == 0 (no prior service events), rep == 0, so snapshots stay 0 ("thì thôi").
 		for mIdx < 3 && milestones[mIdx] < ts {
 			mt := milestones[mIdx]
 			if lastTs < mt {
 				deltaDays := float64(mt-lastTs) / 86400.0
-				acc *= math.Exp(-lambda * deltaDays)
+				rep *= math.Exp(-lambda * deltaDays)
 				lastTs = mt
 			}
-			snapshots[mIdx] = acc
+			snapshots[mIdx] = rep
 			mIdx++
 		}
 
 		// Decay to this event's timestamp.
 		if lastTs < ts {
 			deltaDays := float64(ts-lastTs) / 86400.0
-			acc *= math.Exp(-lambda * deltaDays)
+			rep *= math.Exp(-lambda * deltaDays)
 			lastTs = ts
 		}
 
 		// Apply event contribution: effectiveVi = vi - 0.40.
 		effectiveVi := vi - 0.40
-		acc += fb.Wi * effectiveVi
+		rep += fb.Wi * effectiveVi
 
 		// If fail (vi < 0.40): also bake in the progressive penalty.
 		if vi < 0.40 {
 			consecFails++
-			acc -= scoring.ComputePenalty(consecFails, cfg.Gamma, cfg.Theta)
+			rep -= scoring.ComputePenalty(consecFails, cfg.Gamma, cfg.Theta)
 		} else {
 			consecFails = 0
 		}
@@ -100,26 +100,26 @@ func replayAgent(
 		mt := milestones[mIdx]
 		if lastTs < mt {
 			deltaDays := float64(mt-lastTs) / 86400.0
-			acc *= math.Exp(-lambda * deltaDays)
+			rep *= math.Exp(-lambda * deltaDays)
 			lastTs = mt
 		}
-		snapshots[mIdx] = acc
+		snapshots[mIdx] = rep
 		mIdx++
 	}
 
 	// Final decay to now.
 	if lastTs < now {
 		deltaDays := float64(now-lastTs) / 86400.0
-		acc *= math.Exp(-lambda * deltaDays)
+		rep *= math.Exp(-lambda * deltaDays)
 	}
 
 	return scorestats.AgentScoreStats{
 		ChainID:     chainID,
 		AgentID:     agentID,
-		Score:       acc,
-		Delta24h:    acc - snapshots[2],
-		Delta7d:     acc - snapshots[1],
-		Delta30d:    acc - snapshots[0],
+		Score:       rep,
+		Delta24h:    rep - snapshots[2],
+		Delta7d:     rep - snapshots[1],
+		Delta30d:    rep - snapshots[0],
 		Consistency: computeConsistency(eventScores),
 		ComputedAt:  now,
 	}

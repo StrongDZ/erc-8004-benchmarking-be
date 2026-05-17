@@ -16,7 +16,7 @@ import (
 
 // toAgentRow applies lazy decay (§1.4) and projects the document into AgentRow.
 func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentRow {
-	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, nowUnix, cfg)
+	trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, nowUnix, cfg)
 	services := make([]dto.AgentService, 0, len(d.Services))
 	for _, s := range d.Services {
 		services = append(services, dto.AgentService{
@@ -28,13 +28,13 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 		})
 	}
 	return dto.AgentRow{
-		ChainID:          d.ChainID,
-		AgentID:          d.AgentID,
-		Name:             d.Name,
-		Image:            d.Image,
-		Owner:            d.Owner,
-		TrustScore:       round2(trust),
-		AccumulatedScore: round2(d.AccumulatedScore),
+		ChainID:         d.ChainID,
+		AgentID:         d.AgentID,
+		Name:            d.Name,
+		Image:           d.Image,
+		Owner:           d.Owner,
+		TrustScore:      round2(trust),
+		ReputationScore: round2(d.ReputationScore),
 		ScoreUpdateAt:    d.ScoreUpdateAt,
 		ConsecutiveFails: d.ConsecutiveFails,
 		TotalTasks:       d.TotalTasks,
@@ -55,7 +55,7 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 
 // toAgentProfile builds the full profile payload, including lazy-decayed scoring.
 func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentProfile {
-	trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, nowUnix, cfg)
+	trust := scoring.ComputeCurrentScore(d.ReputationScore, d.ScoreUpdateAt, nowUnix, cfg)
 	penalty := scoring.ComputePenalty(d.ConsecutiveFails, cfg.Gamma, cfg.Theta)
 
 	services := make([]dto.AgentService, 0, len(d.Services))
@@ -99,8 +99,8 @@ func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.F
 		OffchainMetadata: d.OffchainMetadata,
 		CreatedAt:        unixToRFC3339(d.CreatedAt),
 		Scoring: dto.AgentScoring{
-			TrustScore:        round2(trust),
-			AccumulatedScore:  round2(d.AccumulatedScore),
+			TrustScore:      round2(trust),
+			ReputationScore: round2(d.ReputationScore),
 			ScoreUpdateAt:     d.ScoreUpdateAt,
 			ConsecutiveFails:  d.ConsecutiveFails,
 			Penalty:           round2(penalty),

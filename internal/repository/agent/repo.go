@@ -36,7 +36,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetUnique(true).SetName("ux_chain_agent"),
 		},
 		{
-			Keys:    bson.D{{Key: "accumulatedScore", Value: -1}},
+			Keys:    bson.D{{Key: "reputationScore", Value: -1}},
 			Options: options.Index().SetName("idx_accumulated_score_desc"),
 		},
 		// OASF capability indexes
@@ -53,7 +53,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
 				{Key: "oasfSkills", Value: 1},
-				{Key: "accumulatedScore", Value: -1},
+				{Key: "reputationScore", Value: -1},
 			},
 			Options: options.Index().SetName("idx_chain_oasf_skills_score"),
 		},
@@ -62,7 +62,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
 				{Key: "oasfDomains", Value: 1},
-				{Key: "accumulatedScore", Value: -1},
+				{Key: "reputationScore", Value: -1},
 			},
 			Options: options.Index().SetName("idx_chain_oasf_domains_score"),
 		},
@@ -131,7 +131,7 @@ func (r *Repository) UpdateScore(ctx context.Context, chainID int64, agentID str
 	id := AgentDocumentID(chainID, agentID)
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{
-		"accumulatedScore": accScore,
+		"reputationScore":  accScore,
 		"scoreUpdateAt":    scoreUpdateAt,
 		"consecutiveFails": consecutiveFails,
 		"totalTasks":       totalTasks,
@@ -168,31 +168,31 @@ func (r *Repository) UpdateIdentity(ctx context.Context, chainID int64, agentID 
 	return nil
 }
 
-// UpdateAccumulatedScore atomically updates only accumulatedScore + scoreUpdateAt (used by decay cron).
-func (r *Repository) UpdateAccumulatedScore(ctx context.Context, chainID int64, agentID string, accScore float64, scoreUpdateAt int64) error {
+// UpdateReputationScore atomically updates only reputationScore + scoreUpdateAt (used by decay cron).
+func (r *Repository) UpdateReputationScore(ctx context.Context, chainID int64, agentID string, accScore float64, scoreUpdateAt int64) error {
 	id := AgentDocumentID(chainID, agentID)
 	filter := bson.M{"_id": id}
 	update := bson.M{"$set": bson.M{
-		"accumulatedScore": accScore,
-		"scoreUpdateAt":    scoreUpdateAt,
+		"reputationScore": accScore,
+		"scoreUpdateAt":   scoreUpdateAt,
 	}}
 	_, err := r.UpdateOne(ctx, filter, update)
 	if err != nil {
-		return fmt.Errorf("agent repo: update accumulated score %s: %w", id, err)
+		return fmt.Errorf("agent repo: update reputation score %s: %w", id, err)
 	}
 	return nil
 }
 
-// IncAccumulatedScore atomically adds delta to accumulatedScore using $inc.
+// IncReputationScore atomically adds delta to reputationScore using $inc.
 // Used exclusively by the rescale worker — does NOT overwrite scoreUpdateAt so
 // live scoring is unaffected. Safe to run concurrently with ApplyTaskScore ($set).
-func (r *Repository) IncAccumulatedScore(ctx context.Context, chainID int64, agentID string, delta float64) error {
+func (r *Repository) IncReputationScore(ctx context.Context, chainID int64, agentID string, delta float64) error {
 	id := AgentDocumentID(chainID, agentID)
 	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$inc": bson.M{"accumulatedScore": delta},
+		"$inc": bson.M{"reputationScore": delta},
 	})
 	if err != nil {
-		return fmt.Errorf("agent repo: inc accumulated score %s: %w", id, err)
+		return fmt.Errorf("agent repo: inc reputation score %s: %w", id, err)
 	}
 	return nil
 }

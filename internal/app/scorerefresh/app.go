@@ -2,7 +2,7 @@ package scorerefresh
 
 // app.go — Periodic score-refresh worker.
 // Every cronExpr cycle: replay feedback_history per agent → upsert agent_score_stats
-// + sync agent.accumulatedScore with the exact replay result.
+// + sync agent.reputationScore with the exact replay result.
 
 import (
 	"context"
@@ -89,10 +89,10 @@ func (a *App) runCycle(ctx context.Context) {
 			log.Printf("score-refresh: bulk upsert stats: %v", err)
 		}
 
-		// Sync agent.accumulatedScore with the authoritative replay result.
+		// Sync agent.reputationScore with the authoritative replay result.
 		for _, stats := range statsBatch {
-			if err := a.agents.UpdateAccumulatedScore(ctx, stats.ChainID, stats.AgentID, stats.Score, now); err != nil {
-				log.Printf("score-refresh: update acc score chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
+			if err := a.agents.UpdateReputationScore(ctx, stats.ChainID, stats.AgentID, stats.Score, now); err != nil {
+				log.Printf("score-refresh: update rep score chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
 			}
 		}
 

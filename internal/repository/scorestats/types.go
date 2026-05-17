@@ -7,7 +7,7 @@ import mongorepo "erc-8004-benchmarking-be/internal/repository"
 type AgentScoreStats struct {
 	ChainID     int64   `bson:"chainId"`
 	AgentID     string  `bson:"agentId"`
-	Score       float64 `bson:"score"`        // current accumulatedScore (penalty baked in, no display decay)
+	Score       float64 `bson:"score"`        // current reputationScore (penalty baked in, no display decay)
 	Delta24h    float64 `bson:"delta24h"`     // score now − score 24 h ago (0 if no checkpoint before 24 h)
 	Delta7d     float64 `bson:"delta7d"`      // score now − score 7 d ago
 	Delta30d    float64 `bson:"delta30d"`     // score now − score 30 d ago

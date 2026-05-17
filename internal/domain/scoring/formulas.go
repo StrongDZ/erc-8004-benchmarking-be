@@ -92,14 +92,14 @@ const secondsPerDay = 86400.0
 
 // ApplyTaskScore performs an O(1) incremental score update (write path, §3.2).
 //
-// It decays the existing accumulatedScore forward to tNowUnix, then adds the new
+// It decays the existing reputationScore forward to tNowUnix, then adds the new
 // feedback contribution wᵢ·(vᵢ − 0.40). vi = 0.40 is neutral (zero contribution);
 // vi > 0.40 increases the score; vi < 0.40 decreases it.
 //
 // NOTE: This function does NOT apply the consecutive-failure penalty. When vi < 0.40,
 // the caller must additionally subtract ComputePenalty(newConsecFails, cfg.Gamma, cfg.Theta).
 //
-// accScore:       current accumulatedScore stored in the agent document.
+// accScore:       current reputationScore stored in the agent document.
 // lastUpdateUnix: Unix seconds of the last score update.
 // wi:             difficulty weight of the new feedback (ComputeWi output).
 // vi:             validation score [0, 1] of the new feedback.
@@ -122,14 +122,14 @@ func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNow
 // ComputeCurrentScore performs lazy decay evaluation (read path, §3.6).
 //
 // Returns the displayed score S clamped to (-∞, 1000]; negative scores are allowed.
-// This value is for display only — NEVER write it back to MongoDB as accumulatedScore.
+// This value is for display only — NEVER write it back to MongoDB as reputationScore.
 //
-// The consecutive-failure penalty is now baked into accumulatedScore at write time
+// The consecutive-failure penalty is now baked into reputationScore at write time
 // (see ApplyTaskScore + ComputePenalty), so this function applies pure decay only.
 //
 // O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight).
 //
-// accScore:       stored accumulatedScore (penalty already included).
+// accScore:       stored reputationScore (penalty already included).
 // lastUpdateUnix: Unix seconds of last score update.
 // nowUnix:        current Unix seconds.
 // cfg:            formula parameters.

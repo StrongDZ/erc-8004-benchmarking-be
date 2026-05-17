@@ -1,8 +1,8 @@
 package main
 
 // score-refresh — Periodic worker: every ScoreRefreshCron, replays feedback_history
-// per agent to compute accumulatedScore and delta snapshots (24h / 7d / 30d),
-// then upserts agent_score_stats and syncs agent.accumulatedScore.
+// per agent to compute reputationScore and delta snapshots (24h / 7d / 30d),
+// then upserts agent_score_stats and syncs agent.reputationScore.
 
 import (
 	"context"

@@ -1,6 +1,6 @@
 package rescale
 
-// app.go — Rescale worker: retroactively corrects agent accumulatedScore when a
+// app.go — Rescale worker: retroactively corrects agent reputationScore when a
 // tag1's detected scale changes (e.g. "starred" recognized as star5 instead of pct100).
 //
 // Four phases per correction record:
@@ -232,8 +232,8 @@ func (a *App) applyOneDelta(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 	defer session.EndSession(ctx)
 
 	_, err = session.WithTransaction(ctx, func(sessCtx mongodrv.SessionContext) (interface{}, error) {
-		// 1. $inc agent accumulatedScore.
-		if err := a.agentRepo.IncAccumulatedScore(sessCtx, d.ChainID, d.AgentID, d.Delta); err != nil {
+		// 1. $inc agent reputationScore.
+		if err := a.agentRepo.IncReputationScore(sessCtx, d.ChainID, d.AgentID, d.Delta); err != nil {
 			return nil, err
 		}
 

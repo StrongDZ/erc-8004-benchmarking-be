@@ -140,7 +140,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		return
 	}
 
-	newAcc := scoring.ApplyTaskScore(agentDoc.AccumulatedScore, agentDoc.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
+	newRep := scoring.ApplyTaskScore(agentDoc.ReputationScore, agentDoc.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
 	newTotalTasks := agentDoc.TotalTasks + 1
 
 	var newPassed, newFailed, newConsecFails int64
@@ -152,11 +152,11 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		newPassed = agentDoc.TotalPassed
 		newFailed = agentDoc.TotalFailed + 1
 		newConsecFails = agentDoc.ConsecutiveFails + 1
-		// Bake the progressive penalty directly into accumulatedScore (unified write path).
-		newAcc -= scoring.ComputePenalty(newConsecFails, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
+		// Bake the progressive penalty directly into reputationScore (unified write path).
+		newRep -= scoring.ComputePenalty(newConsecFails, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
 	}
 
-	agentDoc.AccumulatedScore = newAcc
+	agentDoc.ReputationScore = newRep
 	agentDoc.ScoreUpdateAt = ev.Timestamp
 	agentDoc.ConsecutiveFails = newConsecFails
 	agentDoc.TotalTasks = newTotalTasks
