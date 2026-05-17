@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +31,10 @@ type Config struct {
 	TagStatsColl        string // tag_value_stats — per-tag tier vote counters
 	TagCorrectionsColl  string // changed_tag_scales — rescale correction queue
 	RescaleDeltasColl   string // rescale_deltas — pre-computed per-agent deltas
+	ScoreStatsColl      string // agent_score_stats — periodic materialized view
+
+	// Score-refresh worker
+	ScoreRefreshCron string // cron expression, default "*/30 * * * *"
 
 	// Tag-scale normalization
 	TagStatsMinSamples int // feedbacks required before scale is locked (default 50)
@@ -48,12 +54,15 @@ type Config struct {
 	RabbitMQQueue    string // raw logs queue
 	RabbitMQURIQueue string // uri fetch queue
 	ConsumerPrefetch    int // number of unacked messages the raw-log consumer can hold at once
-	URIConsumerPrefetch int // prefetch count per chain for event_uri and service_uri consumers
+	URIConsumerPrefetch int // prefetch per AMQP channel: event_uri consumer; service_uri pool has one reader channel per chain with this prefetch
+
+	// ServiceURIConsumerWorkers is the shared HTTP worker pool size for all uri.{chain}.service_uri queues (trustrank).
+	ServiceURIConsumerWorkers int
 
 	URIBootstrapBatchSize  int
 	URIResolverIntervalSec int
 
-	// TrustRank worker (Flow 2): cron scan decoded events per chain, batch + sub-batch by contractType.
+	// TrustRank worker (Flow 2): pause between full passes; first pass runs at worker startup.
 	TrustRankInterval             time.Duration
 	TrustRankEventBatchSize       int64 // Mongo page size per chain (block/log order).
 	TrustRankContractTypeSubBatch int   // max events per handler call within one contractType slice.
@@ -65,6 +74,16 @@ type Config struct {
 	TrustRankTBase float64 // §3.3 half-life base in days (default 15.0)
 	PenaltyGamma   float64 // §3.4 penalty base (default 5.0)
 	PenaltyTheta   float64 // §3.4 penalty exponent (default 2.0)
+
+	// Composite score blend weights (sum must ≈ 1.0). Defaults: 0.5/0.2/0.2/0.1.
+	ScoreWeightReputation float64
+	ScoreWeightServices   float64
+	ScoreWeightPublisher  float64
+	ScoreWeightCompliance float64
+
+	// Compliance tier totals (sum must ≈ 100). Defaults: 80/20.
+	ComplianceTier1Weight float64
+	ComplianceTier2Weight float64
 
 	// Decay cron
 	DecayIntervalHours int // how often the decay cron fires (default 4)
@@ -152,8 +171,11 @@ func Load() (Config, error) {
 		TagStatsColl:       utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
 		TagCorrectionsColl: utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
 		RescaleDeltasColl:  utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
+		ScoreStatsColl:     utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
 
-		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 50),
+		ScoreRefreshCron: utils.Getenv("SCORE_REFRESH_CRON", "*/30 * * * *"),
+
+		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 1),
 
 		BatchSize:           uint64(utils.GetenvInt("CRAWLER_BATCH_SIZE", 1000)),
 		PollInterval:        time.Duration(utils.GetenvInt("CRAWLER_POLL_SECONDS", 5)) * time.Second,
@@ -169,6 +191,7 @@ func Load() (Config, error) {
 		RabbitMQURIQueue: utils.Getenv("RABBITMQ_URI_QUEUE", "erc8004.agent_uri"),
 		ConsumerPrefetch:    utils.GetenvInt("CONSUMER_PREFETCH", 10),
 		URIConsumerPrefetch: utils.GetenvInt("URI_CONSUMER_PREFETCH", 5),
+		ServiceURIConsumerWorkers: utils.GetenvInt("SERVICE_URI_CONSUMER_WORKERS", 8),
 
 		URIBootstrapBatchSize:  utils.GetenvInt("URI_BOOTSTRAP_BATCH_SIZE", 1000),
 		URIResolverIntervalSec: utils.GetenvInt("URI_RESOLVER_INTERVAL_SECONDS", 30),
@@ -183,6 +206,13 @@ func Load() (Config, error) {
 		TrustRankTBase: utils.GetenvFloat("TRUSTRANK_TBASE_DAYS", 15.0),
 		PenaltyGamma:   utils.GetenvFloat("PENALTY_GAMMA", 5.0),
 		PenaltyTheta:   utils.GetenvFloat("PENALTY_THETA", 2.0),
+
+		ScoreWeightReputation: utils.GetenvFloat("SCORE_WEIGHT_REPUTATION", 0.5),
+		ScoreWeightServices:   utils.GetenvFloat("SCORE_WEIGHT_SERVICES",   0.2),
+		ScoreWeightPublisher:  utils.GetenvFloat("SCORE_WEIGHT_PUBLISHER",  0.2),
+		ScoreWeightCompliance: utils.GetenvFloat("SCORE_WEIGHT_COMPLIANCE", 0.1),
+		ComplianceTier1Weight: utils.GetenvFloat("COMPLIANCE_TIER1_WEIGHT", 80.0),
+		ComplianceTier2Weight: utils.GetenvFloat("COMPLIANCE_TIER2_WEIGHT", 20.0),
 
 		DecayIntervalHours: utils.GetenvInt("DECAY_INTERVAL_HOURS", 4),
 
@@ -254,6 +284,12 @@ func Load() (Config, error) {
 	if strings.TrimSpace(cfg.RabbitMQURI) == "" {
 		return Config{}, fmt.Errorf("RABBITMQ_URI must not be empty")
 	}
+	if cfg.ServiceURIConsumerWorkers < 1 {
+		cfg.ServiceURIConsumerWorkers = 8
+	}
+	if cfg.ServiceURIConsumerWorkers > 256 {
+		cfg.ServiceURIConsumerWorkers = 256
+	}
 	if strings.TrimSpace(cfg.RabbitMQURIQueue) == "" {
 		return Config{}, fmt.Errorf("RABBITMQ_URI_QUEUE must not be empty")
 	}
@@ -304,6 +340,17 @@ func Load() (Config, error) {
 	}
 	if cfg.RateLimitBurst < 1 {
 		return Config{}, fmt.Errorf("RATE_LIMIT_BURST must be >= 1")
+	}
+
+	// Validate composite score blend weights sum ≈ 1.0.
+	compositeSum := cfg.ScoreWeightReputation + cfg.ScoreWeightServices + cfg.ScoreWeightPublisher + cfg.ScoreWeightCompliance
+	if math.Abs(compositeSum-1.0) > 0.001 {
+		log.Printf("WARNING: composite score weights sum to %.4f (expected 1.0); check SCORE_WEIGHT_* env vars", compositeSum)
+	}
+	// Validate compliance tier weights sum ≈ 100.0.
+	tierSum := cfg.ComplianceTier1Weight + cfg.ComplianceTier2Weight
+	if math.Abs(tierSum-100.0) > 0.1 {
+		log.Printf("WARNING: compliance tier weights sum to %.2f (expected 100.0); check COMPLIANCE_TIER*_WEIGHT env vars", tierSum)
 	}
 
 	return cfg, nil

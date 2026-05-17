@@ -9,11 +9,13 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
 // ── Interfaces (defined at consumer site per DIP) ────────────────────────────
@@ -31,7 +33,7 @@ type leaderboardFeedbackRepo interface {
 }
 
 type leaderboardScoreRepo interface {
-	FindRisingStars(ctx context.Context, chainID int64, sinceUnix int64, limit int64) ([]scorerepo.RisingStar, error)
+	FindByPeriodDelta(ctx context.Context, chainID int64, period string, limit int64) ([]scorestats.AgentScoreStats, error)
 }
 
 type leaderboardCrawlerRepo interface {
@@ -58,8 +60,8 @@ func NewLeaderboard(deps LeaderboardDeps) *Leaderboard { return &Leaderboard{dep
 
 // ListParams are the parsed inputs for /leaderboard.
 type ListParams struct {
-	ChainID  int64    // deprecated — prefer ChainIDs
-	ChainIDs []int64  // multi-chain filter
+	ChainID  int64   // deprecated — prefer ChainIDs
+	ChainIDs []int64 // multi-chain filter
 	Skills   []string
 	Domains  []string
 	Services []string
@@ -116,13 +118,8 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 		}
 		rows = append(rows, row)
 	}
-	// Re-sort by decayed trustScore when caller asked for a score-based order to make
-	// the displayed ranking monotonic even if lazy decay slightly reorders rows.
-	if p.Sort == agentrepo.SortScoreDesc || p.Sort == "" {
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].TrustScore > rows[j].TrustScore })
-	} else if p.Sort == agentrepo.SortScoreAsc {
-		sort.SliceStable(rows, func(i, j int) bool { return rows[i].TrustScore < rows[j].TrustScore })
-	}
+	// compositeScore is pre-computed by the score-refresh worker and the Mongo sort is
+	// authoritative; no client-side re-sort is needed.
 	// Assign ranks based on absolute position within the page (page 1 starts at 1).
 	for i := range rows {
 		rows[i].Rank = int(p.Skip) + i + 1
@@ -137,16 +134,14 @@ func (s *Leaderboard) Search(ctx context.Context, chainID int64, q string, limit
 	if err != nil {
 		return nil, fmt.Errorf("leaderboard search: %w", err)
 	}
-	now := time.Now().Unix()
 	out := make([]dto.AgentSearchRow, 0, len(docs))
 	for _, d := range docs {
-		trust := scoring.ComputeCurrentScore(d.AccumulatedScore, d.ScoreUpdateAt, d.ConsecutiveFails, now, s.deps.Formula)
 		out = append(out, dto.AgentSearchRow{
 			ChainID:    d.ChainID,
 			AgentID:    d.AgentID,
 			Name:       d.Name,
 			Image:      d.Image,
-			TrustScore: round2(trust),
+			TrustScore: round2(d.CompositeScore),
 		})
 	}
 	return out, nil
@@ -220,26 +215,26 @@ func (s *Leaderboard) StatsMulti(ctx context.Context, chainIDs []int64) (*dto.Le
 }
 
 // RisingStars implements /leaderboard/rising-stars (§2.3).
-// `period` is one of: 24h, 7d, 30d.
+// `period` is one of: 24h, 1d, 7d, 30d.
+// Delta scores are pre-computed by the score-refresh worker in agent_score_stats.
 func (s *Leaderboard) RisingStars(ctx context.Context, chainID int64, period string, limit int) ([]dto.RisingStarRow, error) {
 	dur, err := parsePeriod(period)
 	if err != nil {
 		return nil, err
 	}
-	since := time.Now().Add(-dur).Unix()
 
-	stars, err := s.deps.Scores.FindRisingStars(ctx, chainID, since, int64(limit))
+	statsList, err := s.deps.Scores.FindByPeriodDelta(ctx, chainID, period, int64(limit))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("rising stars: score stats: %w", err)
 	}
-	if len(stars) == 0 {
+	if len(statsList) == 0 {
 		return []dto.RisingStarRow{}, nil
 	}
 
-	// Look up agent names/images for the candidates in one batch.
-	ids := make([]string, 0, len(stars))
-	for _, s := range stars {
-		ids = append(ids, s.AgentID)
+	// Look up agent names/images in one batch.
+	ids := make([]string, 0, len(statsList))
+	for _, st := range statsList {
+		ids = append(ids, st.AgentID)
 	}
 	agents, err := s.deps.Agents.FindByIDs(ctx, chainID, ids)
 	if err != nil {
@@ -251,26 +246,38 @@ func (s *Leaderboard) RisingStars(ctx context.Context, chainID int64, period str
 	}
 
 	days := dur.Hours() / 24.0
-	out := make([]dto.RisingStarRow, 0, len(stars))
-	for _, rs := range stars {
-		a := byID[rs.AgentID]
+	out := make([]dto.RisingStarRow, 0, len(statsList))
+	for _, st := range statsList {
+		a := byID[st.AgentID]
+		delta := deltaForPeriod(st, period)
 		velocity := 0.0
 		if days > 0 {
-			velocity = rs.Delta / days
+			velocity = delta / days
 		}
 		out = append(out, dto.RisingStarRow{
 			ChainID:     chainID,
-			AgentID:     rs.AgentID,
+			AgentID:     st.AgentID,
 			Name:        a.Name,
 			Image:       a.Image,
-			ScoreNow:    round2(rs.ScoreNow),
-			ScoreBefore: round2(rs.ScoreBefore),
-			Delta:       round2(rs.Delta),
+			ScoreNow:    round2(st.CompositeScore),
+			ScoreBefore: round2(st.CompositeScore - delta),
+			Delta:       round2(delta),
 			Velocity:    round2(velocity),
 			Period:      period,
 		})
 	}
 	return out, nil
+}
+
+func deltaForPeriod(st scorestats.AgentScoreStats, period string) float64 {
+	switch period {
+	case "7d":
+		return st.Delta7d
+	case "30d":
+		return st.Delta30d
+	default:
+		return st.Delta24h
+	}
 }
 
 func parsePeriod(p string) (time.Duration, error) {
@@ -295,12 +302,24 @@ func (s *Leaderboard) RisingStarsMulti(ctx context.Context, chainIDs []int64, pe
 	if len(chainIDs) == 1 {
 		return s.RisingStars(ctx, chainIDs[0], period, limit)
 	}
+	g, gctx := errgroup.WithContext(ctx)
+	rowsBy := make([][]dto.RisingStarRow, len(chainIDs))
+	for i, cid := range chainIDs {
+		i, cid := i, cid
+		g.Go(func() error {
+			rows, err := s.RisingStars(gctx, cid, period, limit)
+			if err != nil {
+				return err
+			}
+			rowsBy[i] = rows
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 	all := make([]dto.RisingStarRow, 0, len(chainIDs)*limit)
-	for _, cid := range chainIDs {
-		rows, err := s.RisingStars(ctx, cid, period, limit)
-		if err != nil {
-			return nil, err
-		}
+	for _, rows := range rowsBy {
 		all = append(all, rows...)
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].Delta > all[j].Delta })

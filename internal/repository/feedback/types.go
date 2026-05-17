@@ -17,12 +17,24 @@ type FeedbackResponse struct {
 	ResponseParsed map[string]any `bson:"responseParsed,omitempty"`
 }
 
-// FeedbackClassification holds the output of the rule-based (or future LLM) classifier.
+// RuleClassification holds the rule-engine verdict — always present.
+type RuleClassification struct {
+	Category string `bson:"category"` // service_feedback | config_feedback | app_specific | spam | noise | others
+}
+
+// FallbackClassification holds the LLM verdict — populated only when the LLM
+// fallback actually ran (i.e. rule returned "others" AND an LLM client was wired).
+type FallbackClassification struct {
+	Category   string  `bson:"category"`
+	Reason     string  `bson:"reason,omitempty"`
+	Confidence float64 `bson:"confidence"`
+}
+
+// FeedbackClassification persists both the rule verdict and (when LLM ran)
+// the fallback verdict so downstream consumers can separately query each.
 type FeedbackClassification struct {
-	Category      string  `bson:"category"`                // service_feedback | config_feedback | app_specific | others | spam | noise
-	Confidence    float64 `bson:"confidence"`              // 0.0–1.0
-	Source        string  `bson:"source"`                  // "rule" | "fallback"
-	NormalizedTag string  `bson:"normalizedTag,omitempty"` // canonical tag1 value
+	Rule     RuleClassification      `bson:"rule"`
+	Fallback *FallbackClassification `bson:"fallback,omitempty"`
 }
 
 // FeedbackRecord stores a single feedback event and its scoring impact.
@@ -48,7 +60,7 @@ type FeedbackRecord struct {
 	Type           string                 `bson:"type"` // reputation_feedback, etc.
 	PriceUSDC      float64                `bson:"priceUSDC"`
 	Wi             float64                `bson:"wi"`                     // difficulty weight at time of scoring
-	Vi             float64                `bson:"vi"`                     // validation score [0, 1]
+	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
 	Classification FeedbackClassification `bson:"classification"`          // set by classifier
 	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
 	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet

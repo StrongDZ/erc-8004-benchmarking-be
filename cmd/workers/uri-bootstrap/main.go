@@ -1,8 +1,9 @@
 package main
 
 // uri-bootstrap — Stream 1: cron daemon that scans decoded events per chain,
-// publishes URI messages to uri.{chainID}.event_uri queues, and advances the
-// per-chain URI cursor for TrustRank (Stream 2).
+// publishes URI messages to uri.{chainID}.event_uri queues, and advances uri_scanned_X
+// (producer scan position). uri_fetched_X is updated by EventURIConsumer after each
+// terminal offchain_data upsert; TrustRank (Stream 2) reads uri_fetched_X.
 //
 // Per-chain EventURIConsumers are started lazily on the first cycle that discovers
 // each chain, and run for the lifetime of the process.
@@ -89,7 +90,7 @@ func main() {
 	resolver := domainuri.NewResolver(&rawFetchAdapter{c: httpCl}, cfg.IPFSGateway, cfg.ArweaveGateway)
 
 	// EventURIConsumer factory — started per chain by the app on first discovery.
-	consumer := bootstrapapp.NewEventURIConsumer(mqConn, offchain, resolver, cfg.URIConsumerPrefetch)
+	consumer := bootstrapapp.NewEventURIConsumer(mqConn, offchain, resolver, cfgRepo, cfg.URIConsumerPrefetch)
 	startConsumer := func(ctx context.Context, chainID int64) {
 		if err := consumer.RunChain(ctx, chainID); err != nil && err != context.Canceled {
 			log.Printf("event_uri_consumer: chain=%d stopped: %v", chainID, err)
@@ -102,7 +103,6 @@ func main() {
 		contractsRepo,
 		cfgRepo,
 		eventsRepo,
-		offchain,
 		publisher,
 		int64(cfg.URIBootstrapBatchSize),
 		interval,

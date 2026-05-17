@@ -17,7 +17,6 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
-	"erc-8004-benchmarking-be/internal/repository/score"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -157,6 +156,7 @@ func (u *updatedAtJSON) UnmarshalJSON(b []byte) error {
 // Unknown fields are captured in Extra for offchain_metadata.
 type agentCard struct {
 	Name           string            `json:"name"`
+	Type           string            `json:"type"`
 	Description    string            `json:"description"`
 	Domains        []string          `json:"domains"`
 	Image          string            `json:"image"`
@@ -266,17 +266,17 @@ type cachedScale struct {
 
 // Processor implements EventProcessor with real domain logic.
 type Processor struct {
-	agentRepo      *agent.Repository
-	identityRepo   *identityrepo.Repository
-	feedbackRepo   *feedback.Repository
-	scoreRepo      *score.Repository
-	offchainRepo   *offchain.Repository
-	formulaCfg     scoring.FormulaConfig
-	uriPublisher   URIPublisher // may be nil; publishes service endpoint URIs asynchronously
-	tagStatsRepo   *tagstats.StatsRepository
-	tagCorrsRepo   *tagstats.CorrectionRepository
-	tagScaleCache  sync.Map // tag1 -> cachedScale
-	minSamples     int      // minimum feedbacks before scale is locked
+	agentRepo        *agent.Repository
+	identityRepo     *identityrepo.Repository
+	feedbackRepo     *feedback.Repository
+	offchainRepo     *offchain.Repository
+	formulaCfg       scoring.FormulaConfig
+	compositeWeights scoring.CompositeWeights
+	uriPublisher     URIPublisher // may be nil; publishes service endpoint URIs asynchronously
+	tagStatsRepo     *tagstats.StatsRepository
+	tagCorrsRepo     *tagstats.CorrectionRepository
+	tagScaleCache    sync.Map // tag1 -> cachedScale
+	minSamples       int      // minimum feedbacks before scale is locked
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.
@@ -292,13 +292,8 @@ type batchState struct {
 	// write buffers
 	pendingIdentity    []identityrepo.IdentityChange
 	pendingFeedbacks   []feedback.FeedbackRecord
-	pendingSnapshots   []struct {
-		ChainID  int64
-		AgentID  string
-		Snapshot score.ScoreSnapshotItem
-	}
 	pendingFBUpdates   []feedback.FeedbackUpdate
-	pendingServiceURIs []mq.ServiceURIMessage   // service endpoint URIs to publish asynchronously
-	pendingTierUpdates []tagstats.TierUpdate    // tag scale votes to flush in Phase 3
-	dirtyAgents        map[string]bool          // agentIDs that were created or mutated
+	pendingServiceURIs []mq.ServiceURIMessage // service endpoint URIs to publish asynchronously
+	pendingTierUpdates []tagstats.TierUpdate  // tag scale votes to flush in Phase 3
+	dirtyAgents        map[string]bool        // agentIDs that were created or mutated
 }

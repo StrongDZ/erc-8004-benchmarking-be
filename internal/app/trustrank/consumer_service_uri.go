@@ -13,10 +13,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
+	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 )
@@ -66,34 +68,33 @@ func (c *ServiceURIConsumer) RunChain(ctx context.Context, chainID int64) error 
 		return fmt.Errorf("service_uri_consumer chain=%d: set qos: %w", chainID, err)
 	}
 
-	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
+	tag := fmt.Sprintf("service-uri-chain%d-%d", chainID, time.Now().UnixNano())
+	deliveries, err := ch.Consume(queueName, tag, false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("service_uri_consumer chain=%d: start consume: %w", chainID, err)
 	}
 
 	log.Printf("service_uri_consumer: chain=%d started queue=%s", chainID, queueName)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case d, ok := <-deliveries:
-			if !ok {
-				return fmt.Errorf("service_uri_consumer chain=%d: delivery channel closed", chainID)
-			}
-
-			var msg mq.ServiceURIMessage
-			if err := json.Unmarshal(d.Body, &msg); err != nil {
-				log.Printf("service_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
-				_ = d.Ack(false)
-				continue
-			}
-
-			// Always ack — service URI fetch is best-effort, no retry.
-			c.handleMessage(ctx, msg)
+	return rmqinfra.GracefulConsumeLoop(ctx, ch, tag, deliveries, rmqinfra.GracefulConsumeParamsDefaults(), func(hctx context.Context, d amqp.Delivery) error {
+		var msg mq.ServiceURIMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			log.Printf("service_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
 			_ = d.Ack(false)
+			return nil
 		}
-	}
+
+		// Always ack — service URI fetch is best-effort, no retry.
+		c.HandleServiceURI(hctx, msg)
+		_ = d.Ack(false)
+		return nil
+	})
+}
+
+// HandleServiceURI fetches the service endpoint URI and writes the result to offchain_data.
+// Used by RunChain and ServiceURIConsumerPool workers.
+func (c *ServiceURIConsumer) HandleServiceURI(ctx context.Context, msg mq.ServiceURIMessage) {
+	c.handleMessage(ctx, msg)
 }
 
 // handleMessage fetches the service endpoint URI and writes the result to offchain_data.

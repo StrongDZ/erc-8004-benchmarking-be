@@ -8,44 +8,52 @@ package uribootstrap
 //   - Fetched but content is not JSON:                        ack + record status=1.
 //   - Successful JSON fetch:                                   ack + record status=5.
 //
-// Fetch failures are NOT retried to avoid blocking the URI cursor for broken links.
+// Fetch failures are NOT retried to avoid blocking uri_fetched advance for broken links.
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
 	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
+	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
+	configrepo "erc-8004-benchmarking-be/internal/repository/config"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 )
 
 // EventURIConsumer fetches URIs from the event_uri queue and writes results to offchain_data.
 type EventURIConsumer struct {
-	conn     *amqp.Connection
-	offchain *offchainrepo.Repository
-	resolver *domainuri.Resolver
-	prefetch int
+	conn       *amqp.Connection
+	offchain   *offchainrepo.Repository
+	resolver   *domainuri.Resolver
+	configRepo *configrepo.ConfigRepository
+	prefetch   int
 }
 
 // NewEventURIConsumer constructs a consumer. prefetch controls AMQP QoS prefetch count.
+// configRepo may be nil (cursor advance is skipped).
 func NewEventURIConsumer(
 	conn *amqp.Connection,
 	offchain *offchainrepo.Repository,
 	resolver *domainuri.Resolver,
+	configRepo *configrepo.ConfigRepository,
 	prefetch int,
 ) *EventURIConsumer {
 	if prefetch < 1 {
 		prefetch = 1
 	}
 	return &EventURIConsumer{
-		conn:     conn,
-		offchain: offchain,
-		resolver: resolver,
-		prefetch: prefetch,
+		conn:       conn,
+		offchain:   offchain,
+		resolver:   resolver,
+		configRepo: configRepo,
+		prefetch:   prefetch,
 	}
 }
 
@@ -68,39 +76,33 @@ func (c *EventURIConsumer) RunChain(ctx context.Context, chainID int64) error {
 		return fmt.Errorf("event_uri_consumer chain=%d: set qos: %w", chainID, err)
 	}
 
-	deliveries, err := ch.Consume(queueName, "", false, false, false, false, nil)
+	tag := fmt.Sprintf("event-uri-chain%d-%d", chainID, time.Now().UnixNano())
+	deliveries, err := ch.Consume(queueName, tag, false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("event_uri_consumer chain=%d: start consume: %w", chainID, err)
 	}
 
 	log.Printf("event_uri_consumer: chain=%d started queue=%s", chainID, queueName)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case d, ok := <-deliveries:
-			if !ok {
-				return fmt.Errorf("event_uri_consumer chain=%d: delivery channel closed", chainID)
-			}
-
-			var msg mq.AgentURIMessage
-			if err := json.Unmarshal(d.Body, &msg); err != nil {
-				// Malformed message — discard permanently (ack).
-				log.Printf("event_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
-				_ = d.Ack(false)
-				continue
-			}
-
-			if err := c.handleMessage(ctx, msg); err != nil {
-				// Infrastructure error (DB write, context) — requeue for retry.
-				log.Printf("event_uri_consumer chain=%d: nack+requeue uri=%s: %v", chainID, msg.URI, err)
-				_ = d.Nack(false, true)
-				continue
-			}
+	return rmqinfra.GracefulConsumeLoop(ctx, ch, tag, deliveries, rmqinfra.GracefulConsumeParamsDefaults(), func(hctx context.Context, d amqp.Delivery) error {
+		var msg mq.AgentURIMessage
+		if err := json.Unmarshal(d.Body, &msg); err != nil {
+			// Malformed message — discard permanently (ack).
+			log.Printf("event_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
 			_ = d.Ack(false)
+			return nil
 		}
-	}
+
+		if err := c.handleMessage(hctx, msg); err != nil {
+			// Infrastructure error (DB write, context) — requeue for retry.
+			log.Printf("event_uri_consumer chain=%d: nack+requeue uri=%s: %v", chainID, msg.URI, err)
+			_ = d.Nack(false, true)
+			return nil
+		}
+		c.advanceFetchedCursor(hctx, msg.ChainID, msg.BlockNumber, msg.LogIndex)
+		_ = d.Ack(false)
+		return nil
+	})
 }
 
 // handleMessage fetches the URI and writes the result to offchain_data.
@@ -113,7 +115,7 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 
 	sourceType := domainuri.DetectURIType(msg.URI).String()
 	eventType := msg.EventName
-	contractType := "" // not carried in AgentURIMessage; not required for offchain_data
+	contractType := msg.ContractType
 
 	body, isJSON, fetchErr := c.resolver.FetchRaw(ctx, msg.URI)
 
@@ -141,4 +143,82 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 		}
 		return nil
 	}
+}
+
+// advanceFetchedCursor moves uri_fetched_{chainID} forward to at least (blockNumber, logIndex)
+// after a terminal offchain upsert. Skips legacy queue payloads with no position.
+func (c *EventURIConsumer) advanceFetchedCursor(ctx context.Context, chainID int64, blockNumber uint64, logIndex uint) {
+	if c.configRepo == nil {
+		return
+	}
+	if blockNumber == 0 && logIndex == 0 {
+		return
+	}
+
+	key := URIFetchedCursorKey(chainID)
+	entry, err := c.configRepo.Get(ctx, key)
+	if err != nil && err != mongodrv.ErrNoDocuments {
+		log.Printf("event_uri_consumer: load fetched cursor chain=%d: %v", chainID, err)
+		return
+	}
+	if entry != nil && entry.Metadata != nil {
+		oldBN, oldLI, ok := parseBlockLogFromMetadata(entry.Metadata)
+		if ok {
+			if blockNumber < oldBN || (blockNumber == oldBN && logIndex <= oldLI) {
+				return
+			}
+		}
+	}
+
+	md := map[string]any{"blockNumber": blockNumber, "logIndex": logIndex}
+	inserted, err := c.configRepo.SetIfAbsent(ctx, key, md)
+	if err != nil {
+		log.Printf("event_uri_consumer: save fetched cursor chain=%d: %v", chainID, err)
+		return
+	}
+	if !inserted {
+		if err := c.configRepo.UpdateMetadata(ctx, key, md); err != nil {
+			log.Printf("event_uri_consumer: update fetched cursor chain=%d: %v", chainID, err)
+		}
+	}
+}
+
+func parseBlockLogFromMetadata(md map[string]any) (blockNumber uint64, logIndex uint, ok bool) {
+	bn, ok1 := md["blockNumber"]
+	li, ok2 := md["logIndex"]
+	if !ok1 || !ok2 {
+		return 0, 0, false
+	}
+
+	switch v := bn.(type) {
+	case float64:
+		blockNumber = uint64(v)
+	case int64:
+		blockNumber = uint64(v)
+	case int32:
+		blockNumber = uint64(v)
+	case uint32:
+		blockNumber = uint64(v)
+	case uint64:
+		blockNumber = v
+	default:
+		return 0, 0, false
+	}
+
+	switch v := li.(type) {
+	case float64:
+		logIndex = uint(v)
+	case int64:
+		logIndex = uint(v)
+	case int32:
+		logIndex = uint(v)
+	case uint32:
+		logIndex = uint(v)
+	case uint64:
+		logIndex = uint(v)
+	default:
+		return 0, 0, false
+	}
+
+	return blockNumber, logIndex, true
 }

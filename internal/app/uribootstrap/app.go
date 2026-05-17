@@ -3,8 +3,9 @@ package uribootstrap
 // app.go — URI resolver (Stream 1).
 // Cron daemon: per-chain sequential scan of decoded events, publishes any URI
 // found (identity or reputation) to uri.{chainID}.event_uri queue, then advances
-// a per-chain cursor so that TrustRank (Stream 2) knows which events are safe
-// to process (all URIs enqueued up to that point).
+// uri_scanned_X (producer scan position). TrustRank bounds on-chain processing
+// using uri_fetched_X, updated by EventURIConsumer after offchain_data reaches
+// a terminal fetch status.
 //
 // Actual HTTP/IPFS fetching is handled by the separate EventURIConsumer started
 // alongside this app in cmd/workers/uri-bootstrap.
@@ -23,12 +24,18 @@ import (
 	configrepo "erc-8004-benchmarking-be/internal/repository/config"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
-	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 )
 
-// URICursorKey returns the config key for the per-chain URI resolver cursor.
+// URICursorKey returns the config key for the per-chain producer scan cursor
+// (how far decoded events have been scanned for URI queue messages).
 func URICursorKey(chainID int64) string {
-	return fmt.Sprintf("uri_available_%d", chainID)
+	return fmt.Sprintf("uri_scanned_%d", chainID)
+}
+
+// URIFetchedCursorKey returns the config key for the consumer-driven cursor:
+// max event position whose URI has been resolved to a terminal offchain_data status.
+func URIFetchedCursorKey(chainID int64) string {
+	return fmt.Sprintf("uri_fetched_%d", chainID)
 }
 
 // App runs the URI resolver cron: scan events per chain, publish URIs to queue, save cursor.
@@ -36,7 +43,6 @@ type App struct {
 	contracts    *contractsrepo.ContractsRepository
 	configRepo   *configrepo.ConfigRepository
 	eventsRepo   *eventrepo.Repository
-	offchain     *offchainrepo.Repository
 	uriPublisher mq.Publisher
 	batchSize    int64
 	interval     time.Duration
@@ -52,7 +58,6 @@ func NewApp(
 	contracts *contractsrepo.ContractsRepository,
 	configRepo *configrepo.ConfigRepository,
 	eventsRepo *eventrepo.Repository,
-	offchain *offchainrepo.Repository,
 	uriPublisher mq.Publisher,
 	batchSize int64,
 	interval time.Duration,
@@ -68,7 +73,6 @@ func NewApp(
 		contracts:     contracts,
 		configRepo:    configRepo,
 		eventsRepo:    eventsRepo,
-		offchain:      offchain,
 		uriPublisher:  uriPublisher,
 		batchSize:     batchSize,
 		interval:      interval,
@@ -159,29 +163,22 @@ func (a *App) runChain(ctx context.Context, chainID int64) error {
 	}
 }
 
-// publishEventURI extracts any URI from the event and publishes it to the event_uri queue
-// if it has not already been recorded in offchain_data (any status).
+// publishEventURI extracts any URI from the event and publishes it to the event_uri queue.
+// The consumer upserts offchain_data idempotently whether or not the URI was cached.
 func (a *App) publishEventURI(ctx context.Context, ev eventrepo.DecodedEvent) {
 	domainEv := domainuri.Event{
-		EventName: ev.EventName,
-		Args:      ev.Args,
-		ChainID:   ev.ChainID,
-		TxHash:    ev.TxHash,
-		LogIndex:  ev.LogIndex,
-		DecodedAt: ev.DecodedAt,
+		EventName:    ev.EventName,
+		Args:         ev.Args,
+		ChainID:      ev.ChainID,
+		TxHash:       ev.TxHash,
+		BlockNumber:  ev.BlockNumber,
+		LogIndex:     ev.LogIndex,
+		DecodedAt:    ev.DecodedAt,
+		ContractType: ev.ContractType,
 	}
 
 	uri, ok := domainuri.ExtractURIFromEvent(domainEv)
 	if !ok || uri == "" {
-		return
-	}
-
-	// Skip if any fetch attempt has already been recorded (success or failure).
-	exists, err := a.offchain.Exists(ctx, uri)
-	if err != nil {
-		log.Printf("uri_resolver: exists check failed chain=%d tx=%s: %v", ev.ChainID, ev.TxHash, err)
-	}
-	if exists {
 		return
 	}
 
@@ -190,12 +187,15 @@ func (a *App) publishEventURI(ctx context.Context, ev eventrepo.DecodedEvent) {
 	}
 
 	msg := mq.AgentURIMessage{
-		URI:       uri,
-		ChainID:   ev.ChainID,
-		EventID:   ev.TxHash, // best-effort; full EventDocumentID not needed here
-		DecodedAt: ev.DecodedAt,
-		EventName: ev.EventName,
-		Source:    "bootstrap",
+		URI:          uri,
+		ChainID:      ev.ChainID,
+		EventID:      ev.TxHash, // best-effort; full EventDocumentID not needed here
+		BlockNumber:  ev.BlockNumber,
+		LogIndex:     ev.LogIndex,
+		DecodedAt:    ev.DecodedAt,
+		EventName:    ev.EventName,
+		ContractType: ev.ContractType,
+		Source:       "bootstrap",
 	}
 
 	queueName := mq.EventURIQueueName(ev.ChainID)

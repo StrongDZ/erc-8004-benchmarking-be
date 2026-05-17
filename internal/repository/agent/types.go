@@ -19,6 +19,7 @@ type RegistrationService struct {
 type IdentityFields struct {
 	AgentURI       string
 	Name           string
+	Type           string
 	Image          string
 	Domains        []string
 	Description    string
@@ -47,6 +48,7 @@ type AgentDocument struct {
 	AgentWallet      string   `bson:"agentWallet,omitempty"` // EIP-712-verified wallet from setAgentWallet(); first-class field
 	AgentURI         string   `bson:"agentURI"`
 	Name             string   `bson:"name,omitempty"`
+	Type             string   `bson:"type,omitempty"`
 	Domains          []string `bson:"domains,omitempty"`
 	Image            string   `bson:"image,omitempty"`
 	Description      string   `bson:"description,omitempty"`
@@ -63,8 +65,13 @@ type AgentDocument struct {
 	Tags             []string `bson:"tags,omitempty"`          // denormalized from onchainMetadata.tags for filtering
 	OnchainMetadata  map[string]OnchainMetadataValue `bson:"onchainMetadata,omitempty"` // from MetadataSet events
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
-	AccumulatedScore float64  `bson:"accumulatedScore"`
+	ReputationScore float64  `bson:"reputationScore"`
 	ScoreUpdateAt    int64    `bson:"scoreUpdateAt"` // Unix seconds of last score update
+	CompositeScore  float64  `bson:"compositeScore"`
+	ReputationNorm  float64  `bson:"reputationNorm"`
+	ServicesScore   float64  `bson:"servicesScore"`
+	PublisherScore  float64  `bson:"publisherScore"`
+	ComplianceScore float64  `bson:"complianceScore"`
 	ConsecutiveFails int64    `bson:"consecutiveFails"`
 	TotalTasks       int64    `bson:"totalTasks"`
 	TotalPassed      int64    `bson:"totalPassed"`

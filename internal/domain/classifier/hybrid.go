@@ -22,6 +22,7 @@ type HybridInput struct {
 	AgentDescription string
 	AgentServices    string
 	AgentTags        []string // denormalized onchain tags, e.g. ["defi","swap"]
+	Endpoint         string   // ERC-8004 v2.0 NewFeedback.endpoint — service URL
 }
 
 // HybridResult extends the base Result with LLM-specific metadata.
@@ -67,6 +68,13 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 	// Normalize value once so both stages use the same number.
 	valueNorm := NormalizeValue(in.ValueRaw, in.ValueDecimals)
 
+	// Compute tag-scale tier so the LLM prompt can interpret value meaning
+	// (binary "passed"=1 vs star5 "1 star"=1). Empty when value is missing.
+	scale := ""
+	if real, ok := RawValueToReal(in.ValueRaw, in.ValueDecimals); ok {
+		scale = AssignTier(real)
+	}
+
 	// Stage 1 + 2: rule-based classifier.
 	ruleResult := Classify(in.Tag1, in.Tag2)
 
@@ -95,6 +103,8 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 		in.AgentDescription,
 		in.AgentServices,
 		in.AgentTags,
+		in.Endpoint,
+		scale,
 	)
 
 	// Post-hoc safety overrides: catch cases the LLM consistently miscategorises.

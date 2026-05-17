@@ -1,10 +1,10 @@
 package main
 
-// trustrank — Stream 2: cron, per-chain reads events up to URI cursor,
-// processes in strict chronological order, computes TrustRank scores.
+// trustrank — Stream 2: periodic full pass over decoded events per chain (checkpoint → uri_fetched),
+// computes TrustRank scores. First pass runs at startup; TRUSTRANK_INTERVAL_SECONDS pauses between passes.
 //
-// Also starts per-chain ServiceURIConsumers that fetch service endpoint URIs
-// published by the TrustRank processor during identity event handling.
+// Also starts a shared ServiceURIConsumerPool: one AMQP reader per chain on
+// uri.{chainID}.service_uri, with parallel HTTP workers across all chains.
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -65,7 +64,6 @@ func main() {
 	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
 	identities := identityrepo.NewRepository(analyzedDB, cfg.IdentityHistColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
-	scores := scorerepo.NewRepository(analyzedDB, cfg.ScoreHistColl)
 	offchain := offchainrepo.NewRepository(db, cfg.OffchainColl)
 	tagStats := tagstatsrepo.NewStatsRepository(analyzedDB, cfg.TagStatsColl)
 	tagCorrs := tagstatsrepo.NewCorrectionRepository(analyzedDB, cfg.TagCorrectionsColl)
@@ -85,9 +83,6 @@ func main() {
 	if err := feedbacks.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("feedback_history indexes: %v", err)
 	}
-	if err := scores.EnsureIndexes(ctx); err != nil {
-		log.Fatalf("score_history indexes: %v", err)
-	}
 	if err := offchain.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("offchain_data indexes: %v", err)
 	}
@@ -105,20 +100,17 @@ func main() {
 	}
 	defer publisher.Close()
 
-	// URI resolver used by ServiceURIConsumers.
+	// URI resolver used by the service_uri worker pool.
 	httpCl := httpclient.NewClientWithOptions(httpclient.ClientOptions{
 		Timeout:   cfg.HTTPSFetchTimeout,
 		UserAgent: cfg.HTTPSUserAgent,
 	})
 	resolver := domainuri.NewResolver(&rawFetchAdapter{c: httpCl}, cfg.IPFSGateway, cfg.ArweaveGateway)
 
-	// ServiceURIConsumer factory — started per chain by the app on first discovery.
-	svcConsumer := trustrankapp.NewServiceURIConsumer(mqConn, offchain, resolver, cfg.URIConsumerPrefetch)
-	startSvcConsumer := func(ctx context.Context, chainID int64) {
-		if err := svcConsumer.RunChain(ctx, chainID); err != nil && err != context.Canceled {
-			log.Printf("service_uri_consumer: chain=%d stopped: %v", chainID, err)
-		}
-	}
+	svcPool := trustrankapp.NewServiceURIConsumerPool(
+		mqConn, offchain, resolver, cfg.URIConsumerPrefetch, cfg.ServiceURIConsumerWorkers,
+	)
+	svcPool.Start(ctx)
 
 	formulaCfg := scoring.FormulaConfig{
 		Alpha:     cfg.TrustRankAlpha,
@@ -130,7 +122,14 @@ func main() {
 		SBase:     0.0,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, scores, offchain, formulaCfg, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
+	compositeWeights := scoring.CompositeWeights{
+		Reputation: cfg.ScoreWeightReputation,
+		Services:   cfg.ScoreWeightServices,
+		Publisher:  cfg.ScoreWeightPublisher,
+		Compliance: cfg.ScoreWeightCompliance,
+	}
+
+	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,
@@ -139,10 +138,10 @@ func main() {
 		cfg.TrustRankInterval,
 		cfg.TrustRankEventBatchSize,
 		proc,
-		startSvcConsumer,
+		svcPool.EnsureChainReader,
 	)
 
-	log.Printf("trustrank started interval=%s", cfg.TrustRankInterval)
+	log.Printf("trustrank started pause_between_passes=%s (first pass runs immediately)", cfg.TrustRankInterval)
 	if err := app.Run(ctx); err != nil && err != context.Canceled {
 		log.Printf("trustrank stopped: %v", err)
 	}

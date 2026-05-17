@@ -313,10 +313,11 @@ func isSpam(t1, t2 string) bool {
 		spamRankPattern.MatchString(t2)
 }
 
+// isNoise matches only explicit junk tag1 values (test/asd-style) — records
+// with empty tag1+tag2 are NOT classified as noise here; they fall through
+// to the "others" fallback so the LLM can read the offchain content and
+// classify based on real signal (comment/attachments/proofOfPayment).
 func isNoise(t1, t2 string) bool {
-	if t1 == "" && t2 == "" {
-		return true
-	}
 	if noiseTag1Set[t1] && (t2 == "" || noiseTag1Set[t2]) {
 		return true
 	}
@@ -421,7 +422,7 @@ func AssignTier(real float64) string {
 
 // NormalizeValueWithScale normalizes a pre-computed real value using a detected scale.
 // Caller must compute real = RawValueToReal(rawValue, valueDecimals) before calling.
-// Falls back to pct100 (÷100, clamped to [-1, 1]) when scale is "" or unknown.
+// Callers should resolve "" via AssignTier before calling; the default case handles explicit "pct100" or unknown strings.
 func NormalizeValueWithScale(real float64, scale string) float64 {
 	clamp := func(v float64) float64 { return math.Max(-1.0, math.Min(1.0, v)) }
 	switch scale {

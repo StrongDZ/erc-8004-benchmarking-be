@@ -111,6 +111,108 @@ func SummarizeJSONLike(s string, maxRunes int) string {
 	return SummarizeText(s, maxRunes)
 }
 
+// SummarizeJSONLikeSchema parses s as JSON and surfaces schema FIELD NAMES
+// alongside compact value previews. Unlike SummarizeJSONLike (which only
+// returns one preferred field's value), this keeps key=value pairs joined
+// with "; " so the LLM sees the schema signal — e.g.
+// `validationType=crypto-economic; slashingConditions=[3 items]; result=passed`
+// is a much stronger classification cue than the bare value strings.
+//
+// Value previews:
+//   strings → the string truncated to ~32 chars
+//   numbers / bool → printed as-is
+//   array → "[N items]"
+//   object → "{N keys}"
+//
+// Falls back to SummarizeJSONLike when s is not parseable JSON. Keys with
+// empty / nil values are skipped. Output truncated to maxRunes.
+func SummarizeJSONLikeSchema(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	if s == "" || maxRunes <= 0 {
+		return ""
+	}
+	if !(strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")) {
+		return SummarizeText(s, maxRunes)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(s), &obj); err != nil {
+		return SummarizeJSONLike(s, maxRunes)
+	}
+	if len(obj) == 0 {
+		return ""
+	}
+
+	// Deterministic key order: alpha-sort so prompt is stable across runs.
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sortStringsInPlace(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		v := obj[k]
+		preview := schemaValuePreview(v)
+		if preview == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", k, preview))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return truncateRunes(strings.Join(parts, "; "), maxRunes)
+}
+
+// schemaValuePreview renders one JSON value into a short string. Returns "" for
+// empty strings, nil, empty arrays/objects so SummarizeJSONLikeSchema can skip
+// the key entirely.
+func schemaValuePreview(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return ""
+		}
+		return truncateRunes(s, 32)
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		// json.Unmarshal decodes all numbers as float64; print as int when integral.
+		if t == float64(int64(t)) {
+			return fmt.Sprintf("%d", int64(t))
+		}
+		return fmt.Sprintf("%g", t)
+	case []any:
+		if len(t) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("[%d items]", len(t))
+	case map[string]any:
+		if len(t) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("{%d keys}", len(t))
+	default:
+		return ""
+	}
+}
+
+// sortStringsInPlace is a tiny stable alpha sort kept inline so this file
+// doesn't pull in the "sort" stdlib package for one call site.
+func sortStringsInPlace(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
+
 // ExtractDomainHints surfaces OASF-style domain leaves from a free-text
 // agentServices payload. It first looks for slash-paths
 // (e.g. "technology/blockchain/defi"), de-duplicates leaves, and joins with

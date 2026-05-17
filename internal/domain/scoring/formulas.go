@@ -5,10 +5,14 @@ package scoring
 // implements §3.2 Difficulty Weight (wᵢ)
 // implements §3.3 Adaptive Time Decay (λᵢ)
 // implements §3.4 Progressive Penalty (P)
+// implements composite score blend (reputation + services + publisher + compliance)
 //
 // ALL scoring formula logic lives here and nowhere else in the codebase.
 
-import "math"
+import (
+	"math"
+	"strings"
+)
 
 // FormulaConfig holds the tunable TrustRank parameters, read from environment at startup.
 type FormulaConfig struct {
@@ -92,10 +96,14 @@ const secondsPerDay = 86400.0
 
 // ApplyTaskScore performs an O(1) incremental score update (write path, §3.2).
 //
-// It decays the existing accumulatedScore forward to tNowUnix, then adds the new
-// feedback contribution (wᵢ·vᵢ). The caller must write the returned value to MongoDB.
+// It decays the existing reputationScore forward to tNowUnix, then adds the new
+// feedback contribution wᵢ·(vᵢ − 0.40). vi = 0.40 is neutral (zero contribution);
+// vi > 0.40 increases the score; vi < 0.40 decreases it.
 //
-// accScore:       current accumulatedScore stored in the agent document.
+// NOTE: This function does NOT apply the consecutive-failure penalty. When vi < 0.40,
+// the caller must additionally subtract ComputePenalty(newConsecFails, cfg.Gamma, cfg.Theta).
+//
+// accScore:       current reputationScore stored in the agent document.
 // lastUpdateUnix: Unix seconds of the last score update.
 // wi:             difficulty weight of the new feedback (ComputeWi output).
 // vi:             validation score [0, 1] of the new feedback.
@@ -111,24 +119,25 @@ func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNow
 	}
 
 	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	return decayed + wi*vi
+	effectiveVi := vi - 0.40
+	return decayed + wi*effectiveVi
 }
 
 // ComputeCurrentScore performs lazy decay evaluation (read path, §3.6).
 //
 // Returns the displayed score S clamped to (-∞, 1000]; negative scores are allowed.
-// This value is for display only — NEVER write it back to MongoDB as accumulatedScore.
+// This value is for display only — NEVER write it back to MongoDB as reputationScore.
 //
-// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight)
-// rather than the true per-task wᵢ mix. This intentionally under-decays high-wᵢ tasks
-// at read time in exchange for O(1) computation. The write path (ApplyTaskScore) is exact.
+// The consecutive-failure penalty is now baked into reputationScore at write time
+// (see ApplyTaskScore + ComputePenalty), so this function applies pure decay only.
 //
-// accScore:         stored accumulatedScore.
-// lastUpdateUnix:   Unix seconds of last score update.
-// consecutiveFails: current consecutive failure count.
-// nowUnix:          current Unix seconds.
-// cfg:              formula parameters.
-func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, consecutiveFails int64, nowUnix int64, cfg FormulaConfig) float64 {
+// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight).
+//
+// accScore:       stored reputationScore (penalty already included).
+// lastUpdateUnix: Unix seconds of last score update.
+// nowUnix:        current Unix seconds.
+// cfg:            formula parameters.
+func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, nowUnix int64, cfg FormulaConfig) float64 {
 	lambda := ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
 
 	deltaDays := float64(nowUnix-lastUpdateUnix) / secondsPerDay
@@ -137,38 +146,176 @@ func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, consecutiveFail
 	}
 
 	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
-	score := cfg.SBase + decayed - penalty
-	return math.Min(1000.0, score)
+	return math.Min(1000.0, cfg.SBase+decayed)
 }
 
-// RevertFeedbackScore subtracts a previously scored feedback's residual contribution
-// in O(1) time (§3.7, used when FeedbackRevoked is processed).
+// ── Composite score blend ───────────────────────────────────────────────────────
+
+// CompositeWeights holds the blend factors for the four composite components.
+// defaults: 0.5 reputation + 0.2 services + 0.2 publisher + 0.1 compliance.
+type CompositeWeights struct {
+	Reputation float64
+	Services   float64
+	Publisher  float64
+	Compliance float64
+}
+
+// ComplianceWeights holds tier point totals (must sum to 100; default 80/20).
+type ComplianceWeights struct {
+	Tier1Total float64 // total points awarded across all 5 tier-1 fields
+	Tier2Total float64 // total points awarded across all 5 tier-2 fields
+}
+
+// DefaultCompositeWeights returns the spec-defined default blend weights.
+func DefaultCompositeWeights() CompositeWeights {
+	return CompositeWeights{Reputation: 0.5, Services: 0.2, Publisher: 0.2, Compliance: 0.1}
+}
+
+// DefaultComplianceWeights returns the spec-defined default compliance tier weights.
+func DefaultComplianceWeights() ComplianceWeights {
+	return ComplianceWeights{Tier1Total: 80.0, Tier2Total: 20.0}
+}
+
+// NormalizeReputation maps raw reputation [-inf, 1000] → [0, 100].
+// negative values floor at 0 (prevents decay-pumping of low scores).
+func NormalizeReputation(rawRep float64) float64 {
+	if rawRep <= 0 {
+		return 0
+	}
+	if rawRep >= 1000 {
+		return 100
+	}
+	return rawRep / 10.0
+}
+
+// ComputeServicesScore returns the healthy-endpoint percentage [0, 100].
+// if totalServices == 0 (no declared services), returns 0.
+func ComputeServicesScore(totalServices, healthyCount int) float64 {
+	if totalServices <= 0 {
+		return 0
+	}
+	if healthyCount < 0 {
+		healthyCount = 0
+	}
+	if healthyCount > totalServices {
+		healthyCount = totalServices
+	}
+	return float64(healthyCount) / float64(totalServices) * 100.0
+}
+
+// ExpectedAgentURIType is the canonical ERC-8004 registration type identifier.
+const ExpectedAgentURIType = "https://eips.ethereum.org/EIPS/eip-8004#registration-v1"
+
+// ComplianceInput is the minimum field set needed for compliance scoring.
+// all fields read directly from AgentDocument (caller passes them in).
+type ComplianceInput struct {
+	AgentURI       string
+	Type           string
+	Name           string
+	Description    string
+	Image          string
+	Services       int  // len(agent.Services)
+	Registrations  int  // len(agent.Registrations)
+	SupportedTrust int  // len(agent.SupportedTrust)
+	X402Support    bool
+	AgentWallet    string
+	CardUpdatedAt  string
+}
+
+// ComputeComplianceScore returns the compliance percentage [0, 100].
+// gate: if AgentURI is empty, return 0.
+// tier-1 core (5 fields, default 80 pts total, 16 pts each):
+//   - Type equals ExpectedAgentURIType
+//   - Name non-empty
+//   - Description non-empty
+//   - Services count >= 1
+//   - Registrations count >= 1
 //
-// accScore:              current accumulatedScore.
-// lastUpdateUnix:        Unix seconds of the agent's last score update.
-// wi:                    difficulty weight of the feedback being revoked.
-// vi:                    validation score of the feedback being revoked.
-// feedbackTimestampUnix: Unix seconds when the original feedback was applied.
-// nowUnix:               current Unix seconds.
-// cfg:                   formula parameters.
-func RevertFeedbackScore(accScore float64, lastUpdateUnix int64, wi, vi float64, feedbackTimestampUnix int64, nowUnix int64, cfg FormulaConfig) float64 {
-	avgWi := math.Max(wi, cfg.Alpha)
-	lambda := ComputeDecayRate(avgWi, cfg.TBaseDays)
-
-	// Decay the full accumulated score forward to now.
-	deltaDaysTotal := float64(nowUnix-lastUpdateUnix) / secondsPerDay
-	if deltaDaysTotal < 0 {
-		deltaDaysTotal = 0
+// tier-2 supporting (5 fields, default 20 pts total, 4 pts each):
+//   - Image non-empty
+//   - SupportedTrust count >= 1
+//   - X402Support true
+//   - AgentWallet non-empty
+//   - CardUpdatedAt non-empty
+func ComputeComplianceScore(in ComplianceInput, w ComplianceWeights) float64 {
+	if strings.TrimSpace(in.AgentURI) == "" {
+		return 0
 	}
-	decayed := accScore * ComputeDecayFactor(lambda, deltaDaysTotal)
 
-	// Compute what the revoked feedback's residual contribution is at nowUnix.
-	deltaDaysFeedback := float64(nowUnix-feedbackTimestampUnix) / secondsPerDay
-	if deltaDaysFeedback < 0 {
-		deltaDaysFeedback = 0
+	t1 := w.Tier1Total / 5
+	var tier1Earned float64
+	if in.Type == ExpectedAgentURIType {
+		tier1Earned += t1
 	}
-	residual := wi * vi * ComputeDecayFactor(lambda, deltaDaysFeedback)
+	if strings.TrimSpace(in.Name) != "" {
+		tier1Earned += t1
+	}
+	if strings.TrimSpace(in.Description) != "" {
+		tier1Earned += t1
+	}
+	if in.Services >= 1 {
+		tier1Earned += t1
+	}
+	if in.Registrations >= 1 {
+		tier1Earned += t1
+	}
 
-	return decayed - residual
+	t2 := w.Tier2Total / 5
+	var tier2Earned float64
+	if strings.TrimSpace(in.Image) != "" {
+		tier2Earned += t2
+	}
+	if in.SupportedTrust >= 1 {
+		tier2Earned += t2
+	}
+	if in.X402Support {
+		tier2Earned += t2
+	}
+	if strings.TrimSpace(in.AgentWallet) != "" {
+		tier2Earned += t2
+	}
+	if strings.TrimSpace(in.CardUpdatedAt) != "" {
+		tier2Earned += t2
+	}
+
+	return tier1Earned + tier2Earned
 }
+
+// ComputeCompositeScore blends the four normalized component scores.
+// each component must already be in [0, 100]; result is clamped to [0, 100].
+func ComputeCompositeScore(reputation, services, publisher, compliance float64, w CompositeWeights) float64 {
+	if reputation < 0 {
+		reputation = 0
+	}
+	if reputation > 100 {
+		reputation = 100
+	}
+	if services < 0 {
+		services = 0
+	}
+	if services > 100 {
+		services = 100
+	}
+	if publisher < 0 {
+		publisher = 0
+	}
+	if publisher > 100 {
+		publisher = 100
+	}
+	if compliance < 0 {
+		compliance = 0
+	}
+	if compliance > 100 {
+		compliance = 100
+	}
+
+	result := reputation*w.Reputation + services*w.Services + publisher*w.Publisher + compliance*w.Compliance
+	if result < 0 {
+		result = 0
+	}
+	if result > 100 {
+		result = 100
+	}
+	return result
+}
+

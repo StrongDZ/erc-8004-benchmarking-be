@@ -53,7 +53,7 @@ func (r *Repository) FindByOASFCapabilities(ctx context.Context, filter OASFFilt
 	}
 
 	opts := options.Find().
-		SetSort(bson.D{{Key: "accumulatedScore", Value: -1}}).
+		SetSort(bson.D{{Key: "reputationScore", Value: -1}}).
 		SetSkip(skip).
 		SetLimit(limit)
 

@@ -18,7 +18,6 @@ import (
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -45,7 +44,6 @@ func main() {
 
 	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
-	scores := scorerepo.NewRepository(analyzedDB, cfg.ScoreHistColl)
 	corrections := tagstatsrepo.NewCorrectionRepository(analyzedDB, cfg.TagCorrectionsColl)
 	deltas := tagstatsrepo.NewDeltaRepository(analyzedDB, cfg.RescaleDeltasColl)
 
@@ -54,9 +52,6 @@ func main() {
 	}
 	if err := feedbacks.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("feedback_history indexes: %v", err)
-	}
-	if err := scores.EnsureIndexes(ctx); err != nil {
-		log.Fatalf("score_history indexes: %v", err)
 	}
 
 	formulaCfg := scoring.FormulaConfig{
@@ -70,7 +65,7 @@ func main() {
 
 	interval := time.Duration(cfg.DecayIntervalHours) * time.Hour / 2 // half the decay interval ≈ 2h default
 
-	app := rescaleapp.NewApp(mc, agents, feedbacks, scores, corrections, deltas, formulaCfg, interval)
+	app := rescaleapp.NewApp(mc, agents, feedbacks, corrections, deltas, formulaCfg, interval)
 
 	log.Printf("rescale started interval=%s", interval)
 	if err := app.Run(ctx); err != nil && err != context.Canceled {

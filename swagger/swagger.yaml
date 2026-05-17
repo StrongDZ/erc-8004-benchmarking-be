@@ -1,0 +1,943 @@
+basePath: /api/v1
+definitions:
+  dto.Error:
+    properties:
+      code:
+        type: string
+      message:
+        type: string
+    type: object
+  dto.Meta:
+    properties:
+      limit:
+        type: integer
+      page:
+        type: integer
+      total:
+        type: integer
+    type: object
+  dto.Response:
+    properties:
+      data: {}
+      error:
+        $ref: '#/definitions/dto.Error'
+      meta:
+        $ref: '#/definitions/dto.Meta'
+      requestId:
+        type: string
+      success:
+        type: boolean
+    type: object
+info:
+  contact: {}
+  description: REST API for leaderboard, agent profiles, OASF discovery, chains metadata,
+    and admin observability.
+  title: ERC-8004 Benchmarking API
+  version: "1.0"
+paths:
+  /admin/indexer-status:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      security:
+      - ApiKeyAuth: []
+      summary: Indexer status
+      tags:
+      - admin
+  /admin/scoring/recompute:
+    post:
+      produces:
+      - application/json
+      responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/dto.Response'
+      security:
+      - ApiKeyAuth: []
+      summary: Recompute scoring (v2 placeholder)
+      tags:
+      - admin
+  /admin/simulator/start:
+    post:
+      produces:
+      - application/json
+      responses:
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/dto.Response'
+      security:
+      - ApiKeyAuth: []
+      summary: Start simulator (v2 placeholder)
+      tags:
+      - admin
+  /agents/{chainId}/{agentId}:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent profile
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/activity-heatmap:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: Window in days
+        in: query
+        name: days
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent activity heatmap
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/anti-spam:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent anti-spam (v2 placeholder)
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/feedbacks:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: Feedback category
+        in: query
+        name: category
+        type: string
+      - description: passed|failed|revoked
+        in: query
+        name: status
+        type: string
+      - description: RFC3339 start time
+        in: query
+        name: from
+        type: string
+      - description: RFC3339 end time
+        in: query
+        name: to
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      - description: newest|oldest
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent feedback list
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/feedbacks/{feedbackId}:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: Feedback ID
+        in: path
+        name: feedbackId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent feedback detail
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/identity-history:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent identity history
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/overview:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent overview tab (basic info + services health + metadata)
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/penalties:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: fail|revoked|both
+        in: query
+        name: type
+        type: string
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent penalties
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/proof/{txHash}:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: Transaction hash
+        in: path
+        name: txHash
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent proof by transaction
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/radar:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Agent radar
+      tags:
+      - agents
+  /agents/{chainId}/{agentId}/related:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      - description: skill|domain|both
+        in: query
+        name: by
+        type: string
+      - description: Max results
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Related agents
+      tags:
+      - agents
+  /chains:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: List supported chains
+      tags:
+      - chains
+  /chains/{chainId}/contracts:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: List chain contract addresses
+      tags:
+      - chains
+  /leaderboard:
+    get:
+      description: Returns paginated leaderboard rows with filters.
+      parameters:
+      - description: Chain ID
+        in: query
+        name: chainId
+        required: true
+        type: integer
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Page size (max 100)
+        in: query
+        name: limit
+        type: integer
+      - description: score_desc|score_asc|tasks_desc|recent
+        in: query
+        name: sort
+        type: string
+      - description: Substring match on name, description, agentId, oasfSkills, oasfDomains
+        in: query
+        name: query
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: List leaderboard
+      tags:
+      - leaderboard
+  /leaderboard/rising-stars:
+    get:
+      description: Returns top agents by score increase in a period.
+      parameters:
+      - description: Chain ID
+        in: query
+        name: chainId
+        required: true
+        type: integer
+      - description: 1d|7d|30d
+        in: query
+        name: period
+        type: string
+      - description: Max results (1..50)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Rising stars
+      tags:
+      - leaderboard
+  /leaderboard/search:
+    get:
+      description: Autocomplete search by agent name prefix.
+      parameters:
+      - description: Chain ID
+        in: query
+        name: chainId
+        required: true
+        type: integer
+      - description: Search query, min length 2
+        in: query
+        name: q
+        required: true
+        type: string
+      - description: Max results (1..20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Search leaderboard
+      tags:
+      - leaderboard
+  /leaderboard/stats:
+    get:
+      description: Returns KPI stats for one chain.
+      parameters:
+      - description: Chain ID
+        in: query
+        name: chainId
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Leaderboard stats
+      tags:
+      - leaderboard
+  /leaderboard/tags:
+    get:
+      description: Returns the most common tags across agents. Supports multi-chain
+        filter and search.
+      parameters:
+      - description: Chain ID(s), comma-separated
+        in: query
+        name: chainId
+        type: string
+      - description: Case-insensitive prefix/substring filter
+        in: query
+        name: q
+        type: string
+      - description: Max results (1..200)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Top agent tags
+      tags:
+      - leaderboard
+  /oasf/domains:
+    get:
+      parameters:
+      - description: Chain ID (optional; omit to query all chains)
+        in: query
+        name: chainId
+        type: integer
+      - collectionFormat: csv
+        description: Domain filters
+        in: query
+        items:
+          type: string
+        name: domain
+        type: array
+      - collectionFormat: csv
+        description: Skill filters
+        in: query
+        items:
+          type: string
+        name: skill
+        type: array
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Browse agents by domains/skills
+      tags:
+      - oasf
+  /oasf/facets:
+    get:
+      parameters:
+      - description: Chain ID (optional; omit to query all chains)
+        in: query
+        name: chainId
+        type: integer
+      - collectionFormat: csv
+        description: Skill filters
+        in: query
+        items:
+          type: string
+        name: skill
+        type: array
+      - collectionFormat: csv
+        description: Domain filters
+        in: query
+        items:
+          type: string
+        name: domain
+        type: array
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: OASF facets tree
+      tags:
+      - oasf
+  /oasf/skills:
+    get:
+      parameters:
+      - description: Chain ID (optional; omit to query all chains)
+        in: query
+        name: chainId
+        type: integer
+      - collectionFormat: csv
+        description: Skill filters
+        in: query
+        items:
+          type: string
+        name: skill
+        type: array
+      - collectionFormat: csv
+        description: Domain filters
+        in: query
+        items:
+          type: string
+        name: domain
+        type: array
+      - description: Page number
+        in: query
+        name: page
+        type: integer
+      - description: Page size
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Browse agents by skills/domains
+      tags:
+      - oasf
+  /offchain-by-uri:
+    get:
+      parameters:
+      - description: Logical URI (ipfs://, https://, …)
+        in: query
+        name: uri
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Off-chain URI cache
+      tags:
+      - agents
+  /wallet/{address}/feedbacks:
+    get:
+      description: Returns all feedback submitted by a wallet address across all agents.
+      parameters:
+      - description: Wallet address (hex)
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Page number (default 1)
+        in: query
+        name: page
+        type: integer
+      - description: Page size (max 100, default 20)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Wallet feedback given
+      tags:
+      - wallet
+schemes:
+- http
+- https
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+swagger: "2.0"

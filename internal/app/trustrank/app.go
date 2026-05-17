@@ -1,11 +1,13 @@
 package trustrank
 
 // app.go — TrustRank worker (Stream 2).
-// Cron: each tick reads active chains, runs one goroutine per chain.
-// Per chain: reads events from own checkpoint up to the URI cursor (set by Stream 1),
-// processes events in strict chronological order (blockNumber, logIndex).
+// Each pass reads active chains (one goroutine per chain). The first pass runs at startup;
+// TRUSTRANK_INTERVAL_SECONDS is the pause after a full pass completes before the next pass.
+// Per chain: reads events from own checkpoint up to uri_fetched_X (advanced by
+// EventURIConsumer after terminal URI fetch), processes events in strict
+// chronological order (blockNumber, logIndex).
 //
-// Also manages per-chain ServiceURIConsumer goroutines started lazily on chain discovery.
+// Also manages per-chain service_uri AMQP readers (fan-in to a shared worker pool), started lazily on chain discovery.
 
 import (
 	"context"
@@ -34,7 +36,7 @@ type App struct {
 }
 
 // NewApp wires repositories and tuning. proc may be nil (noop logger).
-// startConsumer is called once per newly discovered chain to launch its ServiceURIConsumer;
+// startConsumer is called once per newly discovered chain to register its service_uri queue reader with the pool;
 // pass nil to disable service URI consuming.
 func NewApp(
 	contracts *contractsrepo.ContractsRepository,
@@ -59,21 +61,28 @@ func NewApp(
 	}
 }
 
-// Run blocks until ctx is cancelled.
+// Run blocks until ctx is cancelled. The first runCycle runs immediately; each following cycle waits
+// domainApp.Interval after the previous cycle fully finished (including all per-chain runChain work).
 func (a *App) Run(ctx context.Context) error {
-	ticker := time.NewTicker(a.domainApp.Interval)
-	defer ticker.Stop()
-
-	log.Printf("trustrank_worker: interval=%s event_batch=%d", a.domainApp.Interval, a.domainApp.BatchSize)
+	log.Printf("trustrank_worker: pause_between_passes=%s event_batch=%d (first pass immediate)",
+		a.domainApp.Interval, a.domainApp.BatchSize)
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := a.runCycle(ctx); err != nil {
+			log.Printf("trustrank_worker: cycle error: %v", err)
+		}
+
+		t := time.NewTimer(a.domainApp.Interval)
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			if err := a.runCycle(ctx); err != nil {
-				log.Printf("trustrank_worker: cycle error: %v", err)
+			if !t.Stop() {
+				<-t.C
 			}
+			return ctx.Err()
+		case <-t.C:
 		}
 	}
 }
@@ -91,7 +100,7 @@ func (a *App) runCycle(ctx context.Context) error {
 		return nil
 	}
 
-	// Start service_uri consumers for any newly discovered chains.
+	// Start service_uri queue readers for any newly discovered chains (shared worker pool).
 	if a.startConsumer != nil {
 		a.consumersMu.Lock()
 		for _, c := range chains {
@@ -160,12 +169,13 @@ func (a *App) saveCheckpoint(ctx context.Context, chainID int64, cursor eventrep
 	}
 }
 
-// loadURICursor reads the per-chain cursor set by Stream 1 (URI resolver).
+// loadURICursor reads uri_fetched_X: the latest event position whose URI message
+// was fully handled by Stream 1's event_uri consumer (terminal offchain_data).
 func (a *App) loadURICursor(ctx context.Context, chainID int64) *eventrepo.ChainEventCursor {
 	if a.domainApp.ConfigRepo == nil {
 		return nil
 	}
-	entry, err := a.domainApp.ConfigRepo.Get(ctx, bootstrapapp.URICursorKey(chainID))
+	entry, err := a.domainApp.ConfigRepo.Get(ctx, bootstrapapp.URIFetchedCursorKey(chainID))
 	if err != nil {
 		return nil
 	}

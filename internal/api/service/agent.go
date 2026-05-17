@@ -4,10 +4,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +20,7 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
-	scorerepo "erc-8004-benchmarking-be/internal/repository/score"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 )
@@ -48,9 +48,8 @@ type agentFeedbackRepo interface {
 	ActivityHeatmap(ctx context.Context, chainID int64, agentID string, days int) ([]feedbackrepo.HeatmapDay, error)
 }
 
-type agentScoreRepo interface {
-	FindSnapshotsInRange(ctx context.Context, chainID int64, agentID string, from, to int64, limit int64) (*scorerepo.SnapshotPage, error)
-	ListByAgent(ctx context.Context, chainID int64, agentID string, limit int64) (*scorerepo.ScoreHistory, error)
+type agentScoreStatsRepo interface {
+	FindByAgentID(ctx context.Context, chainID int64, agentID string) (*scorestats.AgentScoreStats, error)
 }
 
 type agentIdentityRepo interface {
@@ -73,14 +72,14 @@ type agentContractRepo interface {
 
 // AgentDeps bundles repositories used by the Agent service.
 type AgentDeps struct {
-	Agents    agentAgentRepo
-	Feedback  agentFeedbackRepo
-	Scores    agentScoreRepo
-	Identity  agentIdentityRepo
-	Events    agentEventRepo
-	Offchain  agentOffchainRepo
-	Contracts agentContractRepo
-	Formula   scoring.FormulaConfig
+	Agents     agentAgentRepo
+	Feedback   agentFeedbackRepo
+	ScoreStats agentScoreStatsRepo
+	Identity   agentIdentityRepo
+	Events     agentEventRepo
+	Offchain   agentOffchainRepo
+	Contracts  agentContractRepo
+	Formula    scoring.FormulaConfig
 }
 
 // Agent encapsulates business logic for /agents/* endpoints.
@@ -244,101 +243,6 @@ func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, endpoint s
 	return "unknown", ""
 }
 
-// ── Score history ───────────────────────────────────────────────────────────
-
-// ScoreHistoryParams are the parsed inputs for /agents/:id/score-history.
-type ScoreHistoryParams struct {
-	ChainID    int64
-	AgentID    string
-	From       *time.Time
-	To         *time.Time
-	Resolution string // "raw" | "1h" | "6h" | "1d" (default 1d)
-	Limit      int64  // cap on number of returned points (max 1000)
-}
-
-// ScoreHistoryResult wraps the downsampled series with the original total count.
-type ScoreHistoryResult struct {
-	Points []dto.ScorePoint
-	Total  int64
-}
-
-// ScoreHistory returns the points series for a line chart (§3.2).
-func (s *Agent) ScoreHistory(ctx context.Context, p ScoreHistoryParams) (*ScoreHistoryResult, error) {
-	var fromUnix, toUnix int64
-	if p.From != nil {
-		fromUnix = p.From.Unix()
-	}
-	if p.To != nil {
-		toUnix = p.To.Unix()
-	}
-	// Cap per spec (max 1000), no cap if <= 0 means "use limit=0 at DB then trim here".
-	limit := p.Limit
-	if limit <= 0 {
-		limit = 1000
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
-	page, err := s.deps.Scores.FindSnapshotsInRange(ctx, p.ChainID, p.AgentID, fromUnix, toUnix, 0)
-	if err != nil {
-		return nil, err
-	}
-	total := page.Total
-
-	series := downsample(page.Snapshots, p.Resolution)
-	if int64(len(series)) > limit {
-		series = series[len(series)-int(limit):]
-	}
-
-	out := make([]dto.ScorePoint, 0, len(series))
-	for _, sn := range series {
-		out = append(out, toScorePoint(sn))
-	}
-	return &ScoreHistoryResult{Points: out, Total: total}, nil
-}
-
-// downsample picks the last sample per bucket. `resolution` determines bucket size.
-// "raw" returns the input as-is.
-func downsample(in []scorerepo.ScoreSnapshotItem, resolution string) []scorerepo.ScoreSnapshotItem {
-	bucket := resolutionToSeconds(resolution)
-	if bucket <= 0 || len(in) == 0 {
-		return in
-	}
-	// Ensure input is sorted by timestamp ascending.
-	sort.SliceStable(in, func(i, j int) bool { return in[i].Timestamp < in[j].Timestamp })
-
-	var out []scorerepo.ScoreSnapshotItem
-	var current scorerepo.ScoreSnapshotItem
-	var currentBucket int64 = -1
-	for _, s := range in {
-		b := s.Timestamp / bucket
-		if b != currentBucket && currentBucket >= 0 {
-			out = append(out, current)
-		}
-		current = s
-		currentBucket = b
-	}
-	if currentBucket >= 0 {
-		out = append(out, current)
-	}
-	return out
-}
-
-func resolutionToSeconds(r string) int64 {
-	switch r {
-	case "1h":
-		return 3600
-	case "6h":
-		return 6 * 3600
-	case "1d":
-		return 86400
-	case "raw":
-		return 0
-	default:
-		return 86400
-	}
-}
 
 // ── Feedbacks ───────────────────────────────────────────────────────────────
 
@@ -411,6 +315,61 @@ func (s *Agent) FeedbackDetail(ctx context.Context, chainID int64, agentID, feed
 	return detail, nil
 }
 
+const (
+	offchainURIMaxLen       = 8192
+	offchainRawPreviewRunes = 12000
+)
+
+func truncateRunesPreview(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
+// OffchainDataByURI returns one offchain_data row for the given logical URI (fetch status + parsed JSON when available).
+func (s *Agent) OffchainDataByURI(ctx context.Context, uri string) (*dto.OffchainURIDataView, error) {
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return nil, fmt.Errorf("%w: uri is required", ErrInvalidInput)
+	}
+	if len(uri) > offchainURIMaxLen {
+		return nil, fmt.Errorf("%w: uri exceeds max length", ErrInvalidInput)
+	}
+	docs, err := s.deps.Offchain.FindByURIs(ctx, []string{uri})
+	if err != nil {
+		return nil, err
+	}
+	out := &dto.OffchainURIDataView{Found: len(docs) > 0}
+	if len(docs) == 0 {
+		return out, nil
+	}
+	d := docs[0]
+	out.Status = d.Status
+	out.SourceType = d.SourceType
+	out.EventType = d.EventType
+	out.ContractType = d.ContractType
+	out.FetchError = d.FetchError
+	out.ContentSize = d.ContentSize
+	switch d.Status {
+	case offchainrepo.StatusFetchedJSON:
+		body := strings.TrimSpace(d.Content)
+		if body == "" {
+			break
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(body), &parsed); err == nil {
+			out.Parsed = parsed
+		}
+	case offchainrepo.StatusFetchedNotJSON:
+		if d.Content != "" {
+			out.RawPreview = truncateRunesPreview(d.Content, offchainRawPreviewRunes)
+		}
+	}
+	return out, nil
+}
+
 // ── Identity history ────────────────────────────────────────────────────────
 
 // IdentityHistory returns on-chain identity events (§3.5).
@@ -469,7 +428,7 @@ func (s *Agent) Penalties(ctx context.Context, p PenaltiesParams) (*PenaltiesRes
 			FeedbackIndex: d.FeedbackIndex,
 			ClientAddress: d.ClientAddress,
 			Timestamp:     unixToRFC3339(d.Timestamp),
-			Vi:            d.Vi,
+			Vi:            computeVi(d),
 			Wi:            round2(d.Wi),
 			Reason:        reason,
 			TxHash:        d.TxHash,
@@ -617,40 +576,14 @@ func (s *Agent) Radar(ctx context.Context, chainID int64, agentID string) (map[s
 		avgDifficulty = 0.5
 	}
 
-	// scoreVelocity: compare S_now vs S_{now-7d}, normalized to [0, 1].
-	velocity := 0.5
-	since := time.Now().Add(-7 * 24 * time.Hour).Unix()
-	if stars, err := s.deps.Scores.FindSnapshotsInRange(ctx, chainID, agentID, since, 0, 0); err == nil && len(stars.Snapshots) >= 2 {
-		first := stars.Snapshots[0].AgentScore
-		last := stars.Snapshots[len(stars.Snapshots)-1].AgentScore
-		delta := last - first
-		velocity = clamp01((delta + 500) / 1000) // map ±500 → [0, 1]
-	}
-
 	domainDepth := clamp01(float64(len(doc.OASFDomains)) / 5.0)
 
-	// consistency: 1 - stddev(recent 30 event_scores) / max_reasonable_stddev(200).
+	// scoreVelocity and consistency from pre-computed agent_score_stats (updated every ~30 min).
+	velocity := 0.5
 	consistency := 0.5
-	if hist, err := s.deps.Scores.ListByAgent(ctx, chainID, agentID, 30); err == nil && hist != nil && len(hist.ScoreSnapshots) > 1 {
-		var sum, sumSq float64
-		n := 0.0
-		for _, sn := range hist.ScoreSnapshots {
-			if sn.Type != "event" {
-				continue
-			}
-			sum += sn.EventScore
-			sumSq += sn.EventScore * sn.EventScore
-			n++
-		}
-		if n > 1 {
-			mean := sum / n
-			variance := (sumSq / n) - mean*mean
-			if variance < 0 {
-				variance = 0
-			}
-			stddev := math.Sqrt(variance)
-			consistency = clamp01(1 - stddev/200.0)
-		}
+	if stats, err := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); err == nil && stats != nil {
+		velocity = clamp01((stats.Delta7d/7 + 500) / 1000) // map ±500 pts/day → [0, 1]
+		consistency = stats.Consistency
 	}
 
 	return map[string]float64{
