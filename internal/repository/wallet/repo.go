@@ -4,6 +4,7 @@ package wallet
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -66,7 +67,7 @@ func (r *Repository) GetByAddress(ctx context.Context, chainID int64, address st
 	id := WalletDocumentID(chainID, address)
 	doc, err := r.FindOne(ctx, bson.M{"_id": id})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("wallet repo: get by address (%d, %s): %w", chainID, address, err)
 	}
 	return &doc, nil
 }
@@ -104,5 +105,8 @@ func (r *Repository) ApplyTrustDelta(ctx context.Context, in DeltaInput) error {
 		},
 		"$inc": computeCounterIncrements(in.IsValid),
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("wallet repo: apply trust delta (%d, %s): %w", in.ChainID, in.Address, err)
+	}
+	return nil
 }
