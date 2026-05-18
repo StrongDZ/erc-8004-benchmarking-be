@@ -17,6 +17,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -267,6 +268,7 @@ type cachedScale struct {
 // Processor implements EventProcessor with real domain logic.
 type Processor struct {
 	agentRepo        *agent.Repository
+	statsRepo        *scorestats.Repository
 	identityRepo     *identityrepo.Repository
 	feedbackRepo     *feedback.Repository
 	offchainRepo     *offchain.Repository

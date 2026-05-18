@@ -21,6 +21,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/utils"
 )
@@ -31,6 +32,7 @@ import (
 // tagStatsRepo / tagCorrsRepo may be nil to disable dynamic scale detection.
 func NewProcessor(
 	agentRepo *agent.Repository,
+	statsRepo *scorestats.Repository,
 	identityRepo *identityrepo.Repository,
 	feedbackRepo *feedback.Repository,
 	offchainRepo *offchain.Repository,
@@ -43,6 +45,7 @@ func NewProcessor(
 ) *Processor {
 	return &Processor{
 		agentRepo:        agentRepo,
+		statsRepo:        statsRepo,
 		identityRepo:     identityRepo,
 		feedbackRepo:     feedbackRepo,
 		offchainRepo:     offchainRepo,
@@ -378,11 +381,10 @@ func (p *Processor) getOrCreateAgent(bs *batchState, agentID string, timestamp i
 		return doc
 	}
 	doc = &agent.AgentDocument{
-		AgentID:         agentID,
-		ChainID:         bs.chainID,
-		ReputationScore: 0,
-		ScoreUpdateAt:   timestamp,
+		AgentID: agentID,
+		ChainID: bs.chainID,
 	}
+	_ = timestamp // accumulators now live on agent_score_stats; agent doc is identity-only
 	bs.agentMap[agentID] = doc
 	bs.dirtyAgents[agentID] = true
 	return doc

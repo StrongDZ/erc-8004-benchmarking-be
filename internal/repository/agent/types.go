@@ -4,7 +4,9 @@ package agent
 
 import (
 	mongorepo "erc-8004-benchmarking-be/internal/repository"
+	mongodrv "go.mongodb.org/mongo-driver/mongo"
 )
+
 
 // RegistrationService is one element of the ERC-8004 registration file "services" array.
 type RegistrationService struct {
@@ -39,7 +41,8 @@ type OnchainMetadataValue struct {
 	Confidence   string `bson:"confidence,omitempty" json:"confidence,omitempty"`
 }
 
-// AgentDocument stores the current snapshot of an agent: on-chain identity + scoring state.
+// AgentDocument stores the current snapshot of an agent: on-chain identity and metadata only.
+// All scoring/accumulator data lives in AgentScoreStats (agent_score_stats collection).
 type AgentDocument struct {
 	ID               string   `bson:"_id"`     // {chainId}:{agentId}
 	AgentID          string   `bson:"agentId"` // decimal string of uint256
@@ -65,21 +68,13 @@ type AgentDocument struct {
 	Tags             []string `bson:"tags,omitempty"`          // denormalized from onchainMetadata.tags for filtering
 	OnchainMetadata  map[string]OnchainMetadataValue `bson:"onchainMetadata,omitempty"` // from MetadataSet events
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
-	ReputationScore float64  `bson:"reputationScore"`
-	ScoreUpdateAt    int64    `bson:"scoreUpdateAt"` // Unix seconds of last score update
-	CompositeScore  float64  `bson:"compositeScore"`
-	ReputationNorm  float64  `bson:"reputationNorm"`
-	ServicesScore   float64  `bson:"servicesScore"`
-	PublisherScore  float64  `bson:"publisherScore"`
-	ComplianceScore float64  `bson:"complianceScore"`
-	ConsecutiveFails int64    `bson:"consecutiveFails"`
-	TotalTasks       int64    `bson:"totalTasks"`
-	TotalPassed      int64    `bson:"totalPassed"`
-	TotalFailed      int64    `bson:"totalFailed"`
 	CreatedAt        int64    `bson:"createdAt,omitempty"` // omit zero from upsert $set; insert uses $setOnInsert in repo
 }
 
 // Repository wraps the agents collection.
 type Repository struct {
 	mongorepo.MongoRepoImpl[AgentDocument]
+	// StatsColl is the agent_score_stats collection; used for composite-score aggregations.
+	// Set via SetStatsColl after construction (optional; aggregations return 0 when nil).
+	StatsColl *mongodrv.Collection
 }

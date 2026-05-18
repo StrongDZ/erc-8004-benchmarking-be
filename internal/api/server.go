@@ -51,7 +51,7 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 	primary := client.Database(cfg.MongoDatabase)
 	analyzed := client.Database(cfg.AnalyzedDatabase)
 	return &Repositories{
-		Agents:     agentrepo.NewRepository(analyzed, cfg.AgentsColl),
+		Agents:     agentrepo.NewRepository(analyzed, cfg.AgentsColl, cfg.ScoreStatsColl),
 		Feedback:   feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
 		ScoreStats: scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
 		Identity:   identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
@@ -93,7 +93,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
 		Contracts: repos.Contracts, Formula: formula,
 	})
-	oasfSvc := service.NewOASF(service.OASFDeps{Agents: repos.Agents, Formula: formula})
+	oasfSvc := service.NewOASF(service.OASFDeps{Agents: repos.Agents, ScoreStats: repos.ScoreStats, Formula: formula})
 	chainSvc := service.NewChain(service.ChainDeps{Contracts: repos.Contracts, Agents: repos.Agents})
 	adminSvc := service.NewAdmin(service.AdminDeps{
 		Crawlers: repos.Crawlers, Events: repos.Events, Feedback: repos.Feedback,

@@ -35,16 +35,14 @@ func (p *Processor) handleRegistered(bs *batchState, agentID string, ev eventrep
 	doc := bs.agentMap[agentID]
 	if doc == nil {
 		doc = &agent.AgentDocument{
-			AgentID:         agentID,
-			ChainID:         bs.chainID,
-			ReputationScore: 0,
+			AgentID: agentID,
+			ChainID: bs.chainID,
 		}
 		bs.agentMap[agentID] = doc
 	}
 	doc.Owner = owner
 	doc.AgentURI = agentURI
 	doc.CreatedAt = ev.Timestamp
-	doc.ScoreUpdateAt = ev.Timestamp
 	bs.dirtyAgents[agentID] = true
 
 	p.appendIdentityHistory(bs, agentID, ev, agentURI, owner)

@@ -25,6 +25,7 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
+	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -34,6 +35,7 @@ const rescaleBatchSize = 50
 type App struct {
 	mongoClient  *mongodrv.Client
 	agentRepo    *agentrepo.Repository
+	statsRepo    *scorestatsrepo.Repository
 	feedbackRepo *feedbackrepo.Repository
 	corrRepo     *tagstats.CorrectionRepository
 	deltaRepo    *tagstats.DeltaRepository
@@ -45,6 +47,7 @@ type App struct {
 func NewApp(
 	mongoClient *mongodrv.Client,
 	agentRepo *agentrepo.Repository,
+	statsRepo *scorestatsrepo.Repository,
 	feedbackRepo *feedbackrepo.Repository,
 	corrRepo *tagstats.CorrectionRepository,
 	deltaRepo *tagstats.DeltaRepository,
@@ -54,6 +57,7 @@ func NewApp(
 	return &App{
 		mongoClient:  mongoClient,
 		agentRepo:    agentRepo,
+		statsRepo:    statsRepo,
 		feedbackRepo: feedbackRepo,
 		corrRepo:     corrRepo,
 		deltaRepo:    deltaRepo,
@@ -232,8 +236,8 @@ func (a *App) applyOneDelta(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 	defer session.EndSession(ctx)
 
 	_, err = session.WithTransaction(ctx, func(sessCtx mongodrv.SessionContext) (interface{}, error) {
-		// 1. $inc agent reputationScore.
-		if err := a.agentRepo.IncReputationScore(sessCtx, d.ChainID, d.AgentID, d.Delta); err != nil {
+		// 1. $inc reputationScore on agent_score_stats (single source of truth).
+		if err := a.statsRepo.IncReputation(sessCtx, d.ChainID, d.AgentID, d.Delta); err != nil {
 			return nil, err
 		}
 
