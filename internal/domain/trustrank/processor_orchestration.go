@@ -23,6 +23,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
+	"erc-8004-benchmarking-be/internal/repository/wallet"
 	"erc-8004-benchmarking-be/internal/utils"
 )
 
@@ -44,7 +45,12 @@ func NewProcessor(
 	tagStatsRepo *tagstats.StatsRepository,
 	tagCorrsRepo *tagstats.CorrectionRepository,
 	minSamples int,
+	walletRepo *wallet.Repository,
+	coldStartT0 float64,
 ) *Processor {
+	if coldStartT0 <= 0 {
+		coldStartT0 = 10
+	}
 	return &Processor{
 		agentRepo:        agentRepo,
 		statsRepo:        statsRepo,
@@ -55,6 +61,8 @@ func NewProcessor(
 		compositeWeights: compositeWeights,
 		uriPublisher:     uriPublisher,
 		fbPublisher:      fbPublisher,
+		walletRepo:       walletRepo,
+		coldStartT0:      coldStartT0,
 		tagStatsRepo:     tagStatsRepo,
 		tagCorrsRepo:     tagCorrsRepo,
 		minSamples:       minSamples,
