@@ -36,11 +36,65 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "delta30d", Value: -1}},
 			Options: options.Index().SetName("idx_chain_delta30d"),
 		},
+		{
+			Keys:    bson.D{{Key: "compositeScore", Value: -1}},
+			Options: options.Index().SetName("idx_compositeScore_desc"),
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("scorestats: ensure indexes: %w", err)
 	}
 	return nil
+}
+
+// UpsertFromWritePath writes the O(1) accumulator state + composite + breakdown
+// produced by the trustrank processor per NewFeedback event.
+// Preserves delta/consistency fields by using $set only on the provided fields.
+func (r *Repository) UpsertFromWritePath(
+	ctx context.Context,
+	chainID int64, agentID string,
+	reputationScore float64, scoreUpdateAt int64,
+	consecutiveFails, totalTasks, totalPassed, totalFailed int64,
+	composite, reputationNorm, services, publisher, compliance float64,
+	serviceWarnings []string,
+) error {
+	filter := bson.M{"chainId": chainID, "agentId": agentID}
+	update := bson.M{"$set": bson.M{
+		"chainId":          chainID,
+		"agentId":          agentID,
+		"reputationScore":  reputationScore,
+		"scoreUpdateAt":    scoreUpdateAt,
+		"consecutiveFails": consecutiveFails,
+		"totalTasks":       totalTasks,
+		"totalPassed":      totalPassed,
+		"totalFailed":      totalFailed,
+		"compositeScore":   composite,
+		"reputationNorm":   reputationNorm,
+		"servicesScore":    services,
+		"publisherScore":   publisher,
+		"complianceScore":  compliance,
+		"serviceWarnings":  serviceWarnings,
+	}}
+	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
+	if err != nil {
+		return fmt.Errorf("scorestats: upsert from write path chainId=%d agentId=%s: %w", chainID, agentID, err)
+	}
+	return nil
+}
+
+// IncReputation atomically adds delta to reputationScore (used by rescale worker).
+func (r *Repository) IncReputation(ctx context.Context, chainID int64, agentID string, delta float64) error {
+	filter := bson.M{"chainId": chainID, "agentId": agentID}
+	_, err := r.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"reputationScore": delta}})
+	if err != nil {
+		return fmt.Errorf("scorestats: inc reputation chainId=%d agentId=%s: %w", chainID, agentID, err)
+	}
+	return nil
+}
+
+// FindByID returns the stats doc or nil if not found.
+func (r *Repository) FindByID(ctx context.Context, chainID int64, agentID string) (*AgentScoreStats, error) {
+	return r.FindByAgentID(ctx, chainID, agentID)
 }
 
 // BulkUpsert replaces (or inserts) stats documents in an unordered bulk write.

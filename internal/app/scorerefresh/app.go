@@ -119,22 +119,9 @@ func (a *App) runCycle(ctx context.Context) {
 			statsBatch = append(statsBatch, stats)
 		}
 
+		// BulkUpsert is the single write — agent_score_stats is the source of truth for scoring.
 		if err := a.scoreStats.BulkUpsert(ctx, statsBatch); err != nil {
 			log.Printf("score-refresh: bulk upsert stats: %v", err)
-		}
-
-		// Sync agent.reputationScore + composite breakdown with the authoritative replay result.
-		for _, stats := range statsBatch {
-			if err := a.agents.UpdateReputationScore(ctx, stats.ChainID, stats.AgentID, stats.Score, now); err != nil {
-				log.Printf("score-refresh: update rep score chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
-			}
-			if err := a.agents.UpdateCompositeBreakdown(
-				ctx, stats.ChainID, stats.AgentID,
-				stats.CompositeScore, stats.ReputationNorm,
-				stats.ServicesScore, stats.PublisherScore, stats.ComplianceScore,
-			); err != nil {
-				log.Printf("score-refresh: update composite chain=%d agent=%s: %v", stats.ChainID, stats.AgentID, err)
-			}
 		}
 
 		total += len(agents)

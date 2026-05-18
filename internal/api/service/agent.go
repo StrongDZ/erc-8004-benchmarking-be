@@ -105,7 +105,8 @@ func (s *Agent) Profile(ctx context.Context, chainID int64, agentID string) (*dt
 	if err != nil {
 		return nil, fmt.Errorf("agent profile class dist: %w", err)
 	}
-	p := toAgentProfile(doc, dist, s.deps.Formula, time.Now().Unix())
+	stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID)
+	p := toAgentProfile(doc, stats, dist, s.deps.Formula, time.Now().Unix())
 	return &p, nil
 }
 
@@ -143,7 +144,7 @@ func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*d
 	// Probe service health via the offchain_data cache.
 	svcs := make([]dto.ServiceOverview, 0, len(doc.Services))
 	for _, sv := range doc.Services {
-		health, info := probeEndpointHealth(ctx, s.deps.Offchain, sv.Endpoint)
+		health, info := probeEndpointHealth(ctx, s.deps.Offchain, sv.Name, sv.Endpoint)
 		svcs = append(svcs, dto.ServiceOverview{
 			Name:       sv.Name,
 			Endpoint:   sv.Endpoint,
@@ -219,26 +220,33 @@ func extractAgentWallet(meta map[string]agentrepo.OnchainMetadataValue) string {
 }
 
 // probeEndpointHealth derives a service's health from the offchain_data cache.
-// Returns one of: "ok" | "fail" | "unknown".
-func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, endpoint string) (string, string) {
+// Returns one of: "ok" | "warning" | "fail" | "unknown".
+//   - "warning": endpoint fetched successfully but is not JSON, and the service is
+//     JSON-required (oasf, a2a, mcp). Other services that fetched OK are treated as
+//     healthy regardless of body type.
+func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, name, endpoint string) (string, string) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" || repo == nil {
 		return "unknown", ""
 	}
-	ok, err := repo.HasSuccessfulFetch(ctx, endpoint)
-	if err != nil {
-		return "unknown", err.Error()
+	rows, rerr := repo.FindByURIs(ctx, []string{endpoint})
+	if rerr != nil || len(rows) == 0 {
+		return "unknown", ""
 	}
-	if ok {
+	row := rows[0]
+	switch row.Status {
+	case offchainrepo.StatusFetchedJSON:
 		return "ok", ""
-	}
-	// Not a success — inspect the stored error (if any) to decide fail vs unknown.
-	if _, found, gerr := repo.GetContent(ctx, endpoint); gerr == nil && !found {
-		// Fetch the raw row to see if a FetchError was recorded.
-		rows, rerr := repo.FindByURIs(ctx, []string{endpoint})
-		if rerr == nil && len(rows) > 0 && strings.TrimSpace(rows[0].FetchError) != "" {
-			return "fail", rows[0].FetchError
+	case offchainrepo.StatusFetchedNotJSON:
+		if scoring.IsJSONRequired(name) {
+			return "warning", "fetched but not valid JSON; expected JSON for this endpoint type"
 		}
+		return "ok", ""
+	case offchainrepo.StatusFetchFailed:
+		if strings.TrimSpace(row.FetchError) != "" {
+			return "fail", row.FetchError
+		}
+		return "fail", ""
 	}
 	return "unknown", ""
 }
@@ -467,13 +475,25 @@ func (s *Agent) Related(ctx context.Context, chainID int64, agentID, by string, 
 		return nil, err
 	}
 	now := time.Now().Unix()
+	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, chainID, docs)
 	out := make([]dto.AgentRow, 0, len(docs))
 	for i, d := range docs {
-		r := toAgentRow(d, s.deps.Formula, now)
+		r := toAgentRow(d, statsMap[d.AgentID], s.deps.Formula, now)
 		r.Rank = i + 1
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// bulkFetchStats fetches stats per agent. Returns map[agentID]*stats with nils for missing.
+func bulkFetchStats(ctx context.Context, repo agentScoreStatsRepo, chainID int64, docs []agentrepo.AgentDocument) map[string]*scorestats.AgentScoreStats {
+	out := make(map[string]*scorestats.AgentScoreStats, len(docs))
+	for _, d := range docs {
+		if s, _ := repo.FindByAgentID(ctx, chainID, d.AgentID); s != nil {
+			out[d.AgentID] = s
+		}
+	}
+	return out
 }
 
 // ── Proof ───────────────────────────────────────────────────────────────────
@@ -564,12 +584,19 @@ func (s *Agent) Radar(ctx context.Context, chainID int64, agentID string) (map[s
 		return nil, err
 	}
 
+	// Source per-agent stats once; task counts now live on agent_score_stats.
+	stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID)
+	var totalTasks, totalPassed int64
+	if stats != nil {
+		totalTasks = stats.TotalTasks
+		totalPassed = stats.TotalPassed
+	}
 	successRate := 0.0
-	if doc.TotalTasks > 0 {
-		successRate = float64(doc.TotalPassed) / float64(doc.TotalTasks)
+	if totalTasks > 0 {
+		successRate = float64(totalPassed) / float64(totalTasks)
 	}
 
-	taskVolume := clamp01(math.Log1p(float64(doc.TotalTasks)) / math.Log1p(200.0))
+	taskVolume := clamp01(math.Log1p(float64(totalTasks)) / math.Log1p(200.0))
 
 	avgDifficulty := 0.0
 	if len(doc.OASFSkills)+len(doc.OASFDomains) > 0 {
@@ -581,7 +608,7 @@ func (s *Agent) Radar(ctx context.Context, chainID int64, agentID string) (map[s
 	// scoreVelocity and consistency from pre-computed agent_score_stats (updated every ~30 min).
 	velocity := 0.5
 	consistency := 0.5
-	if stats, err := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); err == nil && stats != nil {
+	if stats != nil {
 		velocity = clamp01((stats.Delta7d/7 + 500) / 1000) // map ±500 pts/day → [0, 1]
 		consistency = stats.Consistency
 	}

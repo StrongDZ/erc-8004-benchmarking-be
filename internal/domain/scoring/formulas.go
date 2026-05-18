@@ -188,19 +188,108 @@ func NormalizeReputation(rawRep float64) float64 {
 	return rawRep / 10.0
 }
 
-// ComputeServicesScore returns the healthy-endpoint percentage [0, 100].
-// if totalServices == 0 (no declared services), returns 0.
-func ComputeServicesScore(totalServices, healthyCount int) float64 {
-	if totalServices <= 0 {
-		return 0
+// JSONRequiredEndpoints must return successfully parsed JSON to count as healthy.
+// These are the high-protocol endpoints where a non-JSON body is a meaningful defect.
+var JSONRequiredEndpoints = map[string]struct{}{
+	"oasf": {},
+	"a2a":  {},
+	"mcp":  {},
+}
+
+// FetchOnlyImportantEndpoints just need to be fetched (any status >= 1) to count as healthy.
+var FetchOnlyImportantEndpoints = map[string]struct{}{
+	"web":   {},
+	"email": {},
+}
+
+// IsJSONRequired returns true when the service name (case-insensitive) is in JSONRequiredEndpoints.
+func IsJSONRequired(name string) bool {
+	_, ok := JSONRequiredEndpoints[strings.ToLower(name)]
+	return ok
+}
+
+// IsImportantEndpoint returns true when the service name is in either important set.
+func IsImportantEndpoint(name string) bool {
+	lower := strings.ToLower(name)
+	_, ok1 := JSONRequiredEndpoints[lower]
+	_, ok2 := FetchOnlyImportantEndpoints[lower]
+	return ok1 || ok2
+}
+
+// ServiceHealthCheck represents one declared service and its observed offchain status.
+type ServiceHealthCheck struct {
+	Name   string // service.Name (e.g. "OASF", "MCP", "web", "ENS")
+	Status int    // offchain.Status (-1 / 1 / 5)
+}
+
+// ServicesScoreResult is returned by ComputeServicesScore.
+// Warnings lists names of JSON-required important endpoints that were fetched
+// but not valid JSON (status == 1), so the FE can surface a per-service warning.
+type ServicesScoreResult struct {
+	Score    float64
+	Warnings []string // names where JSON expected but status == 1
+}
+
+// ComputeServicesScore applies tier-weighted health rules to determine the services score.
+//
+// Tier classification (case-insensitive name comparison):
+//
+//	Important/JSON-required (oasf, a2a, mcp):  status 5 = healthy; status 1 = unhealthy + warning; -1 = unhealthy.
+//	Important/fetch-only   (web, email):         status 1 or 5 = healthy; -1 = unhealthy.
+//	Other (anything else):                       status 1 or 5 = healthy; -1 = unhealthy.
+//
+// Pool math:
+//
+//	imp_part = (imp_healthy / imp_total) * 80   (0 when no important services)
+//	oth_part = (oth_healthy / oth_total) * 20   (0 when no other services)
+//	ServicesScore = imp_part + oth_part           range [0, 100]
+func ComputeServicesScore(checks []ServiceHealthCheck) ServicesScoreResult {
+	if len(checks) == 0 {
+		return ServicesScoreResult{}
 	}
-	if healthyCount < 0 {
-		healthyCount = 0
+
+	var impTotal, impHealthy, othTotal, othHealthy int
+	var warnings []string
+
+	for _, c := range checks {
+		if IsImportantEndpoint(c.Name) {
+			impTotal++
+			if IsJSONRequired(c.Name) {
+				switch c.Status {
+				case 5:
+					impHealthy++
+				case 1:
+					// fetched but not JSON — unhealthy for JSON-required tier, emit warning
+					warnings = append(warnings, c.Name)
+				// -1 or 0: unhealthy, no warning
+				}
+			} else {
+				// fetch-only important (web, email)
+				if c.Status == 1 || c.Status == 5 {
+					impHealthy++
+				}
+			}
+		} else {
+			othTotal++
+			if c.Status == 1 || c.Status == 5 {
+				othHealthy++
+			}
+		}
 	}
-	if healthyCount > totalServices {
-		healthyCount = totalServices
+
+	var impPart float64
+	if impTotal > 0 {
+		impPart = float64(impHealthy) / float64(impTotal) * 80.0
 	}
-	return float64(healthyCount) / float64(totalServices) * 100.0
+	var othPart float64
+	if othTotal > 0 {
+		othPart = float64(othHealthy) / float64(othTotal) * 20.0
+	}
+
+	return ServicesScoreResult{
+		Score:    impPart + othPart,
+		Warnings: warnings,
+	}
 }
 
 // ExpectedAgentURIType is the canonical ERC-8004 registration type identifier.

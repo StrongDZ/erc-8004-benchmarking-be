@@ -154,6 +154,8 @@ type ServiceOverview struct {
 	Skills   []string `json:"skills,omitempty"`
 	Domains  []string `json:"domains,omitempty"`
 	// Health is "ok" when the endpoint has a cached successful fetch,
+	// "warning" when the endpoint fetched but the body is not valid JSON for a
+	// JSON-required protocol (oasf, a2a, mcp),
 	// "fail" when the most recent fetch attempt recorded an error,
 	// and "unknown" when the endpoint has never been probed.
 	Health     string `json:"health"`

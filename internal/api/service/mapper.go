@@ -12,24 +12,36 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/agent"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/identity"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
-// toAgentRow projects the document into AgentRow using the pre-computed compositeScore.
-func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentRow {
+// statsOrZero dereferences stats, returning a zero-value struct when nil so the
+// mapper code paths can stay branch-free.
+func statsOrZero(s *scorestats.AgentScoreStats) scorestats.AgentScoreStats {
+	if s == nil {
+		return scorestats.AgentScoreStats{}
+	}
+	return *s
+}
+
+// toAgentRow projects the document + stats into AgentRow.
+// stats may be nil — fields will default to zero in that case.
+func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scoring.FormulaConfig, _ int64) dto.AgentRow {
+	s := statsOrZero(stats)
 	breakdown := dto.ScoreBreakdown{
-		Reputation: round2(d.ReputationNorm),
-		Services:   round2(d.ServicesScore),
-		Publisher:  round2(d.PublisherScore),
-		Compliance: round2(d.ComplianceScore),
+		Reputation: round2(s.ReputationNorm),
+		Services:   round2(s.ServicesScore),
+		Publisher:  round2(s.PublisherScore),
+		Compliance: round2(s.ComplianceScore),
 	}
 	services := make([]dto.AgentService, 0, len(d.Services))
-	for _, s := range d.Services {
+	for _, sv := range d.Services {
 		services = append(services, dto.AgentService{
-			Name:     s.Name,
-			Endpoint: s.Endpoint,
-			Version:  s.Version,
-			Skills:   s.Skills,
-			Domains:  s.Domains,
+			Name:     sv.Name,
+			Endpoint: sv.Endpoint,
+			Version:  sv.Version,
+			Skills:   sv.Skills,
+			Domains:  sv.Domains,
 		})
 	}
 	return dto.AgentRow{
@@ -38,15 +50,15 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 		Name:             d.Name,
 		Image:            d.Image,
 		Owner:            d.Owner,
-		TrustScore:       round2(d.CompositeScore),
-		ReputationScore:  round2(d.ReputationScore),
+		TrustScore:       round2(s.CompositeScore),
+		ReputationScore:  round2(s.ReputationScore),
 		ScoreBreakdown:   breakdown,
-		ScoreUpdateAt:    d.ScoreUpdateAt,
-		ConsecutiveFails: d.ConsecutiveFails,
-		TotalTasks:       d.TotalTasks,
-		TotalPassed:      d.TotalPassed,
-		TotalFailed:      d.TotalFailed,
-		SuccessRate:      safeRate(d.TotalPassed, d.TotalTasks),
+		ScoreUpdateAt:    s.ScoreUpdateAt,
+		ConsecutiveFails: s.ConsecutiveFails,
+		TotalTasks:       s.TotalTasks,
+		TotalPassed:      s.TotalPassed,
+		TotalFailed:      s.TotalFailed,
+		SuccessRate:      safeRate(s.TotalPassed, s.TotalTasks),
 		Active:           d.Active,
 		X402Support:      d.X402Support,
 		HasOASF:          d.HasOASF,
@@ -59,24 +71,26 @@ func toAgentRow(d agent.AgentDocument, cfg scoring.FormulaConfig, nowUnix int64)
 	}
 }
 
-// toAgentProfile builds the full profile payload using the pre-computed compositeScore.
-func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.FormulaConfig, nowUnix int64) dto.AgentProfile {
-	penalty := scoring.ComputePenalty(d.ConsecutiveFails, cfg.Gamma, cfg.Theta)
+// toAgentProfile builds the full profile payload from the agent doc and stats.
+// stats may be nil — defaults apply.
+func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, dist map[string]int64, cfg scoring.FormulaConfig, _ int64) dto.AgentProfile {
+	s := statsOrZero(stats)
+	penalty := scoring.ComputePenalty(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)
 	breakdown := dto.ScoreBreakdown{
-		Reputation: round2(d.ReputationNorm),
-		Services:   round2(d.ServicesScore),
-		Publisher:  round2(d.PublisherScore),
-		Compliance: round2(d.ComplianceScore),
+		Reputation: round2(s.ReputationNorm),
+		Services:   round2(s.ServicesScore),
+		Publisher:  round2(s.PublisherScore),
+		Compliance: round2(s.ComplianceScore),
 	}
 
 	services := make([]dto.AgentService, 0, len(d.Services))
-	for _, s := range d.Services {
+	for _, sv := range d.Services {
 		services = append(services, dto.AgentService{
-			Name:     s.Name,
-			Endpoint: s.Endpoint,
-			Version:  s.Version,
-			Skills:   s.Skills,
-			Domains:  s.Domains,
+			Name:     sv.Name,
+			Endpoint: sv.Endpoint,
+			Version:  sv.Version,
+			Skills:   sv.Skills,
+			Domains:  sv.Domains,
 		})
 	}
 
@@ -110,16 +124,16 @@ func toAgentProfile(d *agent.AgentDocument, dist map[string]int64, cfg scoring.F
 		OffchainMetadata: d.OffchainMetadata,
 		CreatedAt:        unixToRFC3339(d.CreatedAt),
 		Scoring: dto.AgentScoring{
-			TrustScore:        round2(d.CompositeScore),
-			ReputationScore:   round2(d.ReputationScore),
+			TrustScore:        round2(s.CompositeScore),
+			ReputationScore:   round2(s.ReputationScore),
 			ScoreBreakdown:    breakdown,
-			ScoreUpdateAt:     d.ScoreUpdateAt,
-			ConsecutiveFails:  d.ConsecutiveFails,
+			ScoreUpdateAt:     s.ScoreUpdateAt,
+			ConsecutiveFails:  s.ConsecutiveFails,
 			Penalty:           round2(penalty),
-			TotalTasks:        d.TotalTasks,
-			TotalPassed:       d.TotalPassed,
-			TotalFailed:       d.TotalFailed,
-			SuccessRate:       safeRate(d.TotalPassed, d.TotalTasks),
+			TotalTasks:        s.TotalTasks,
+			TotalPassed:       s.TotalPassed,
+			TotalFailed:       s.TotalFailed,
+			SuccessRate:       safeRate(s.TotalPassed, s.TotalTasks),
 			ClassDistribution: dist,
 		},
 	}

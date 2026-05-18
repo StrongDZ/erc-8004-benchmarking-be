@@ -190,7 +190,7 @@ func main() {
 
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
-	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
+	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
 
 	// ── 1. Pull samples per mode ──
 	var samples []feedbackrepo.FeedbackRecord

@@ -14,7 +14,6 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	"erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
@@ -126,11 +125,11 @@ func replayAgent(
 	}
 
 	// Compute 4-component breakdown and composite score.
-	svcScore, pubScore, compScore, repNorm := computeComponentScores(
+	svcResult, pubScore, compScore, repNorm := computeComponentScores(
 		ctx, ag, rep, offchainStatusByEndpoint,
 		publisherProvider, complianceWeights,
 	)
-	composite := scoring.ComputeCompositeScore(repNorm, svcScore, pubScore, compScore, compositeWeights)
+	composite := scoring.ComputeCompositeScore(repNorm, svcResult.Score, pubScore, compScore, compositeWeights)
 
 	// Compute composite-based deltas.
 	// Approximation: S/P/C components are assumed constant at current values because
@@ -139,33 +138,34 @@ func replayAgent(
 	// short-term delta anyway. This means delta accurately tracks the reputation
 	// component's contribution to composite change.
 	snap30dComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[0]), svcScore, pubScore, compScore, compositeWeights,
+		scoring.NormalizeReputation(snapshots[0]), svcResult.Score, pubScore, compScore, compositeWeights,
 	)
 	snap7dComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[1]), svcScore, pubScore, compScore, compositeWeights,
+		scoring.NormalizeReputation(snapshots[1]), svcResult.Score, pubScore, compScore, compositeWeights,
 	)
 	snap24hComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[2]), svcScore, pubScore, compScore, compositeWeights,
+		scoring.NormalizeReputation(snapshots[2]), svcResult.Score, pubScore, compScore, compositeWeights,
 	)
 
 	return scorestats.AgentScoreStats{
 		ChainID:         chainID,
 		AgentID:         agentID,
-		Score:           rep,
+		ReputationScore: rep,
 		Delta24h:        composite - snap24hComposite,
 		Delta7d:         composite - snap7dComposite,
 		Delta30d:        composite - snap30dComposite,
 		Consistency:     computeConsistency(eventScores),
 		CompositeScore:  composite,
 		ReputationNorm:  repNorm,
-		ServicesScore:   svcScore,
+		ServicesScore:   svcResult.Score,
 		PublisherScore:  pubScore,
 		ComplianceScore: compScore,
+		ServiceWarnings: svcResult.Warnings,
 		ComputedAt:      now,
 	}
 }
 
-// computeComponentScores returns (services, publisher, compliance, normalizedReputation)
+// computeComponentScores returns (svcResult, publisher, compliance, normalizedReputation)
 // for one agent. Requires preloaded offchain status map for that agent's services.
 func computeComponentScores(
 	ctx context.Context,
@@ -174,18 +174,18 @@ func computeComponentScores(
 	offchainStatusByEndpoint map[string]int,
 	publisherProvider scoring.PublisherScoreProvider,
 	complianceWeights scoring.ComplianceWeights,
-) (services, publisher, compliance, repNorm float64) {
+) (svcResult scoring.ServicesScoreResult, publisher, compliance, repNorm float64) {
 	repNorm = scoring.NormalizeReputation(rawRep)
 
-	// Services: count how many declared service endpoints have a successful JSON fetch.
-	total := len(ag.Services)
-	healthy := 0
+	// Services: build health checks from declared services using the preloaded offchain status.
+	checks := make([]scoring.ServiceHealthCheck, 0, len(ag.Services))
 	for _, s := range ag.Services {
-		if offchainStatusByEndpoint[s.Endpoint] == offchain.StatusFetchedJSON {
-			healthy++
-		}
+		checks = append(checks, scoring.ServiceHealthCheck{
+			Name:   s.Name,
+			Status: offchainStatusByEndpoint[s.Endpoint],
+		})
 	}
-	services = scoring.ComputeServicesScore(total, healthy)
+	svcResult = scoring.ComputeServicesScore(checks)
 
 	// Publisher: pluggable provider (currently NeutralPublisherProvider returning 50).
 	publisher = publisherProvider.Score(ctx, ag.Owner, ag.ChainID)
@@ -205,7 +205,7 @@ func computeComponentScores(
 		CardUpdatedAt:  ag.CardUpdatedAt,
 	}, complianceWeights)
 
-	return services, publisher, compliance, repNorm
+	return svcResult, publisher, compliance, repNorm
 }
 
 // computeConsistency returns a [0,1] consistency metric from event scores.

@@ -28,6 +28,7 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
+	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
 )
 
@@ -61,7 +62,8 @@ func main() {
 	contractsRepo := contractsrepo.NewContractsRepository(db, cfg.ContractsColl)
 	cfgRepo := configrepo.NewConfigRepository(db, cfg.ConfigColl)
 	eventsRepo := eventrepo.NewRepository(db, cfg.EventsColl)
-	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
+	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
+	stats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
 	identities := identityrepo.NewRepository(analyzedDB, cfg.IdentityHistColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	offchain := offchainrepo.NewRepository(db, cfg.OffchainColl)
@@ -129,7 +131,7 @@ func main() {
 		Compliance: cfg.ScoreWeightCompliance,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
+	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,

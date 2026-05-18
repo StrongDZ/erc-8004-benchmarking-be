@@ -19,10 +19,15 @@ func AgentDocumentID(chainID int64, agentID string) string {
 	return fmt.Sprintf("%d:%s", chainID, agentID)
 }
 
-// NewRepository returns a Repository bound to the named collection.
-func NewRepository(db *mongodrv.Database, collectionName string) *Repository {
+// NewRepository returns a Repository bound to the named collection. The statsCollectionName
+// is used for queries that join scoring data from agent_score_stats (sort by composite,
+// median, top-10 averages, etc).
+func NewRepository(db *mongodrv.Database, collectionName, statsCollectionName string) *Repository {
 	m := mongorepo.NewMongoRepo[AgentDocument](db, collectionName)
-	return &Repository{MongoRepoImpl: *m}
+	return &Repository{
+		MongoRepoImpl: *m,
+		StatsColl:     db.Collection(statsCollectionName),
+	}
 }
 
 // EnsureIndexes creates the required indexes on the agents collection.
@@ -35,11 +40,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			},
 			Options: options.Index().SetUnique(true).SetName("ux_chain_agent"),
 		},
-		{
-			Keys:    bson.D{{Key: "reputationScore", Value: -1}},
-			Options: options.Index().SetName("idx_accumulated_score_desc"),
-		},
-		// OASF capability indexes
+		// OASF capability indexes (scoring fields now live on agent_score_stats — sort joins happen there).
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
@@ -48,23 +49,21 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().SetName("idx_chain_has_oasf"),
 		},
 
-		// Compound index for skill + score sorting
+		// Compound index for skill filtering
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
 				{Key: "oasfSkills", Value: 1},
-				{Key: "reputationScore", Value: -1},
 			},
-			Options: options.Index().SetName("idx_chain_oasf_skills_score"),
+			Options: options.Index().SetName("idx_chain_oasf_skills"),
 		},
-		// Compound index for domain + score sorting
+		// Compound index for domain filtering
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
 				{Key: "oasfDomains", Value: 1},
-				{Key: "reputationScore", Value: -1},
 			},
-			Options: options.Index().SetName("idx_chain_oasf_domains_score"),
+			Options: options.Index().SetName("idx_chain_oasf_domains"),
 		},
 		// Multikey index on denormalized tags (from onchainMetadata.tags).
 		{
@@ -86,11 +85,6 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys:    bson.D{{Key: "owner", Value: 1}},
 			Options: options.Index().SetName("idx_owner"),
-		},
-		// Index for leaderboard sort by composite score.
-		{
-			Keys:    bson.D{{Key: "compositeScore", Value: -1}},
-			Options: options.Index().SetName("idx_compositeScore_desc"),
 		},
 	})
 	return err
@@ -131,25 +125,6 @@ func (r *Repository) FindAllByChain(ctx context.Context, chainID int64) ([]Agent
 	return r.Find(ctx, bson.M{"chainId": chainID}, opts)
 }
 
-// UpdateScore atomically updates the O(1) scoring fields on an agent.
-func (r *Repository) UpdateScore(ctx context.Context, chainID int64, agentID string, accScore float64, scoreUpdateAt int64, consecutiveFails, totalTasks, totalPassed, totalFailed int64) error {
-	id := AgentDocumentID(chainID, agentID)
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{
-		"reputationScore":  accScore,
-		"scoreUpdateAt":    scoreUpdateAt,
-		"consecutiveFails": consecutiveFails,
-		"totalTasks":       totalTasks,
-		"totalPassed":      totalPassed,
-		"totalFailed":      totalFailed,
-	}}
-	_, err := r.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return fmt.Errorf("agent repo: update score %s: %w", id, err)
-	}
-	return nil
-}
-
 // UpdateIdentity atomically updates denormalized registration file fields on the agent document.
 func (r *Repository) UpdateIdentity(ctx context.Context, chainID int64, agentID string, id IdentityFields) error {
 	docID := AgentDocumentID(chainID, agentID)
@@ -169,60 +144,6 @@ func (r *Repository) UpdateIdentity(ctx context.Context, chainID int64, agentID 
 	_, err := r.UpdateOne(ctx, filter, update)
 	if err != nil {
 		return fmt.Errorf("agent repo: update identity %s: %w", docID, err)
-	}
-	return nil
-}
-
-// UpdateReputationScore atomically updates only reputationScore + scoreUpdateAt (used by decay cron).
-func (r *Repository) UpdateReputationScore(ctx context.Context, chainID int64, agentID string, accScore float64, scoreUpdateAt int64) error {
-	id := AgentDocumentID(chainID, agentID)
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{
-		"reputationScore": accScore,
-		"scoreUpdateAt":   scoreUpdateAt,
-	}}
-	_, err := r.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return fmt.Errorf("agent repo: update reputation score %s: %w", id, err)
-	}
-	return nil
-}
-
-// UpdateCompositeBreakdown atomically writes composite + 4 component scores.
-// Called by score-refresh worker each cycle, and by the write path after
-// reputation updates.
-func (r *Repository) UpdateCompositeBreakdown(
-	ctx context.Context,
-	chainID int64,
-	agentID string,
-	composite, reputationNorm, services, publisher, compliance float64,
-) error {
-	docID := AgentDocumentID(chainID, agentID)
-	filter := bson.M{"_id": docID}
-	update := bson.M{"$set": bson.M{
-		"compositeScore":  composite,
-		"reputationNorm":  reputationNorm,
-		"servicesScore":   services,
-		"publisherScore":  publisher,
-		"complianceScore": compliance,
-	}}
-	_, err := r.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return fmt.Errorf("agent repo: update composite breakdown %s: %w", docID, err)
-	}
-	return nil
-}
-
-// IncReputationScore atomically adds delta to reputationScore using $inc.
-// Used exclusively by the rescale worker — does NOT overwrite scoreUpdateAt so
-// live scoring is unaffected. Safe to run concurrently with ApplyTaskScore ($set).
-func (r *Repository) IncReputationScore(ctx context.Context, chainID int64, agentID string, delta float64) error {
-	id := AgentDocumentID(chainID, agentID)
-	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$inc": bson.M{"reputationScore": delta},
-	})
-	if err != nil {
-		return fmt.Errorf("agent repo: inc reputation score %s: %w", id, err)
 	}
 	return nil
 }

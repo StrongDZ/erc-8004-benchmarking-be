@@ -13,6 +13,7 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/utils"
 )
@@ -140,44 +141,52 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		return
 	}
 
-	newRep := scoring.ApplyTaskScore(agentDoc.ReputationScore, agentDoc.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
-	newTotalTasks := agentDoc.TotalTasks + 1
+	// Fetch current scoring state from agent_score_stats (single source of truth).
+	// If absent (first feedback ever), default to zero-value with neutral publisher.
+	prev, _ := p.statsRepo.FindByID(context.Background(), bs.chainID, agentID)
+	if prev == nil {
+		prev = &scorestats.AgentScoreStats{ChainID: bs.chainID, AgentID: agentID, PublisherScore: 50.0}
+	}
+
+	newRep := scoring.ApplyTaskScore(prev.ReputationScore, prev.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
+	newTotalTasks := prev.TotalTasks + 1
 
 	var newPassed, newFailed, newConsecFails int64
 	if vi >= 0.40 {
-		newPassed = agentDoc.TotalPassed + 1
-		newFailed = agentDoc.TotalFailed
+		newPassed = prev.TotalPassed + 1
+		newFailed = prev.TotalFailed
 		newConsecFails = 0
 	} else {
-		newPassed = agentDoc.TotalPassed
-		newFailed = agentDoc.TotalFailed + 1
-		newConsecFails = agentDoc.ConsecutiveFails + 1
+		newPassed = prev.TotalPassed
+		newFailed = prev.TotalFailed + 1
+		newConsecFails = prev.ConsecutiveFails + 1
 		// Bake the progressive penalty directly into reputationScore (unified write path).
 		newRep -= scoring.ComputePenalty(newConsecFails, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
 	}
 
-	agentDoc.ReputationScore = newRep
-	agentDoc.ScoreUpdateAt = ev.Timestamp
-	agentDoc.ConsecutiveFails = newConsecFails
-	agentDoc.TotalTasks = newTotalTasks
-	agentDoc.TotalPassed = newPassed
-	agentDoc.TotalFailed = newFailed
 	bs.dirtyAgents[agentID] = true
 
-	// Recompute composite using newly-updated rep + cached S/P/C from last refresh cycle.
-	// On first feedback (before any refresh has run), cached components default to 0/50/0.
+	// Recompute composite using new rep + cached S/P/C from last refresh cycle.
 	repNorm := scoring.NormalizeReputation(newRep)
-	services := agentDoc.ServicesScore     // cached from last score-refresh
-	publisher := agentDoc.PublisherScore   // cached from last score-refresh
-	compliance := agentDoc.ComplianceScore // cached from last score-refresh
+	services := prev.ServicesScore
+	publisher := prev.PublisherScore
+	compliance := prev.ComplianceScore
 	if publisher == 0 {
-		// Initialize neutral if not yet populated by refresh cycle.
+		// Neutral default until first refresh cycle populates publisher reputation.
 		publisher = 50.0
 	}
 	composite := scoring.ComputeCompositeScore(repNorm, services, publisher, compliance, p.compositeWeights)
-	if err := p.agentRepo.UpdateCompositeBreakdown(context.Background(), bs.chainID, agentID, composite, repNorm, services, publisher, compliance); err != nil {
-		log.Printf("trustrank: update composite breakdown chain=%d agent=%s: %v", bs.chainID, agentID, err)
-		// non-fatal — refresh worker will eventually fix
+
+	if err := p.statsRepo.UpsertFromWritePath(
+		context.Background(),
+		bs.chainID, agentID,
+		newRep, ev.Timestamp,
+		newConsecFails, newTotalTasks, newPassed, newFailed,
+		composite, repNorm, services, publisher, compliance,
+		prev.ServiceWarnings,
+	); err != nil {
+		log.Printf("trustrank: upsert write-path stats chain=%d agent=%s: %v", bs.chainID, agentID, err)
+		// non-fatal — refresh worker will eventually reconcile via replay.
 	}
 }
 

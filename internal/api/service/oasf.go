@@ -12,12 +12,14 @@ import (
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
+	"erc-8004-benchmarking-be/internal/repository/scorestats"
 )
 
 // OASFDeps bundles the repos used by the OASF service.
 type OASFDeps struct {
-	Agents  *agentrepo.Repository
-	Formula scoring.FormulaConfig
+	Agents     *agentrepo.Repository
+	ScoreStats *scorestats.Repository
+	Formula    scoring.FormulaConfig
 }
 
 // OASF encapsulates OASF discovery logic.
@@ -81,9 +83,10 @@ func (s *OASF) Browse(ctx context.Context, p BrowseParams) (*BrowseResult, error
 		return nil, err
 	}
 	now := time.Now().Unix()
+	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, p.ChainID, docs)
 	rows := make([]dto.AgentRow, 0, len(docs))
 	for i, d := range docs {
-		r := toAgentRow(d, s.deps.Formula, now)
+		r := toAgentRow(d, statsMap[d.AgentID], s.deps.Formula, now)
 		r.Rank = int(p.Skip) + i + 1
 		rows = append(rows, r)
 	}

@@ -41,7 +41,7 @@ func main() {
 	defer func() { _ = mc.Disconnect(context.Background()) }()
 
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
-	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl)
+	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	scoreStats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
 	offchain := offchainrepo.NewRepository(analyzedDB, cfg.OffchainColl)

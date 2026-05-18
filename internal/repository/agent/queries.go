@@ -45,32 +45,112 @@ const (
 
 // FindLeaderboard returns a filtered, sorted, paginated slice of agents + total count.
 // `limit` is capped by the caller; this function does not clamp.
-func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, sort LeaderboardSort, skip, limit int64) ([]AgentDocument, int64, error) {
+//
+// For score-based sorts (SortScoreDesc / SortScoreAsc) the method performs a two-phase query:
+//   Phase 1: query agent_score_stats sorted by compositeScore (or totalTasks) → get ordered agentIDs.
+//   Phase 2: bulk-fetch agent docs by agentID ∈ list, preserve stats-side order.
+//
+// For SortRecent the sort is on the agent document's createdAt field (no stats needed).
+func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, sortOrder LeaderboardSort, skip, limit int64) ([]AgentDocument, int64, error) {
 	query := buildLeaderboardQuery(f)
-
-	var sortDoc bson.D
-	switch sort {
-	case SortScoreAsc:
-		sortDoc = bson.D{{Key: "compositeScore", Value: 1}}
-	case SortTasksDesc:
-		sortDoc = bson.D{{Key: "totalTasks", Value: -1}}
-	case SortRecent:
-		sortDoc = bson.D{{Key: "createdAt", Value: -1}}
-	default:
-		sortDoc = bson.D{{Key: "compositeScore", Value: -1}}
-	}
 
 	total, err := r.Count(ctx, query)
 	if err != nil {
 		return nil, 0, fmt.Errorf("agent repo: leaderboard count: %w", err)
 	}
 
-	opts := options.Find().SetSort(sortDoc).SetSkip(skip).SetLimit(limit)
-	docs, err := r.Find(ctx, query, opts)
-	if err != nil {
-		return nil, 0, fmt.Errorf("agent repo: leaderboard find: %w", err)
+	switch sortOrder {
+	case SortRecent:
+		opts := options.Find().
+			SetSort(bson.D{{Key: "createdAt", Value: -1}}).
+			SetSkip(skip).SetLimit(limit)
+		docs, err := r.Find(ctx, query, opts)
+		if err != nil {
+			return nil, 0, fmt.Errorf("agent repo: leaderboard find: %w", err)
+		}
+		return docs, total, nil
+
+	default:
+		// Score / tasks sorts: delegate ordering to agent_score_stats.
+		if r.StatsColl == nil {
+			// Fallback: unordered scan (no stats collection available).
+			opts := options.Find().SetSkip(skip).SetLimit(limit)
+			docs, err := r.Find(ctx, query, opts)
+			if err != nil {
+				return nil, 0, fmt.Errorf("agent repo: leaderboard find (no stats): %w", err)
+			}
+			return docs, total, nil
+		}
+
+		var statsSortDoc bson.D
+		switch sortOrder {
+		case SortScoreAsc:
+			statsSortDoc = bson.D{{Key: "compositeScore", Value: 1}}
+		case SortTasksDesc:
+			statsSortDoc = bson.D{{Key: "totalTasks", Value: -1}}
+		default: // SortScoreDesc
+			statsSortDoc = bson.D{{Key: "compositeScore", Value: -1}}
+		}
+
+		// Build stats-side chain filter from the agent query.
+		statsFilter := bson.M{}
+		if v, ok := query["chainId"]; ok {
+			statsFilter["chainId"] = v
+		}
+
+		statsOpts := options.Find().
+			SetSort(statsSortDoc).
+			SetSkip(skip).
+			SetLimit(limit).
+			SetProjection(bson.M{"chainId": 1, "agentId": 1})
+		cur, err := r.StatsColl.Find(ctx, statsFilter, statsOpts)
+		if err != nil {
+			return nil, 0, fmt.Errorf("agent repo: leaderboard stats sort: %w", err)
+		}
+		defer cur.Close(ctx)
+
+		type statsRow struct {
+			ChainID int64  `bson:"chainId"`
+			AgentID string `bson:"agentId"`
+		}
+		var rows []statsRow
+		if err := cur.All(ctx, &rows); err != nil {
+			return nil, 0, fmt.Errorf("agent repo: leaderboard stats decode: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil, total, nil
+		}
+
+		// Determine effective chainID (all rows share the same chain in normal usage).
+		chainID := rows[0].ChainID
+		ids := make([]string, 0, len(rows))
+		posMap := make(map[string]int, len(rows))
+		for i, row := range rows {
+			ids = append(ids, row.AgentID)
+			posMap[row.AgentID] = i
+		}
+
+		agentDocs, err := r.Find(ctx, bson.M{"chainId": chainID, "agentId": bson.M{"$in": ids}})
+		if err != nil {
+			return nil, 0, fmt.Errorf("agent repo: leaderboard agent fetch: %w", err)
+		}
+
+		// Restore stats-side order.
+		ordered := make([]AgentDocument, len(rows))
+		for _, d := range agentDocs {
+			if pos, ok := posMap[d.AgentID]; ok {
+				ordered[pos] = d
+			}
+		}
+		// Compact out zero-value slots (agents missing from collection).
+		out := ordered[:0]
+		for _, d := range ordered {
+			if d.AgentID != "" {
+				out = append(out, d)
+			}
+		}
+		return out, total, nil
 	}
-	return docs, total, nil
 }
 
 func buildLeaderboardQuery(f LeaderboardFilter) bson.M {
@@ -205,7 +285,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
-	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
+	avg, err := runScalarAgg(ctx, r.StatsColl, avgPipeline, "avg")
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats avg: %w", err)
 	}
@@ -219,7 +299,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
-	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
+	top10, err := runScalarAgg(ctx, r.StatsColl, top10Pipeline, "avg")
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats top10: %w", err)
 	}
@@ -239,7 +319,7 @@ func (r *Repository) ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*
 }
 
 func (r *Repository) computeMedianReputationScoreMulti(ctx context.Context, match bson.M, total int64) (float64, error) {
-	if total <= 0 {
+	if total <= 0 || r.StatsColl == nil {
 		return 0, nil
 	}
 	mid := total / 2
@@ -248,14 +328,21 @@ func (r *Repository) computeMedianReputationScoreMulti(ctx context.Context, matc
 		SetSkip(mid).
 		SetLimit(1).
 		SetProjection(bson.M{"compositeScore": 1})
-	docs, err := r.Find(ctx, match, opts)
+	cur, err := r.StatsColl.Find(ctx, match, opts)
 	if err != nil {
 		return 0, err
 	}
-	if len(docs) == 0 {
+	defer cur.Close(ctx)
+	var row struct {
+		CompositeScore float64 `bson:"compositeScore"`
+	}
+	if !cur.Next(ctx) {
 		return 0, nil
 	}
-	return docs[0].CompositeScore, nil
+	if err := cur.Decode(&row); err != nil {
+		return 0, err
+	}
+	return row.CompositeScore, nil
 }
 
 // TagCount is one entry of /leaderboard/tags aggregation output.
@@ -333,7 +420,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
-	avg, err := runScalarAgg(ctx, r.Coll, avgPipeline, "avg")
+	avg, err := runScalarAgg(ctx, r.StatsColl, avgPipeline, "avg")
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats avg: %w", err)
 	}
@@ -347,7 +434,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 			"avg": bson.M{"$avg": "$compositeScore"},
 		}}},
 	}
-	top10, err := runScalarAgg(ctx, r.Coll, top10Pipeline, "avg")
+	top10, err := runScalarAgg(ctx, r.StatsColl, top10Pipeline, "avg")
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: stats top10: %w", err)
 	}
@@ -369,7 +456,7 @@ func (r *Repository) ComputeStats(ctx context.Context, chainID int64) (*Stats, e
 // computeMedianReputationScore uses $sort + $skip + $limit (O(n log n) in Mongo but simple).
 // For large collections, consider precomputing on the decay worker.
 func (r *Repository) computeMedianReputationScore(ctx context.Context, chainID, total int64) (float64, error) {
-	if total <= 0 {
+	if total <= 0 || r.StatsColl == nil {
 		return 0, nil
 	}
 	mid := total / 2
@@ -378,14 +465,21 @@ func (r *Repository) computeMedianReputationScore(ctx context.Context, chainID, 
 		SetSkip(mid).
 		SetLimit(1).
 		SetProjection(bson.M{"compositeScore": 1})
-	docs, err := r.Find(ctx, bson.M{"chainId": chainID}, opts)
+	cur, err := r.StatsColl.Find(ctx, bson.M{"chainId": chainID}, opts)
 	if err != nil {
 		return 0, err
 	}
-	if len(docs) == 0 {
+	defer cur.Close(ctx)
+	var row struct {
+		CompositeScore float64 `bson:"compositeScore"`
+	}
+	if !cur.Next(ctx) {
 		return 0, nil
 	}
-	return docs[0].CompositeScore, nil
+	if err := cur.Decode(&row); err != nil {
+		return 0, err
+	}
+	return row.CompositeScore, nil
 }
 
 // runScalarAgg runs a pipeline whose final $group emits one document with a numeric
