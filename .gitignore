@@ -19,6 +19,7 @@ scripts/*
 # Exceptions: pure-logic unit tests (Mongo-free, no integration tests)
 !internal/infra/rabbitmq/*_test.go
 !internal/repository/wallet/*_test.go
+!internal/app/trustgraph/*_test.go
 # Built binaries at repo root
 /classifier-bench
 /classifier-bench-mongo
