@@ -263,3 +263,12 @@ func (r *Repository) ListByAgent(ctx context.Context, chainID int64, agentID str
 	})
 	return r.Find(ctx, filter, opts)
 }
+
+// FindByID fetches a single feedback record by its _id.
+func (r *Repository) FindByID(ctx context.Context, id string) (*FeedbackRecord, error) {
+	doc, err := r.FindOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return nil, fmt.Errorf("feedback repo: find by id %s: %w", id, err)
+	}
+	return &doc, nil
+}
