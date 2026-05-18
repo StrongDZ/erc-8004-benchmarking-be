@@ -102,6 +102,12 @@ func main() {
 	}
 	defer publisher.Close()
 
+	fbPub, err := mqinfra.NewMultiPublisher(mqConn)
+	if err != nil {
+		log.Fatalf("trustrank: new feedback publisher: %v", err)
+	}
+	defer fbPub.Close()
+
 	// URI resolver used by the service_uri worker pool.
 	httpCl := httpclient.NewClientWithOptions(httpclient.ClientOptions{
 		Timeout:   cfg.HTTPSFetchTimeout,
@@ -131,7 +137,7 @@ func main() {
 		Compliance: cfg.ScoreWeightCompliance,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, tagStats, tagCorrs, cfg.TagStatsMinSamples)
+	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, fbPub, tagStats, tagCorrs, cfg.TagStatsMinSamples)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,
