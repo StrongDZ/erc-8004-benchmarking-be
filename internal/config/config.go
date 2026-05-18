@@ -99,6 +99,7 @@ type Config struct {
 	LLMMode                     string        // "ollama" | "llamacpp"
 	LLMBaseURL                  string        // e.g. "http://localhost:11434"
 	LLMModel                    string        // e.g. "qwen2.5:3b-instruct-q4_K_M"
+	LLMPromptVersion            string        // "compact3b" | "full6cat-v3" | "v1"
 	LLMTimeoutSeconds           int           // per-request timeout (default 3)
 	LLMConfidenceThresholdLow   float64       // low-confidence floor (default 0.50)
 	LLMConfidenceThresholdAccept float64      // accept threshold (default 0.70)
@@ -223,6 +224,7 @@ func Load() (Config, error) {
 		LLMMode:                      utils.Getenv("LLM_MODE", "ollama"),
 		LLMBaseURL:                   utils.Getenv("LLM_BASE_URL", "http://localhost:11434"),
 		LLMModel:                     utils.Getenv("LLM_MODEL", "qwen2.5:3b-instruct-q4_K_M"),
+		LLMPromptVersion:             utils.Getenv("LLM_PROMPT_VERSION", "compact3b"),
 		LLMTimeoutSeconds:            utils.GetenvInt("LLM_TIMEOUT_SECONDS", 120),
 		LLMConfidenceThresholdLow:    utils.GetenvFloat("LLM_CONFIDENCE_THRESHOLD_LOW", 0.50),
 		LLMConfidenceThresholdAccept: utils.GetenvFloat("LLM_CONFIDENCE_THRESHOLD_ACCEPT", 0.70),
