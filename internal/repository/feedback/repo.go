@@ -272,3 +272,39 @@ func (r *Repository) FindByID(ctx context.Context, id string) (*FeedbackRecord, 
 	}
 	return &doc, nil
 }
+
+// FeedbackEdge is a lightweight struct for graph edge construction.
+type FeedbackEdge struct {
+	ChainID       int64   `bson:"chainId"`
+	ClientAddress string  `bson:"clientAddress"`
+	AgentID       string  `bson:"agentId"`
+	Wi            float64 `bson:"wi"`
+}
+
+// ScanValidEdges returns all valid feedback edges (validationVerdict="valid", wi > 0).
+// Pass chainID=0 for all chains.
+func (r *Repository) ScanValidEdges(ctx context.Context, chainID int64) ([]FeedbackEdge, error) {
+	filter := bson.M{
+		"validationVerdict": "valid",
+		"wi":                bson.M{"$gt": 0},
+	}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "clientAddress": 1, "agentId": 1, "wi": 1, "_id": 0,
+		}).
+		SetBatchSize(10000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: scan valid edges: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var out []FeedbackEdge
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("feedback: decode valid edges: %w", err)
+	}
+	return out, nil
+}

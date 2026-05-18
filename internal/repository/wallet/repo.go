@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	mongorepo "erc-8004-benchmarking-be/internal/repository"
+	agentrep "erc-8004-benchmarking-be/internal/repository/agent"
 )
 
 // NewRepository returns a Repository bound to the named collection.
@@ -109,4 +110,39 @@ func (r *Repository) ApplyTrustDelta(ctx context.Context, in DeltaInput) error {
 		return fmt.Errorf("wallet repo: apply trust delta (%d, %s): %w", in.ChainID, in.Address, err)
 	}
 	return nil
+}
+
+// ScanAll returns all wallet documents for a chain (projection: fields for graph construction).
+// Pass chainID=0 for all chains.
+func (r *Repository) ScanAll(ctx context.Context, chainID int64) ([]WalletDocument, error) {
+	filter := bson.M{}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	return r.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"_id": 1, "address": 1, "chainId": 1,
+			"trustScore": 1, "ownedAgentIds": 1,
+		}).
+		SetBatchSize(10000),
+	)
+}
+
+// BulkSetPropagated writes trustScorePropagated for wallets in bulk.
+func (r *Repository) BulkSetPropagated(ctx context.Context, scores []agentrep.PropagatedScore) error {
+	if len(scores) == 0 {
+		return nil
+	}
+	ops := make([]mongodrv.WriteModel, 0, len(scores))
+	for _, s := range scores {
+		ops = append(ops, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": s.ID}).
+			SetUpdate(bson.M{"$set": bson.M{
+				"trustScorePropagated": s.Score,
+				"propagationUpdatedAt": s.At,
+			}}),
+		)
+	}
+	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
+	return err
 }
