@@ -86,6 +86,22 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 					"isRevoked":               false,
 				}),
 		},
+		{
+			Keys: bson.D{
+				{Key: "chainId", Value: 1},
+				{Key: "validationVerdict", Value: 1},
+				{Key: "timestamp", Value: -1},
+			},
+			Options: options.Index().SetName("idx_chain_verdict_ts"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "clientAddress", Value: 1},
+				{Key: "chainId", Value: 1},
+				{Key: "timestamp", Value: -1},
+			},
+			Options: options.Index().SetName("idx_client_chain_ts"),
+		},
 	})
 	return err
 }
