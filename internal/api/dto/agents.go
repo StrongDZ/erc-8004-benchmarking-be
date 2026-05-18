@@ -4,7 +4,7 @@ package dto
 // These mirror the JSON shapes in docs/API_SPEC_v1.md §2.1, §3.1–§3.11.
 
 // ScoreBreakdown surfaces the 4 component scores that compose the trust score.
-// All values normalized to [0, 100].
+// Reputation is the raw accumulator value (unbounded). Services/Publisher/Compliance are normalized to [0, 100].
 type ScoreBreakdown struct {
 	Reputation float64 `json:"reputation"`
 	Services   float64 `json:"services"`
@@ -181,18 +181,19 @@ type AgentOverview struct {
 	OffchainMetadata map[string]any                  `json:"offchainMetadata,omitempty"`
 }
 
-// ScorePoint is one entry in /agents/:id/score-history (§3.2).
-type ScorePoint struct {
-	Timestamp  string  `json:"timestamp"` // RFC3339 UTC
-	Score      float64 `json:"score"`
-	Type       string  `json:"type"` // "event" | "decay"
-	TxHash     string  `json:"txHash,omitempty"`
-	EventScore float64 `json:"eventScore,omitempty"`
+// ReputationScorePoint is one entry in /agents/:id/reputation-score-history.
+// type="event" marks the raw reputation right after a feedback was applied (incl. penalty when vi<0.40).
+// type="decay" marks a midnight UTC sample between events, plus a final "now" sample.
+type ReputationScorePoint struct {
+	Timestamp string  `json:"timestamp"` // RFC3339 UTC
+	Score     float64 `json:"score"`
+	Type      string  `json:"type"` // "event" | "decay"
+	TxHash    string  `json:"txHash,omitempty"`
 }
 
-// ScoreHistoryResult wraps the scoring timeline response.
-type ScoreHistoryResult struct {
-	Points []ScorePoint `json:"points"`
+// ReputationScoreHistoryResult wraps the reputation timeline response.
+type ReputationScoreHistoryResult struct {
+	Points []ReputationScorePoint `json:"points"`
 }
 
 // FeedbackRow is one item in /agents/:id/feedbacks (§3.3).
