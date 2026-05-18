@@ -11,8 +11,9 @@ import (
 
 // Queue name constants.
 const (
-	QueueRawLogs  = "erc8004.raw_logs"
-	QueueAgentURI = "erc8004.agent_uri"
+	QueueRawLogs            = "erc8004.raw_logs"
+	QueueAgentURI           = "erc8004.agent_uri"
+	QueueFeedbackClassified = "erc8004.feedback.classified"
 )
 
 // EventURIQueueName returns the per-chain queue for event-sourced URI messages.
@@ -75,4 +76,11 @@ type ServiceURIMessage struct {
 	AgentID     string `json:"agentId,omitempty"`
 	ServiceName string `json:"serviceName,omitempty"`
 	PublishedAt int64  `json:"publishedAt"`
+}
+
+// FeedbackClassifiedMessage is published to QueueFeedbackClassified by the trustrank
+// processor after a feedback record has been classified and written to feedback_history.
+type FeedbackClassifiedMessage struct {
+	FeedbackID string `json:"feedbackId"`
+	ChainID    int64  `json:"chainId"`
 }
