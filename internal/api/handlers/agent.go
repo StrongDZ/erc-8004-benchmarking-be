@@ -66,7 +66,6 @@ func (h *AgentHandler) Overview(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, out)
 }
 
-
 // Feedbacks handles GET /agents/:chainId/:agentId/feedbacks (Â§3.3).
 // Response rows use dto.FeedbackRow: classification.rule is always set; classification.fallback
 // is present only when the LLM fallback ran (see internal/api/service/mapper.go toFeedbackRow).
@@ -370,6 +369,31 @@ func (h *AgentHandler) OffchainByURI(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, out)
 }
 
+// ReputationScoreHistory handles GET /agents/:chainId/:agentId/reputation-score-history.
+// Returns the agent's reputation timeline derived from feedback_history (event + daily decay points).
+// @Summary Reputation score history
+// @Tags agents
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/reputation-score-history [get]
+func (h *AgentHandler) ReputationScoreHistory(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.ReputationScoreHistory(r.Context(), chainID, agentID)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
+}
+
 // parseAgentPath extracts (chainId, agentId) or writes a 400 and returns ok=false.
 func (h *AgentHandler) parseAgentPath(w http.ResponseWriter, r *http.Request) (int64, string, bool) {
 	chainID, err := dto.RequireInt64Path(r, "chainId")
@@ -384,4 +408,3 @@ func (h *AgentHandler) parseAgentPath(w http.ResponseWriter, r *http.Request) (i
 	}
 	return chainID, agentID, true
 }
-

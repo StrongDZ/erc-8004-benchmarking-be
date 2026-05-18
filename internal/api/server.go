@@ -20,14 +20,15 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
+	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
+
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -134,10 +135,11 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// /api/v1/agents/...
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}", c30s(http.HandlerFunc(agH.Profile)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/overview", c30s(http.HandlerFunc(agH.Overview)))
-mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
+	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
 	mux.HandleFunc("GET /api/v1/offchain-by-uri", agH.OffchainByURI)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/reputation-score-history", c2m(http.HandlerFunc(agH.ReputationScoreHistory)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/activity-heatmap", c2m(http.HandlerFunc(agH.ActivityHeatmap)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/penalties", agH.Penalties)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/related", c60s(http.HandlerFunc(agH.Related)))
