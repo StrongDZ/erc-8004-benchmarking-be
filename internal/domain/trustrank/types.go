@@ -32,6 +32,12 @@ type URIPublisher interface {
 	Publish(ctx context.Context, queueName string, msg any) error
 }
 
+// FeedbackPublisher publishes classified feedback IDs to the trust-graph worker queue.
+// May be nil; when nil, publishing is skipped.
+type FeedbackPublisher interface {
+	Publish(ctx context.Context, queueName string, msg any) error
+}
+
 // App orchestrates Stream 2: parallel per-chain event processing each cron tick.
 type App struct {
 	Contracts  *contractsrepo.ContractsRepository
@@ -274,7 +280,8 @@ type Processor struct {
 	offchainRepo     *offchain.Repository
 	formulaCfg       scoring.FormulaConfig
 	compositeWeights scoring.CompositeWeights
-	uriPublisher     URIPublisher // may be nil; publishes service endpoint URIs asynchronously
+	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
+	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
 	tagStatsRepo     *tagstats.StatsRepository
 	tagCorrsRepo     *tagstats.CorrectionRepository
 	tagScaleCache    sync.Map // tag1 -> cachedScale

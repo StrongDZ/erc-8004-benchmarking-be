@@ -29,6 +29,7 @@ import (
 // NewProcessor constructs a Processor with all required dependencies.
 // uriPublisher may be nil; when set, service endpoint URIs discovered during
 // identity event processing are published to the service_uri queue.
+// fbPublisher may be nil; when set, classified feedback IDs are published to QueueFeedbackClassified.
 // tagStatsRepo / tagCorrsRepo may be nil to disable dynamic scale detection.
 func NewProcessor(
 	agentRepo *agent.Repository,
@@ -39,6 +40,7 @@ func NewProcessor(
 	formulaCfg scoring.FormulaConfig,
 	compositeWeights scoring.CompositeWeights,
 	uriPublisher URIPublisher,
+	fbPublisher FeedbackPublisher,
 	tagStatsRepo *tagstats.StatsRepository,
 	tagCorrsRepo *tagstats.CorrectionRepository,
 	minSamples int,
@@ -52,6 +54,7 @@ func NewProcessor(
 		formulaCfg:       formulaCfg,
 		compositeWeights: compositeWeights,
 		uriPublisher:     uriPublisher,
+		fbPublisher:      fbPublisher,
 		tagStatsRepo:     tagStatsRepo,
 		tagCorrsRepo:     tagCorrsRepo,
 		minSamples:       minSamples,
@@ -252,6 +255,16 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 
 	if err := p.feedbackRepo.BulkUpsert(ctx, bs.pendingFeedbacks); err != nil {
 		return fmt.Errorf("flush feedback: %w", err)
+	}
+
+	if p.fbPublisher != nil {
+		for i := range bs.pendingFeedbacks {
+			fb := &bs.pendingFeedbacks[i]
+			pubMsg := mq.FeedbackClassifiedMessage{FeedbackID: fb.ID, ChainID: fb.ChainID}
+			if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackClassified, pubMsg); err != nil {
+				log.Printf("processor: publish feedback.classified (%s): %v", fb.ID, err)
+			}
+		}
 	}
 
 	if err := p.feedbackRepo.BulkUpdate(ctx, bs.pendingFBUpdates); err != nil {
