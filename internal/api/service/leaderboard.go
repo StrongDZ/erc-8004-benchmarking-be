@@ -111,10 +111,10 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 	}
 
 	now := time.Now().Unix()
-	statsMap := bulkFetchStats(ctx, s.deps.Scores, p.ChainID, docs)
+	statsMap := bulkFetchStats(ctx, s.deps.Scores, docs)
 	rows := make([]dto.AgentRow, 0, len(docs))
 	for _, d := range docs {
-		row := toAgentRow(d, statsMap[d.AgentID], s.deps.Formula, now)
+		row := toAgentRow(d, statsMap[statsKey(d.ChainID, d.AgentID)], s.deps.Formula, now)
 		if p.MinScore > 0 && row.TrustScore < p.MinScore {
 			continue
 		}
@@ -136,11 +136,11 @@ func (s *Leaderboard) Search(ctx context.Context, chainID int64, q string, limit
 	if err != nil {
 		return nil, fmt.Errorf("leaderboard search: %w", err)
 	}
-	statsMap := bulkFetchStats(ctx, s.deps.Scores, chainID, docs)
+	statsMap := bulkFetchStats(ctx, s.deps.Scores, docs)
 	out := make([]dto.AgentSearchRow, 0, len(docs))
 	for _, d := range docs {
 		var composite float64
-		if st := statsMap[d.AgentID]; st != nil {
+		if st := statsMap[statsKey(d.ChainID, d.AgentID)]; st != nil {
 			composite = st.CompositeScore
 		}
 		out = append(out, dto.AgentSearchRow{

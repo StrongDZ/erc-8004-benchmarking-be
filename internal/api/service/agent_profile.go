@@ -218,25 +218,31 @@ func (s *Agent) Related(ctx context.Context, chainID int64, agentID, by string, 
 		return nil, err
 	}
 	now := time.Now().Unix()
-	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, chainID, docs)
+	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, docs)
 	out := make([]dto.AgentRow, 0, len(docs))
 	for i, d := range docs {
-		r := toAgentRow(d, statsMap[d.AgentID], s.deps.Formula, now)
+		r := toAgentRow(d, statsMap[statsKey(d.ChainID, d.AgentID)], s.deps.Formula, now)
 		r.Rank = i + 1
 		out = append(out, r)
 	}
 	return out, nil
 }
 
-// bulkFetchStats fetches stats per agent. Returns map[agentID]*stats with nils for missing.
-func bulkFetchStats(ctx context.Context, repo agentScoreStatsRepo, chainID int64, docs []agentrepo.AgentDocument) map[string]*scorestats.AgentScoreStats {
+// bulkFetchStats fetches stats for each (chainID, agentID) pair from docs. The map is
+// keyed by statsKey so multi-chain pages don't collapse rows with duplicate agentIDs.
+func bulkFetchStats(ctx context.Context, repo agentScoreStatsRepo, docs []agentrepo.AgentDocument) map[string]*scorestats.AgentScoreStats {
 	out := make(map[string]*scorestats.AgentScoreStats, len(docs))
 	for _, d := range docs {
-		if s, _ := repo.FindByAgentID(ctx, chainID, d.AgentID); s != nil {
-			out[d.AgentID] = s
+		if s, _ := repo.FindByAgentID(ctx, d.ChainID, d.AgentID); s != nil {
+			out[statsKey(d.ChainID, d.AgentID)] = s
 		}
 	}
 	return out
+}
+
+// statsKey produces a stable map key for (chainId, agentId) pairs used by bulkFetchStats.
+func statsKey(chainID int64, agentID string) string {
+	return strconv.FormatInt(chainID, 10) + ":" + agentID
 }
 
 // Proof returns event metadata for verification (§3.10).

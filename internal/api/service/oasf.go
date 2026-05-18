@@ -83,10 +83,10 @@ func (s *OASF) Browse(ctx context.Context, p BrowseParams) (*BrowseResult, error
 		return nil, err
 	}
 	now := time.Now().Unix()
-	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, p.ChainID, docs)
+	statsMap := bulkFetchStats(ctx, s.deps.ScoreStats, docs)
 	rows := make([]dto.AgentRow, 0, len(docs))
 	for i, d := range docs {
-		r := toAgentRow(d, statsMap[d.AgentID], s.deps.Formula, now)
+		r := toAgentRow(d, statsMap[statsKey(d.ChainID, d.AgentID)], s.deps.Formula, now)
 		r.Rank = int(p.Skip) + i + 1
 		rows = append(rows, r)
 	}
