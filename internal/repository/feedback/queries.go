@@ -247,6 +247,26 @@ func (r *Repository) Count24h(ctx context.Context, chainID int64) (int64, error)
 	return r.Count(ctx, q)
 }
 
+// ListForReputationHistory returns non-revoked, non-self feedback for the agent,
+// sorted oldest-first (blockNumber asc, logIndex asc). Caller iterates to re-derive
+// the reputation timeline. Capped at 50000 docs to bound work.
+func (r *Repository) ListForReputationHistory(ctx context.Context, chainID int64, agentID string) ([]FeedbackRecord, error) {
+	q := bson.M{
+		"chainId":        chainID,
+		"agentId":        agentID,
+		"isRevoked":      bson.M{"$ne": true},
+		"isSelfFeedback": bson.M{"$ne": true},
+	}
+	opts := options.Find().
+		SetSort(bson.D{{Key: "blockNumber", Value: 1}, {Key: "logIndex", Value: 1}}).
+		SetLimit(50000)
+	docs, err := r.Find(ctx, q, opts)
+	if err != nil {
+		return nil, fmt.Errorf("feedback repo: list for reputation history: %w", err)
+	}
+	return docs, nil
+}
+
 // ListByClientAddress returns paginated feedback submitted by a specific wallet address,
 // sorted newest-first (blockNumber desc). Used by GET /wallet/:address/feedbacks.
 func (r *Repository) ListByClientAddress(ctx context.Context, address string, skip, limit int64) ([]FeedbackRecord, int64, error) {
