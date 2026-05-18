@@ -193,3 +193,29 @@ func (r *Repository) FindAll(ctx context.Context, skip, limit int64) ([]AgentDoc
 	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetSkip(skip).SetLimit(limit)
 	return r.Find(ctx, bson.M{}, opts)
 }
+
+// PropagatedScore is used for bulk-writing trustScorePropagated.
+type PropagatedScore struct {
+	ID    string  // document _id ({chainId}:{agentId})
+	Score float64 // [0, 100]
+	At    int64   // Unix seconds
+}
+
+// BulkSetPropagated writes trustScorePropagated + propagationUpdatedAt in bulk.
+func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedScore) error {
+	if len(scores) == 0 {
+		return nil
+	}
+	ops := make([]mongodrv.WriteModel, 0, len(scores))
+	for _, s := range scores {
+		ops = append(ops, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": s.ID}).
+			SetUpdate(bson.M{"$set": bson.M{
+				"trustScorePropagated": s.Score,
+				"propagationUpdatedAt": s.At,
+			}}),
+		)
+	}
+	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
+	return err
+}
