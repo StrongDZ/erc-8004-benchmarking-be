@@ -65,3 +65,65 @@ func TestWalletDocumentID_ProducesExpectedFormat(t *testing.T) {
 		t.Errorf("got=%q want=%q", got, want)
 	}
 }
+
+func TestBuildUpsertColdUpdate_NewWalletIncludesCreatedAt(t *testing.T) {
+	now := int64(1716000000)
+	update := buildUpsertColdUpdate(8453, "0xABC", 10.0, now)
+
+	setOnInsert, ok := update["$setOnInsert"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected $setOnInsert map, got %T", update["$setOnInsert"])
+	}
+	if setOnInsert["_id"] != "8453:0xabc" {
+		t.Errorf("_id=%v want 8453:0xabc", setOnInsert["_id"])
+	}
+	if setOnInsert["address"] != "0xabc" {
+		t.Errorf("address=%v want 0xabc", setOnInsert["address"])
+	}
+	if setOnInsert["chainId"] != int64(8453) {
+		t.Errorf("chainId=%v want 8453", setOnInsert["chainId"])
+	}
+	if setOnInsert["trustScore"] != 10.0 {
+		t.Errorf("trustScore=%v want 10.0", setOnInsert["trustScore"])
+	}
+	if setOnInsert["kind"] != "user" {
+		t.Errorf("kind=%v want user", setOnInsert["kind"])
+	}
+	if setOnInsert["createdAt"] != now {
+		t.Errorf("createdAt=%v want %v", setOnInsert["createdAt"], now)
+	}
+
+	setUpdate, ok := update["$set"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected $set map, got %T", update["$set"])
+	}
+	if setUpdate["updatedAt"] != now {
+		t.Errorf("updatedAt=%v want %v", setUpdate["updatedAt"], now)
+	}
+}
+
+func TestApplyTrustDeltaCounters_ValidIncrements(t *testing.T) {
+	got := computeCounterIncrements(true)
+	if got["feedbackTotalCount"] != int64(1) {
+		t.Errorf("totalCount inc=%v want 1", got["feedbackTotalCount"])
+	}
+	if got["feedbackValidCount"] != int64(1) {
+		t.Errorf("validCount inc=%v want 1", got["feedbackValidCount"])
+	}
+	if _, ok := got["feedbackJunkCount"]; ok {
+		t.Errorf("junkCount should not be incremented for valid feedback")
+	}
+}
+
+func TestApplyTrustDeltaCounters_JunkIncrements(t *testing.T) {
+	got := computeCounterIncrements(false)
+	if got["feedbackTotalCount"] != int64(1) {
+		t.Errorf("totalCount inc=%v want 1", got["feedbackTotalCount"])
+	}
+	if got["feedbackJunkCount"] != int64(1) {
+		t.Errorf("junkCount inc=%v want 1", got["feedbackJunkCount"])
+	}
+	if _, ok := got["feedbackValidCount"]; ok {
+		t.Errorf("validCount should not be incremented for junk feedback")
+	}
+}

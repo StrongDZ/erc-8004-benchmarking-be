@@ -41,3 +41,40 @@ func computeColdStartT0(ownedAgentScores []float64, defaultT0 float64) float64 {
 	}
 	return sum / float64(len(ownedAgentScores))
 }
+
+// buildUpsertColdUpdate constructs the Mongo update document for a cold-start upsert.
+// $setOnInsert only fires on INSERT (new doc); $set fires on every call to bump updatedAt.
+func buildUpsertColdUpdate(chainID int64, address string, t0 float64, nowUnix int64) map[string]any {
+	addr := normalizeAddress(address)
+	return map[string]any{
+		"$setOnInsert": map[string]any{
+			"_id":                  WalletDocumentID(chainID, address),
+			"address":              addr,
+			"chainId":              chainID,
+			"kind":                 string(WalletKindUser),
+			"trustScore":           clipTrustScore(t0),
+			"trustScorePropagated": 0.0,
+			"feedbackTotalCount":   int64(0),
+			"feedbackValidCount":   int64(0),
+			"feedbackJunkCount":    int64(0),
+			"junkRatio":            0.0,
+			"createdAt":            nowUnix,
+		},
+		"$set": map[string]any{
+			"updatedAt": nowUnix,
+		},
+	}
+}
+
+// computeCounterIncrements returns the $inc subdocument for ApplyTrustDelta.
+func computeCounterIncrements(isValid bool) map[string]any {
+	inc := map[string]any{
+		"feedbackTotalCount": int64(1),
+	}
+	if isValid {
+		inc["feedbackValidCount"] = int64(1)
+	} else {
+		inc["feedbackJunkCount"] = int64(1)
+	}
+	return inc
+}
