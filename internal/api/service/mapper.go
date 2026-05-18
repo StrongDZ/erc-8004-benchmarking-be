@@ -28,8 +28,9 @@ func statsOrZero(s *scorestats.AgentScoreStats) scorestats.AgentScoreStats {
 // stats may be nil — fields will default to zero in that case.
 func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scoring.FormulaConfig, _ int64) dto.AgentRow {
 	s := statsOrZero(stats)
+	// Reputation surfaces the raw accumulator value (unbounded), not the [0,100] component used in composite math.
 	breakdown := dto.ScoreBreakdown{
-		Reputation: round2(s.ReputationNorm),
+		Reputation: round2(s.ReputationScore),
 		Services:   round2(s.ServicesScore),
 		Publisher:  round2(s.PublisherScore),
 		Compliance: round2(s.ComplianceScore),
@@ -76,8 +77,9 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, dist map[string]int64, cfg scoring.FormulaConfig, _ int64) dto.AgentProfile {
 	s := statsOrZero(stats)
 	penalty := scoring.ComputePenalty(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)
+	// Reputation surfaces the raw accumulator value (unbounded), not the [0,100] component used in composite math.
 	breakdown := dto.ScoreBreakdown{
-		Reputation: round2(s.ReputationNorm),
+		Reputation: round2(s.ReputationScore),
 		Services:   round2(s.ServicesScore),
 		Publisher:  round2(s.PublisherScore),
 		Compliance: round2(s.ComplianceScore),

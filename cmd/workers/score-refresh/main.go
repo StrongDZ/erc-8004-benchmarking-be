@@ -41,10 +41,12 @@ func main() {
 	defer func() { _ = mc.Disconnect(context.Background()) }()
 
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
+	// offchain_data lives in the raw events DB alongside the uri-bootstrap writer, not in analyzed_agents.
+	rawDB := mc.Database(cfg.MongoDatabase)
 	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	scoreStats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
-	offchain := offchainrepo.NewRepository(analyzedDB, cfg.OffchainColl)
+	offchain := offchainrepo.NewRepository(rawDB, cfg.OffchainColl)
 
 	if err := agents.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("agents indexes: %v", err)

@@ -182,10 +182,10 @@ func NormalizeReputation(rawRep float64) float64 {
 	if rawRep <= 0 {
 		return 0
 	}
-	if rawRep >= 1000 {
+	if rawRep >= 100 {
 		return 100
 	}
-	return rawRep / 10.0
+	return rawRep
 }
 
 // JSONRequiredEndpoints must return successfully parsed JSON to count as healthy.
@@ -261,7 +261,7 @@ func ComputeServicesScore(checks []ServiceHealthCheck) ServicesScoreResult {
 				case 1:
 					// fetched but not JSON — unhealthy for JSON-required tier, emit warning
 					warnings = append(warnings, c.Name)
-				// -1 or 0: unhealthy, no warning
+					// -1 or 0: unhealthy, no warning
 				}
 			} else {
 				// fetch-only important (web, email)
@@ -303,9 +303,9 @@ type ComplianceInput struct {
 	Name           string
 	Description    string
 	Image          string
-	Services       int  // len(agent.Services)
-	Registrations  int  // len(agent.Registrations)
-	SupportedTrust int  // len(agent.SupportedTrust)
+	Services       int // len(agent.Services)
+	Registrations  int // len(agent.Registrations)
+	SupportedTrust int // len(agent.SupportedTrust)
 	X402Support    bool
 	AgentWallet    string
 	CardUpdatedAt  string
@@ -407,4 +407,3 @@ func ComputeCompositeScore(reputation, services, publisher, compliance float64, 
 	}
 	return result
 }
-

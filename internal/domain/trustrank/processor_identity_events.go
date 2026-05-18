@@ -8,7 +8,6 @@ import (
 
 	decoder "erc-8004-benchmarking-be/internal/decoder/evm"
 	"erc-8004-benchmarking-be/internal/mq"
-	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
 	"erc-8004-benchmarking-be/internal/repository/agent"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
@@ -229,9 +228,6 @@ func (p *Processor) applyIdentityFromURI(bs *batchState, agentID, uri string) {
 		for _, svc := range merged {
 			ep := strings.TrimSpace(svc.Endpoint)
 			if ep == "" {
-				continue
-			}
-			if domainuri.DetectURIType(ep) == domainuri.URITypeUnknown {
 				continue
 			}
 			bs.pendingServiceURIs = append(bs.pendingServiceURIs, mq.ServiceURIMessage{
