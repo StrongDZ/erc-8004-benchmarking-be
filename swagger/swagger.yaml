@@ -528,6 +528,41 @@ paths:
       summary: Related agents
       tags:
       - agents
+  /agents/{chainId}/{agentId}/reputation-score-history:
+    get:
+      parameters:
+      - description: Chain ID
+        in: path
+        name: chainId
+        required: true
+        type: integer
+      - description: Agent ID
+        in: path
+        name: agentId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/dto.Response'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/dto.Response'
+      summary: Reputation score history
+      tags:
+      - agents
   /chains:
     get:
       produces:
