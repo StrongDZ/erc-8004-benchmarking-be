@@ -72,12 +72,30 @@ func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, s
 
 	default:
 		// Score / tasks sorts: delegate ordering to agent_score_stats.
-		if r.StatsColl == nil {
-			// Fallback: unordered scan (no stats collection available).
-			opts := options.Find().SetSkip(skip).SetLimit(limit)
+		//
+		// IMPORTANT: When a free-text query is active, the stats collection only knows
+		// chainId — it has no name/description/oasfSkills fields to filter against.
+		// Running Phase-1 on stats would return the full sorted list ignoring the text
+		// filter, then Phase-2 would blindly fetch those unfiltered agents, producing
+		// correct totals (0) but wrong rows (all agents shown).
+		// To avoid this inconsistency, fall back to a direct agent-collection sort
+		// whenever a text query is present. The reputationScore field is a close proxy
+		// for compositeScore and keeps the result set ordered correctly.
+		if strings.TrimSpace(f.Query) != "" || r.StatsColl == nil {
+			// Text-search path (or no stats collection): sort directly in agent collection.
+			var agentSortDoc bson.D
+			switch sortOrder {
+			case SortScoreAsc:
+				agentSortDoc = bson.D{{Key: "reputationScore", Value: 1}}
+			case SortTasksDesc:
+				agentSortDoc = bson.D{{Key: "totalTasks", Value: -1}}
+			default: // SortScoreDesc
+				agentSortDoc = bson.D{{Key: "reputationScore", Value: -1}}
+			}
+			opts := options.Find().SetSort(agentSortDoc).SetSkip(skip).SetLimit(limit)
 			docs, err := r.Find(ctx, query, opts)
 			if err != nil {
-				return nil, 0, fmt.Errorf("agent repo: leaderboard find (no stats): %w", err)
+				return nil, 0, fmt.Errorf("agent repo: leaderboard find (text query): %w", err)
 			}
 			return docs, total, nil
 		}

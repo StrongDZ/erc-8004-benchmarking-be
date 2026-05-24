@@ -31,7 +31,8 @@ func (p *Processor) processReputationEvent(bs *batchState, agentID string, ev ev
 
 func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
 	feedbackIndex := utils.GetUint64Arg(ev.Args, "feedbackIndex")
-	clientAddress, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	rawClient, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	clientAddress := utils.NormalizeAddress(rawClient)
 	if !ok {
 		log.Printf("processor: NewFeedback missing clientAddress: chain=%d agent=%s idx=%d", bs.chainID, agentID, feedbackIndex)
 		return
@@ -127,11 +128,11 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	bs.fbMap[fbID] = &fbRecord
 
-	// Skip scoring for self-feedback, spam, noise, anomalous values, or non-service categories.
+	// Skip scoring for self-feedback, junk (spam/noise merged), anomalous values, or non-service categories.
 	if isSelf {
 		return
 	}
-	if cls.Category == classifier.CategorySpam || cls.Category == classifier.CategoryNoise {
+	if cls.Category == classifier.CategoryJunk {
 		return
 	}
 	if isAnomalous {
@@ -192,7 +193,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 
 func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
 	feedbackIndex := utils.GetUint64Arg(ev.Args, "feedbackIndex")
-	clientAddress, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	rawClient, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	clientAddress := utils.NormalizeAddress(rawClient)
 	if !ok {
 		log.Printf("processor: FeedbackRevoked missing clientAddress: chain=%d agent=%s idx=%d", bs.chainID, agentID, feedbackIndex)
 		return
@@ -215,14 +217,16 @@ func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eve
 
 func (p *Processor) handleResponseAppended(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
 	feedbackIndex := utils.GetUint64Arg(ev.Args, "feedbackIndex")
-	clientAddress, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	rawClient, ok := utils.GetStringArg(ev.Args, "clientAddress")
+	clientAddress := utils.NormalizeAddress(rawClient)
 	if !ok {
 		log.Printf("processor: ResponseAppended missing clientAddress: chain=%d agent=%s idx=%d", bs.chainID, agentID, feedbackIndex)
 		return
 	}
 	responseURI, _ := utils.GetStringArg(ev.Args, "responseURI")
 	responseHash, _ := utils.GetStringArg(ev.Args, "responseHash")
-	responder, _ := utils.GetStringArg(ev.Args, "responder")
+	rawResponder, _ := utils.GetStringArg(ev.Args, "responder")
+	responder := utils.NormalizeAddress(rawResponder)
 	responseParsed := parseJSONObject(bs.uriMap[responseURI])
 
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)

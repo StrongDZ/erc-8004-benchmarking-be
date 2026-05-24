@@ -11,11 +11,12 @@ import (
 
 // AppConfig holds runtime tunables.
 type AppConfig struct {
-	ChainID     int64
-	IntervalMin int
-	IterConfig  PropagationIterConfig
-	LoaderDeps  LoaderDeps
-	WriterDeps  WriterDeps
+	ChainID      int64
+	IntervalMin  int
+	IterConfig   PropagationIterConfig
+	LoaderDeps   LoaderDeps
+	WriterDeps   WriterDeps
+	BackfillDeps BackfillDeps
 }
 
 // App is the trustrank-pass worker.
@@ -48,6 +49,17 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) runPass(ctx context.Context) {
 	start := time.Now()
+
+	if a.cfg.BackfillDeps.Publisher != nil {
+		n, err := BackfillUnprocessed(ctx, a.cfg.ChainID, a.cfg.BackfillDeps)
+		if err != nil {
+			log.Printf("trustrank-pass: backfill: %v", err)
+		}
+		if n > 0 {
+			log.Printf("trustrank-pass: backfilled %d unprocessed feedbacks", n)
+		}
+	}
+
 	log.Printf("trustrank-pass: loading graph (chainID=%d)", a.cfg.ChainID)
 
 	gd, err := LoadGraph(ctx, a.cfg.LoaderDeps, a.cfg.ChainID)

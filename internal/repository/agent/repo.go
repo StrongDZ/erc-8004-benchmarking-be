@@ -202,6 +202,36 @@ type PropagatedScore struct {
 }
 
 // BulkSetPropagated writes trustScorePropagated + propagationUpdatedAt in bulk.
+// AgentOwnerEdge is a lightweight projection for building owner→agent graph edges.
+type AgentOwnerEdge struct {
+	ChainID int64  `bson:"chainId"`
+	AgentID string `bson:"agentId"`
+	Owner   string `bson:"owner"`
+}
+
+// ScanOwnerEdges returns (agentId, chainId, owner) for all agents with a non-empty owner.
+// Pass chainID=0 for all chains. Used by the propagation loader to derive owner→agent edges
+// even when the wallets collection is empty.
+func (r *Repository) ScanOwnerEdges(ctx context.Context, chainID int64) ([]AgentOwnerEdge, error) {
+	filter := bson.M{"owner": bson.M{"$ne": ""}}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{"chainId": 1, "agentId": 1, "owner": 1, "_id": 0}).
+		SetBatchSize(10000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("agent: scan owner edges: %w", err)
+	}
+	defer cur.Close(ctx)
+	var out []AgentOwnerEdge
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("agent: decode owner edges: %w", err)
+	}
+	return out, nil
+}
+
 func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedScore) error {
 	if len(scores) == 0 {
 		return nil

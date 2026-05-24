@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	trustrankapp "erc-8004-benchmarking-be/internal/app/trustrank"
@@ -30,6 +31,7 @@ import (
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 type rawFetchAdapter struct {
@@ -69,6 +71,8 @@ func main() {
 	offchain := offchainrepo.NewRepository(db, cfg.OffchainColl)
 	tagStats := tagstatsrepo.NewStatsRepository(analyzedDB, cfg.TagStatsColl)
 	tagCorrs := tagstatsrepo.NewCorrectionRepository(analyzedDB, cfg.TagCorrectionsColl)
+	wallets := walletrepo.NewRepository(analyzedDB, envOr("MONGO_COLLECTION_WALLETS", "wallets"))
+	coldStartT0 := envFloat("TRUST_WEIGHT_COLD_START_T0", 10.0)
 
 	if err := contractsRepo.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("contracts indexes: %v", err)
@@ -87,6 +91,9 @@ func main() {
 	}
 	if err := offchain.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("offchain_data indexes: %v", err)
+	}
+	if err := wallets.EnsureIndexes(ctx); err != nil {
+		log.Fatalf("wallets indexes: %v", err)
 	}
 
 	// RabbitMQ — publisher for service_uri messages + connection for consumers.
@@ -137,7 +144,7 @@ func main() {
 		Compliance: cfg.ScoreWeightCompliance,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, fbPub, tagStats, tagCorrs, cfg.TagStatsMinSamples)
+	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, fbPub, tagStats, tagCorrs, cfg.TagStatsMinSamples, wallets, coldStartT0)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,
@@ -153,4 +160,20 @@ func main() {
 	if err := app.Run(ctx); err != nil && err != context.Canceled {
 		log.Printf("trustrank stopped: %v", err)
 	}
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func envFloat(k string, def float64) float64 {
+	if v := os.Getenv(k); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
 }

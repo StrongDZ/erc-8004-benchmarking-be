@@ -19,6 +19,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
+	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // EventProcessor processes a batch of decoded events for scoring/identity/feedback.
@@ -282,6 +283,8 @@ type Processor struct {
 	compositeWeights scoring.CompositeWeights
 	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
 	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
+	walletRepo       *wallet.Repository // may be nil; syncs owner → wallets for trust graph
+	coldStartT0      float64            // initial trustScore for new owner wallets
 	tagStatsRepo     *tagstats.StatsRepository
 	tagCorrsRepo     *tagstats.CorrectionRepository
 	tagScaleCache    sync.Map // tag1 -> cachedScale

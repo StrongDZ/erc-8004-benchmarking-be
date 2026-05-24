@@ -28,7 +28,8 @@ func (p *Processor) processIdentityEvent(bs *batchState, agentID string, ev even
 }
 
 func (p *Processor) handleRegistered(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
-	owner, _ := utils.GetStringArg(ev.Args, "owner")
+	rawOwner, _ := utils.GetStringArg(ev.Args, "owner")
+	owner := utils.NormalizeAddress(rawOwner)
 	agentURI, _ := utils.GetStringArg(ev.Args, "agentURI")
 
 	doc := bs.agentMap[agentID]
@@ -103,7 +104,7 @@ func (p *Processor) handleMetadataSet(bs *batchState, agentID string, ev eventre
 		// agentWallet is a reserved EIP-712-bound key — also promoted to first-class field.
 		if strings.EqualFold(metadataKey, "agentWallet") {
 			if addr, ok := decoded.Decoded.(string); ok && addr != "" {
-				doc.AgentWallet = addr
+				doc.AgentWallet = utils.NormalizeAddress(addr)
 			}
 		}
 	}
@@ -112,7 +113,8 @@ func (p *Processor) handleMetadataSet(bs *batchState, agentID string, ev eventre
 }
 
 func (p *Processor) handleTransfer(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
-	to, ok := utils.GetStringArg(ev.Args, "to")
+	rawTo, ok := utils.GetStringArg(ev.Args, "to")
+	to := utils.NormalizeAddress(rawTo)
 	if !ok || to == "" {
 		log.Printf("processor: Transfer missing 'to' address: chain=%d agent=%s", bs.chainID, agentID)
 		return

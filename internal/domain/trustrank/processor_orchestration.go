@@ -279,6 +279,26 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 		return fmt.Errorf("flush feedback updates: %w", err)
 	}
 
+	// Reconcile wallet→agent ownership: agents.owner is the single source of truth.
+	// For each dirty agent with a non-empty owner, force its ID into the canonical
+	// owner wallet and pull from any stale owners on the same chain.
+	if p.walletRepo != nil {
+		for id := range bs.dirtyAgents {
+			doc := bs.agentMap[id]
+			if doc == nil {
+				continue
+			}
+			owner := strings.TrimSpace(doc.Owner)
+			if owner == "" {
+				continue
+			}
+			if err := p.walletRepo.ReconcileOwnership(ctx, bs.chainID, id, owner, p.coldStartT0); err != nil {
+				log.Printf("processor: reconcile ownership (chain=%d agent=%s owner=%s): %v",
+					bs.chainID, id, owner, err)
+			}
+		}
+	}
+
 	// Flush tag tier votes and detect scale changes (best-effort; errors logged, not fatal).
 	if p.tagStatsRepo != nil && len(bs.pendingTierUpdates) > 0 {
 		if err := p.flushTierStats(ctx, bs); err != nil {

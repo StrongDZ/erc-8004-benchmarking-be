@@ -4,17 +4,19 @@ package wallet
 
 import (
 	"fmt"
-	"strings"
+
+	"erc-8004-benchmarking-be/internal/utils"
 )
 
 // WalletDocumentID returns the wallets _id: {chainId}:{address-lowercased}.
 func WalletDocumentID(chainID int64, address string) string {
-	return fmt.Sprintf("%d:%s", chainID, normalizeAddress(address))
+	return fmt.Sprintf("%d:%s", chainID, utils.NormalizeAddress(address))
 }
 
-// normalizeAddress trims and lowercases an Ethereum address.
+// normalizeAddress is a thin alias kept for in-package readability.
+// Prefer utils.NormalizeAddress at write boundaries.
 func normalizeAddress(addr string) string {
-	return strings.ToLower(strings.TrimSpace(addr))
+	return utils.NormalizeAddress(addr)
 }
 
 // clipTrustScore clamps a trust score into the canonical [0, 100] range.
@@ -45,7 +47,7 @@ func computeColdStartT0(ownedAgentScores []float64, defaultT0 float64) float64 {
 // buildUpsertColdUpdate constructs the Mongo update document for a cold-start upsert.
 // $setOnInsert only fires on INSERT (new doc); $set fires on every call to bump updatedAt.
 func buildUpsertColdUpdate(chainID int64, address string, t0 float64, nowUnix int64) map[string]any {
-	addr := normalizeAddress(address)
+	addr := utils.NormalizeAddress(address)
 	return map[string]any{
 		"$setOnInsert": map[string]any{
 			"_id":                  WalletDocumentID(chainID, address),

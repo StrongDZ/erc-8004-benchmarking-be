@@ -17,8 +17,8 @@ import (
 type ListFilter struct {
 	ChainID  int64
 	AgentID  string
-	Category string // "service_feedback" | "config_feedback" | "app_specific" | "others" | "spam" | "noise"
-	Status   string // "accepted" | "revoked" | "spam" | "anomalous"
+	Category string // "service_feedback" | "config_feedback" | "app_specific" | "others" | "junk"
+	Status   string // "accepted" | "revoked" | "junk" | "anomalous"
 	From     *time.Time
 	To       *time.Time
 	SortDesc bool // false = ASC by blockNumber/logIndex
@@ -66,12 +66,12 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 			bson.M{"revokeTxHash": bson.M{"$exists": false}},
 			bson.M{"revokeTxHash": ""},
 		}
-		q["classification.rule.category"] = bson.M{"$nin": []string{"spam", "noise"}}
-	case "spam":
-		q["classification.rule.category"] = bson.M{"$in": []string{"spam", "noise"}}
+		q["classification.rule.category"] = bson.M{"$ne": "junk"}
+	case "junk":
+		q["classification.rule.category"] = "junk"
 	case "anomalous":
 		q["vi"] = 0
-		q["classification.rule.category"] = bson.M{"$nin": []string{"spam", "noise"}}
+		q["classification.rule.category"] = bson.M{"$ne": "junk"}
 	}
 	if f.From != nil || f.To != nil {
 		rng := bson.M{}

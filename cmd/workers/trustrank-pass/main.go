@@ -1,7 +1,10 @@
 // trustrank-pass runs weighted TrustRank power iteration every
-// TRUST_PROPAGATION_BATCH_INTERVAL_MIN minutes.
+// TRUST_PROPAGATION_BATCH_INTERVAL_MIN minutes. Each tick also re-publishes
+// any feedback rows still missing a validationVerdict so trust-graph-updater
+// can grade them.
 //
 // Required: MONGO_URI, MONGO_DATABASE_ANALYZED_AGENTS
+// Optional: RABBITMQ_URI (enables backfill); TRUST_BACKFILL_BATCH_SIZE (default 5000)
 package main
 
 import (
@@ -14,6 +17,7 @@ import (
 
 	"erc-8004-benchmarking-be/internal/app/trustpropagation"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
+	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	agentrep "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrep "erc-8004-benchmarking-be/internal/repository/feedback"
 	scorestatsr "erc-8004-benchmarking-be/internal/repository/scorestats"
@@ -38,6 +42,28 @@ func main() {
 	statsRepo := scorestatsr.NewRepository(db, envOr("MONGO_COLLECTION_AGENT_SCORE_STATS", "agent_score_stats"))
 	fbRepo := feedbackrep.NewRepository(db, envOr("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"))
 
+	var backfillDeps trustpropagation.BackfillDeps
+	if rmqURI := os.Getenv("RABBITMQ_URI"); rmqURI != "" {
+		mqConn, err := mqinfra.NewConn(rmqURI)
+		if err != nil {
+			log.Fatalf("rabbitmq dial: %v", err)
+		}
+		defer mqConn.Close()
+		publisher, err := mqinfra.NewMultiPublisher(mqConn)
+		if err != nil {
+			log.Fatalf("rabbitmq publisher: %v", err)
+		}
+		defer publisher.Close()
+		backfillDeps = trustpropagation.BackfillDeps{
+			FeedbackRepo: fbRepo,
+			Publisher:    publisher,
+			BatchSize:    envInt("TRUST_BACKFILL_BATCH_SIZE", 5000),
+		}
+		log.Printf("trustrank-pass: backfill enabled (batch=%d)", backfillDeps.BatchSize)
+	} else {
+		log.Printf("trustrank-pass: backfill disabled (RABBITMQ_URI unset)")
+	}
+
 	cfg := trustpropagation.AppConfig{
 		ChainID:     envInt64("TRUST_PROPAGATION_CHAIN_ID", 0),
 		IntervalMin: envInt("TRUST_PROPAGATION_BATCH_INTERVAL_MIN", 10),
@@ -57,6 +83,7 @@ func main() {
 			WalletRepo: walletRepo,
 			AgentRepo:  agentRepo,
 		},
+		BackfillDeps: backfillDeps,
 	}
 
 	log.Printf("trustrank-pass: starting (interval=%dm alpha=%.2f seed=%.0f)",

@@ -111,6 +111,7 @@ func main() {
 			cfg.IdentityHistColl: analyzedDB,
 			cfg.ScoreHistColl:    analyzedDB,
 			cfg.FeedbackHistColl: analyzedDB,
+			cfg.WalletColl:       analyzedDB,
 		},
 	}
 
@@ -226,6 +227,19 @@ func allTools() []toolDef {
 			},
 		},
 		{
+			Name:        "aggregate_readonly",
+			Description: "Read-only MongoDB aggregation on allowed collections. Pipeline limited to read stages: $match, $project, $group, $sort, $limit, $skip, $count, $unwind, $lookup, $addFields, $set, $facet, $sample, $bucket, $bucketAuto.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"collection": map[string]any{"type": "string", "description": "target collection (must be allowed)"},
+					"pipeline":   map[string]any{"type": "array", "description": "aggregation pipeline (read-only stages only)"},
+					"limit":      map[string]any{"type": "integer", "description": "max returned docs (default 50, max 500)"},
+				},
+				"required": []string{"collection", "pipeline"},
+			},
+		},
+		{
 			Name:        "tag_feedback_statistics_readonly",
 			Description: "Read tag feedback statistics from view.TagFeedbackStatistics with count-based sorting and limit.",
 			InputSchema: map[string]any{
@@ -270,6 +284,8 @@ func (s *server) handleToolsCall(ctx context.Context, req rpcRequest) rpcRespons
 		result, callErr = s.toolClassify(p.Arguments)
 	case "query_collection_readonly":
 		result, callErr = s.toolQueryCollectionReadonly(callCtx, p.Arguments)
+	case "aggregate_readonly":
+		result, callErr = s.toolAggregateReadonly(callCtx, p.Arguments)
 	case "tag_feedback_statistics_readonly":
 		result, callErr = s.toolTagFeedbackStatisticsReadonly(callCtx, p.Arguments)
 	default:
@@ -373,6 +389,97 @@ func (s *server) toolQueryCollectionReadonly(ctx context.Context, args map[strin
 		out["total"] = total
 	}
 
+	b, _ := json.MarshalIndent(out, "", "  ")
+	return textResult(string(b)), nil
+}
+
+// ─── Tool: aggregate_readonly ────────────────────────────────────────────────
+
+var allowedAggregationStages = map[string]struct{}{
+	"$match":      {},
+	"$project":    {},
+	"$group":      {},
+	"$sort":       {},
+	"$limit":      {},
+	"$skip":       {},
+	"$count":      {},
+	"$unwind":     {},
+	"$lookup":     {},
+	"$addFields":  {},
+	"$set":        {},
+	"$facet":      {},
+	"$sample":     {},
+	"$bucket":     {},
+	"$bucketAuto": {},
+	"$replaceRoot": {},
+	"$replaceWith": {},
+	"$sortByCount": {},
+	"$redact":      {},
+}
+
+func (s *server) toolAggregateReadonly(ctx context.Context, args map[string]any) (toolResult, error) {
+	collection := strArg(args, "collection")
+	if collection == "" {
+		return toolResult{}, fmt.Errorf("collection is required")
+	}
+	if strings.HasPrefix(collection, "$") {
+		return toolResult{}, fmt.Errorf("invalid collection name")
+	}
+	db, ok := s.allowCollections[collection]
+	if !ok || db == nil {
+		return toolResult{}, fmt.Errorf("collection %q is not allowed", collection)
+	}
+
+	rawPipeline, ok := args["pipeline"].([]any)
+	if !ok {
+		return toolResult{}, fmt.Errorf("pipeline must be an array")
+	}
+	if len(rawPipeline) == 0 {
+		return toolResult{}, fmt.Errorf("pipeline must contain at least one stage")
+	}
+	if len(rawPipeline) > 20 {
+		return toolResult{}, fmt.Errorf("pipeline too long: max 20 stages")
+	}
+
+	pipeline := make([]bson.M, 0, len(rawPipeline))
+	for i, item := range rawPipeline {
+		stage, ok := item.(map[string]any)
+		if !ok {
+			return toolResult{}, fmt.Errorf("pipeline stage %d must be an object", i)
+		}
+		if len(stage) != 1 {
+			return toolResult{}, fmt.Errorf("pipeline stage %d must have exactly one operator", i)
+		}
+		for k := range stage {
+			if _, allow := allowedAggregationStages[k]; !allow {
+				return toolResult{}, fmt.Errorf("pipeline stage %d operator %q is not allowed", i, k)
+			}
+		}
+		pipeline = append(pipeline, bson.M(stage))
+	}
+
+	limit := clampInt(intArg(args, "limit"), 1, 500, 50)
+	pipeline = append(pipeline, bson.M{"$limit": int64(limit)})
+
+	coll := db.Collection(collection)
+	cur, err := coll.Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true))
+	if err != nil {
+		return toolResult{}, fmt.Errorf("aggregate_readonly: %w", err)
+	}
+	defer func() { _ = cur.Close(ctx) }()
+
+	var docs []bson.M
+	if err := cur.All(ctx, &docs); err != nil {
+		return toolResult{}, fmt.Errorf("aggregate_readonly decode: %w", err)
+	}
+
+	out := map[string]any{
+		"database":   db.Name(),
+		"collection": collection,
+		"limit":      limit,
+		"count":      len(docs),
+		"documents":  docs,
+	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	return textResult(string(b)), nil
 }
@@ -531,19 +638,26 @@ func max0(v int) int {
 }
 
 var allowedReadOperators = map[string]struct{}{
-	"$and":    {},
-	"$or":     {},
-	"$nor":    {},
-	"$in":     {},
-	"$nin":    {},
-	"$eq":     {},
-	"$ne":     {},
-	"$gt":     {},
-	"$gte":    {},
-	"$lt":     {},
-	"$lte":    {},
-	"$exists": {},
-	"$regex":  {},
+	"$and":       {},
+	"$or":        {},
+	"$nor":       {},
+	"$not":       {},
+	"$in":        {},
+	"$nin":       {},
+	"$eq":        {},
+	"$ne":        {},
+	"$gt":        {},
+	"$gte":       {},
+	"$lt":        {},
+	"$lte":       {},
+	"$exists":    {},
+	"$regex":     {},
+	"$options":   {},
+	"$size":      {},
+	"$type":      {},
+	"$all":       {},
+	"$elemMatch": {},
+	"$mod":       {},
 }
 
 func sanitizeFilter(in map[string]any) (bson.M, error) {

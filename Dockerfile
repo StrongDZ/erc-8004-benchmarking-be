@@ -22,6 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustra
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/score-refresh ./cmd/workers/score-refresh
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/uri-bootstrap ./cmd/workers/uri-bootstrap
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rescale ./cmd/workers/rescale
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trust-graph-updater ./cmd/workers/trust-graph-updater
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustrank-pass ./cmd/workers/trustrank-pass
 
 FROM alpine:3.20 AS base-runtime
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 65532 appuser
@@ -55,4 +57,12 @@ ENTRYPOINT ["/usr/local/bin/uri-bootstrap"]
 FROM base-runtime AS rescale-worker
 COPY --from=builder /out/rescale /usr/local/bin/rescale-worker
 ENTRYPOINT ["/usr/local/bin/rescale-worker"]
+
+FROM base-runtime AS trust-graph-updater
+COPY --from=builder /out/trust-graph-updater /usr/local/bin/trust-graph-updater
+ENTRYPOINT ["/usr/local/bin/trust-graph-updater"]
+
+FROM base-runtime AS trustrank-pass
+COPY --from=builder /out/trustrank-pass /usr/local/bin/trustrank-pass
+ENTRYPOINT ["/usr/local/bin/trustrank-pass"]
 

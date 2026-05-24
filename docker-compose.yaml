@@ -132,6 +132,7 @@ services:
             - .env
         environment:
             MONGO_URI: mongodb://mongo:27017
+            RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
 
     score-worker:
         build:
@@ -184,6 +185,42 @@ services:
         environment:
             MONGO_URI: mongodb://mongo:27017
             RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
+
+    trust-graph-updater:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: trust-graph-updater
+        image: erc8004-trust-graph-updater:latest
+        container_name: erc8004-trust-graph-updater
+        restart: unless-stopped
+        stop_grace_period: 3m
+        depends_on:
+            mongo:
+                condition: service_healthy
+            rabbitmq:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            MONGO_URI: mongodb://mongo:27017
+            RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
+
+    trustrank-pass:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: trustrank-pass
+        image: erc8004-trustrank-pass:latest
+        container_name: erc8004-trustrank-pass
+        restart: unless-stopped
+        depends_on:
+            mongo:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            MONGO_URI: mongodb://mongo:27017
 
     # Ollama in Docker Desktop (macOS) is CPU-only — no Metal GPU. Run the Ollama
     # desktop app on the host for GPU inference; containers use host.docker.internal:11434.
