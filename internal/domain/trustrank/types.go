@@ -19,6 +19,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
+	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // EventProcessor processes a batch of decoded events for scoring/identity/feedback.
@@ -29,6 +30,12 @@ type EventProcessor interface {
 // URIPublisher publishes service-endpoint URI messages to the service_uri queue.
 // Implemented by an infrastructure adapter; defined here at the consumer site.
 type URIPublisher interface {
+	Publish(ctx context.Context, queueName string, msg any) error
+}
+
+// FeedbackPublisher publishes classified feedback IDs to the trust-graph worker queue.
+// May be nil; when nil, publishing is skipped.
+type FeedbackPublisher interface {
 	Publish(ctx context.Context, queueName string, msg any) error
 }
 
@@ -274,7 +281,10 @@ type Processor struct {
 	offchainRepo     *offchain.Repository
 	formulaCfg       scoring.FormulaConfig
 	compositeWeights scoring.CompositeWeights
-	uriPublisher     URIPublisher // may be nil; publishes service endpoint URIs asynchronously
+	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
+	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
+	walletRepo       *wallet.Repository // may be nil; syncs owner → wallets for trust graph
+	coldStartT0      float64            // initial trustScore for new owner wallets
 	tagStatsRepo     *tagstats.StatsRepository
 	tagCorrsRepo     *tagstats.CorrectionRepository
 	tagScaleCache    sync.Map // tag1 -> cachedScale

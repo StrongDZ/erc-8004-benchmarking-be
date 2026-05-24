@@ -4,6 +4,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
@@ -17,6 +18,49 @@ type WalletHandler struct {
 
 // NewWalletHandler returns a new WalletHandler.
 func NewWalletHandler(svc *service.Wallet) *WalletHandler { return &WalletHandler{svc: svc} }
+
+// Profile handles GET /wallet/{address}.
+// Returns the trust profile for a wallet address.
+// Optional query param: chainId (int64). Without it, returns the record with highest trustScorePropagated.
+// @Summary Wallet trust profile
+// @Description Returns the trust score and stats for a wallet address.
+// @Tags wallet
+// @Produce json
+// @Param address path string true "Wallet address (hex)"
+// @Param chainId query int false "Chain ID (optional)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /wallet/{address} [get]
+func (h *WalletHandler) Profile(w http.ResponseWriter, r *http.Request) {
+	address := strings.TrimSpace(r.PathValue("address"))
+	if address == "" {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "address is required")
+		return
+	}
+
+	var chainID int64
+	if raw := r.URL.Query().Get("chainId"); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "chainId must be an integer")
+			return
+		}
+		chainID = v
+	}
+
+	result, err := h.svc.Profile(r.Context(), address, chainID)
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	if result == nil {
+		dto.Fail(w, r, http.StatusNotFound, dto.CodeNotFound, "wallet not found")
+		return
+	}
+	dto.Success(w, r, result)
+}
 
 // FeedbackGiven handles GET /wallet/{address}/feedbacks.
 // Returns paginated feedback submitted by the given wallet address, enriched with agent name.

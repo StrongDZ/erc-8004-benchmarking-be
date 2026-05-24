@@ -60,6 +60,10 @@ type FeedbackRecord struct {
 	Type           string                 `bson:"type"` // reputation_feedback, etc.
 	PriceUSDC      float64                `bson:"priceUSDC"`
 	Wi             float64                `bson:"wi"`                     // difficulty weight at time of scoring
+	WiComputedAt   int64                  `bson:"wiComputedAt,omitempty"` // Unix seconds when wi was computed
+	QualityScore   float64                `bson:"qualityScore"`           // Q ∈ [0,1] composite quality
+	ValidationVerdict string              `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
+	ValidationReason string               `bson:"validationReason,omitempty"` // detail when verdict != valid
 	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
 	Classification FeedbackClassification `bson:"classification"`          // set by classifier
 	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.

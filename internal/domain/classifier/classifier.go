@@ -20,8 +20,7 @@ const (
 	CategoryConfig  Category = "config_feedback"
 	CategoryApp     Category = "app_specific"
 	CategoryOthers  Category = "others"
-	CategorySpam    Category = "spam"
-	CategoryNoise   Category = "noise"
+	CategoryJunk    Category = "junk" // spam + noise merged (noise has only 33 records in the corpus)
 )
 
 // Result is the output of Classify.
@@ -43,14 +42,14 @@ func Classify(tag1, tag2 string) Result {
 	t1 := strings.ToLower(t1raw)
 	t2 := strings.ToLower(t2raw)
 
-	// ── Stage 1A: Spam ────────────────────────────────────────────
+	// ── Stage 1A: Spam-shaped junk ────────────────────────────────
 	if isSpam(t1, t2) {
-		return Result{Category: CategorySpam, Confidence: 0.99, Source: "rule"}
+		return Result{Category: CategoryJunk, Confidence: 0.99, Source: "rule"}
 	}
 
-	// ── Stage 1B: Noise ───────────────────────────────────────────
+	// ── Stage 1B: Noise-shaped junk ───────────────────────────────
 	if isNoise(t1, t2) {
-		return Result{Category: CategoryNoise, Confidence: 0.99, Source: "rule"}
+		return Result{Category: CategoryJunk, Confidence: 0.99, Source: "rule"}
 	}
 
 	// ── Stage 2: Config — high-confidence specific patterns first ────────────

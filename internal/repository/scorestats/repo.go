@@ -161,3 +161,34 @@ func deltaField(period string) string {
 		return "delta24h"
 	}
 }
+
+// AgentCompositeScore is a lightweight projection for seed vector construction.
+type AgentCompositeScore struct {
+	ChainID        int64   `bson:"chainId"`
+	AgentID        string  `bson:"agentId"`
+	CompositeScore float64 `bson:"compositeScore"`
+}
+
+// ScanCompositeScores returns compositeScore for all agents. Pass chainID=0 for all chains.
+func (r *Repository) ScanCompositeScores(ctx context.Context, chainID int64) ([]AgentCompositeScore, error) {
+	filter := bson.M{}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "agentId": 1, "compositeScore": 1, "_id": 0,
+		}).
+		SetBatchSize(5000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("scorestats: scan composite scores: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var out []AgentCompositeScore
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("scorestats: decode composite scores: %w", err)
+	}
+	return out, nil
+}

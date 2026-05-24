@@ -29,6 +29,7 @@ type Config struct {
 	TagCorrectionsColl  string // changed_tag_scales — rescale correction queue
 	RescaleDeltasColl   string // rescale_deltas — pre-computed per-agent deltas
 	ScoreStatsColl      string // agent_score_stats — periodic materialized view
+	WalletColl          string // wallets — unified wallet trust nodes
 
 	// Score-refresh worker
 	ScoreRefreshCron string // cron expression, default "*/30 * * * *"
@@ -94,16 +95,13 @@ type Config struct {
 	HTTPSFetchTimeout time.Duration
 	HTTPSUserAgent    string
 
-	// LLM classifier (Stage 3B fallback)
-	LLMEnabled                  bool
-	LLMMode                     string        // "ollama" | "llamacpp"
-	LLMBaseURL                  string        // e.g. "http://localhost:11434"
-	LLMModel                    string        // e.g. "qwen2.5:3b-instruct-q4_K_M"
-	LLMTimeoutSeconds           int           // per-request timeout (default 3)
-	LLMConfidenceThresholdLow   float64       // low-confidence floor (default 0.50)
-	LLMConfidenceThresholdAccept float64      // accept threshold (default 0.70)
-	LLMFallbackOnError          bool          // return "others" on LLM error (default true)
-	LLMKeepAlive                time.Duration // Ollama keep-alive (default 30m)
+	// AI service fallback (Stage 3B) — Go calls the Python erc-8004-ai-service.
+	AIServiceEnabled        bool
+	AIServiceURL            string // e.g. "http://localhost:8000"
+	AIServiceModel          string // override model name; "" → service default
+	AIServicePromptVersion  string // override prompt key; "" → service default ("v4_xml")
+	AIServiceTimeoutSeconds int    // per-request timeout (default 120)
+	AIServiceFallbackOnError bool  // return "others" on AI service error (default true)
 
 	// REST API (cmd/workers/api)
 	APIPort              int
@@ -169,6 +167,7 @@ func Load() (Config, error) {
 		TagCorrectionsColl: utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
 		RescaleDeltasColl:  utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
 		ScoreStatsColl:     utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
+		WalletColl:         utils.Getenv("MONGO_COLLECTION_WALLETS", "wallets"),
 
 		ScoreRefreshCron: utils.Getenv("SCORE_REFRESH_CRON", "*/30 * * * *"),
 
@@ -219,15 +218,12 @@ func Load() (Config, error) {
 		HTTPSFetchTimeout: time.Duration(utils.GetenvInt("HTTPS_FETCH_TIMEOUT_SECONDS", 90)) * time.Second,
 		HTTPSUserAgent:    utils.Getenv("HTTPS_USER_AGENT", "erc8004-uri-bootstrap/1.0"),
 
-		LLMEnabled:                   utils.GetenvBool("LLM_ENABLED", false),
-		LLMMode:                      utils.Getenv("LLM_MODE", "ollama"),
-		LLMBaseURL:                   utils.Getenv("LLM_BASE_URL", "http://localhost:11434"),
-		LLMModel:                     utils.Getenv("LLM_MODEL", "qwen2.5:3b-instruct-q4_K_M"),
-		LLMTimeoutSeconds:            utils.GetenvInt("LLM_TIMEOUT_SECONDS", 120),
-		LLMConfidenceThresholdLow:    utils.GetenvFloat("LLM_CONFIDENCE_THRESHOLD_LOW", 0.50),
-		LLMConfidenceThresholdAccept: utils.GetenvFloat("LLM_CONFIDENCE_THRESHOLD_ACCEPT", 0.70),
-		LLMFallbackOnError:           utils.GetenvBool("LLM_FALLBACK_ON_ERROR", true),
-		LLMKeepAlive:                 time.Duration(utils.GetenvInt("LLM_KEEP_ALIVE_MINUTES", 30)) * time.Minute,
+		AIServiceEnabled:         utils.GetenvBool("AI_SERVICE_ENABLED", false),
+		AIServiceURL:             utils.Getenv("AI_SERVICE_URL", "http://localhost:8000"),
+		AIServiceModel:           utils.Getenv("AI_SERVICE_MODEL", ""),
+		AIServicePromptVersion:   utils.Getenv("AI_SERVICE_PROMPT_VERSION", ""),
+		AIServiceTimeoutSeconds:  utils.GetenvInt("AI_SERVICE_TIMEOUT_SECONDS", 120),
+		AIServiceFallbackOnError: utils.GetenvBool("AI_SERVICE_FALLBACK_ON_ERROR", true),
 
 		APIPort:            utils.GetenvInt("API_PORT", 8080),
 		APIReadTimeout:     time.Duration(utils.GetenvInt("API_READ_TIMEOUT_SECONDS", 15)) * time.Second,

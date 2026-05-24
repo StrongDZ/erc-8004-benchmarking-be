@@ -1,9 +1,11 @@
 package service
 
-// mapper.go — Shared mappers repo -> DTO. Pure functions; no I/O.
+// mapper.go — Shared repo → DTO mappers and score-stats helpers.
 
 import (
+	"context"
 	"math"
+	"strconv"
 	"time"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
@@ -245,4 +247,20 @@ func unixToRFC3339(sec int64) string {
 		return ""
 	}
 	return time.Unix(sec, 0).UTC().Format(time.RFC3339)
+}
+
+// bulkFetchStats fetches stats for each (chainID, agentID) pair from docs. The map is
+// keyed by statsKey so multi-chain pages don't collapse rows with duplicate agentIDs.
+func bulkFetchStats(ctx context.Context, repo agentScoreStatsRepo, docs []agent.AgentDocument) map[string]*scorestats.AgentScoreStats {
+	out := make(map[string]*scorestats.AgentScoreStats, len(docs))
+	for _, d := range docs {
+		if s, _ := repo.FindByAgentID(ctx, d.ChainID, d.AgentID); s != nil {
+			out[statsKey(d.ChainID, d.AgentID)] = s
+		}
+	}
+	return out
+}
+
+func statsKey(chainID int64, agentID string) string {
+	return strconv.FormatInt(chainID, 10) + ":" + agentID
 }

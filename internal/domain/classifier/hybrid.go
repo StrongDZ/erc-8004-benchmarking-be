@@ -46,18 +46,18 @@ var knownAppTag2 = map[string]bool{
 	"sentinelnet-v1": true,
 }
 
-// HybridClassifier combines the rule engine with an optional LLM fallback.
-// LLMClient may be nil — in that case all fallback cases resolve to "others".
+// HybridClassifier combines the rule engine with an optional AI service fallback.
+// ai may be nil — in that case all fallback cases resolve to "others".
 type HybridClassifier struct {
-	llm                    *LLMClient
+	ai                     *AIClient
 	confidenceThresholdLow float64 // low confidence floor (default 0.50)
 }
 
 // NewHybridClassifier constructs a HybridClassifier.
-// llm may be nil to run rule-only mode (LLM disabled).
-func NewHybridClassifier(llm *LLMClient) *HybridClassifier {
+// ai may be nil to run rule-only mode (AI fallback disabled).
+func NewHybridClassifier(ai *AIClient) *HybridClassifier {
 	return &HybridClassifier{
-		llm:                    llm,
+		ai:                     ai,
 		confidenceThresholdLow: 0.50,
 	}
 }
@@ -86,16 +86,16 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 		}, nil
 	}
 
-	// Stage 3B: LLM fallback.
-	if h.llm == nil {
-		// LLM disabled — stay with rule fallback result (category="others").
+	// Stage 3B: AI service fallback.
+	if h.ai == nil {
+		// AI disabled — stay with rule fallback result (category="others").
 		return HybridResult{
 			Result:    ruleResult,
 			ValueNorm: valueNorm,
 		}, nil
 	}
 
-	llmRes := h.llm.Classify(
+	llmRes := h.ai.Classify(
 		ctx,
 		in.Tag1, in.Tag2,
 		valueNorm,
@@ -114,12 +114,8 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 	t2lo := strings.ToLower(strings.TrimSpace(in.Tag2))
 	if llmRes.Category == CategoryService {
 		switch {
-		case isSpam(t1lo, t2lo):
-			llmRes.Category = CategorySpam
-			llmRes.Confidence = 0.99
-			llmRes.Source = "override"
-		case isNoise(t1lo, t2lo):
-			llmRes.Category = CategoryNoise
+		case isSpam(t1lo, t2lo), isNoise(t1lo, t2lo):
+			llmRes.Category = CategoryJunk
 			llmRes.Confidence = 0.99
 			llmRes.Source = "override"
 		case knownConfigTag2[t2lo]:

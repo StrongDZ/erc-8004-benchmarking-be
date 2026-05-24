@@ -86,6 +86,22 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 					"isRevoked":               false,
 				}),
 		},
+		{
+			Keys: bson.D{
+				{Key: "chainId", Value: 1},
+				{Key: "validationVerdict", Value: 1},
+				{Key: "timestamp", Value: -1},
+			},
+			Options: options.Index().SetName("idx_chain_verdict_ts"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "clientAddress", Value: 1},
+				{Key: "chainId", Value: 1},
+				{Key: "timestamp", Value: -1},
+			},
+			Options: options.Index().SetName("idx_client_chain_ts"),
+		},
 	})
 	return err
 }
@@ -246,4 +262,114 @@ func (r *Repository) ListByAgent(ctx context.Context, chainID int64, agentID str
 		{Key: "logIndex", Value: 1},
 	})
 	return r.Find(ctx, filter, opts)
+}
+
+// FindByID fetches a single feedback record by its _id.
+func (r *Repository) FindByID(ctx context.Context, id string) (*FeedbackRecord, error) {
+	doc, err := r.FindOne(ctx, bson.M{"_id": id})
+	if err != nil {
+		return nil, fmt.Errorf("feedback repo: find by id %s: %w", id, err)
+	}
+	return &doc, nil
+}
+
+// FeedbackEdge is a lightweight struct for graph edge construction.
+type FeedbackEdge struct {
+	ChainID       int64   `bson:"chainId"`
+	ClientAddress string  `bson:"clientAddress"`
+	AgentID       string  `bson:"agentId"`
+	Wi            float64 `bson:"wi"`
+}
+
+// FeedbackBackfillItem is the minimal projection needed to re-publish a feedback
+// into the trust-graph queue.
+type FeedbackBackfillItem struct {
+	ID      string `bson:"_id"`
+	ChainID int64  `bson:"chainId"`
+}
+
+// ListUnprocessedIDs returns feedbacks where validationVerdict is missing or empty
+// (i.e. trust-graph-updater has not yet graded them). Pass chainID=0 for all chains.
+// limit caps the batch size; callers should pick a value that the queue can absorb.
+// Results are stable-sorted by _id so repeated calls page deterministically.
+func (r *Repository) ListUnprocessedIDs(ctx context.Context, chainID int64, limit int) ([]FeedbackBackfillItem, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	filter := bson.M{
+		"validationVerdict": bson.M{"$in": bson.A{nil, ""}},
+	}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{"_id": 1, "chainId": 1}).
+		SetSort(bson.D{{Key: "_id", Value: 1}}).
+		SetLimit(int64(limit)).
+		SetBatchSize(int32(limit)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: list unprocessed ids: %w", err)
+	}
+	defer cur.Close(ctx)
+	var out []FeedbackBackfillItem
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("feedback: decode unprocessed ids: %w", err)
+	}
+	return out, nil
+}
+
+// ScanAllNonJunkEdges returns feedback edges that are not explicitly rejected (junk/missing/self).
+// This includes verdict="valid", verdict="" (unprocessed), and verdict="legacy".
+// When wi=0 (unprocessed by trust-graph-updater), the caller should supply a default weight.
+func (r *Repository) ScanAllNonJunkEdges(ctx context.Context, chainID int64) ([]FeedbackEdge, error) {
+	filter := bson.M{
+		"validationVerdict": bson.M{"$nin": []string{"junk", "missing_fields", "self"}},
+	}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "clientAddress": 1, "agentId": 1, "wi": 1, "_id": 0,
+		}).
+		SetBatchSize(10000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: scan non-junk edges: %w", err)
+	}
+	defer cur.Close(ctx)
+	var out []FeedbackEdge
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("feedback: decode non-junk edges: %w", err)
+	}
+	return out, nil
+}
+
+// ScanValidEdges returns all valid feedback edges (validationVerdict="valid", wi > 0).
+// Pass chainID=0 for all chains.
+func (r *Repository) ScanValidEdges(ctx context.Context, chainID int64) ([]FeedbackEdge, error) {
+	filter := bson.M{
+		"validationVerdict": "valid",
+		"wi":                bson.M{"$gt": 0},
+	}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "clientAddress": 1, "agentId": 1, "wi": 1, "_id": 0,
+		}).
+		SetBatchSize(10000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: scan valid edges: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var out []FeedbackEdge
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("feedback: decode valid edges: %w", err)
+	}
+	return out, nil
 }

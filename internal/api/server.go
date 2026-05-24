@@ -27,6 +27,7 @@ import (
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
 
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -42,6 +43,7 @@ type Repositories struct {
 	Offchain   *offchainrepo.Repository
 	Crawlers   *crawlerrepo.Repository
 	Contracts  *contractsrepo.ContractsRepository
+	Wallets    *walletrepo.Repository
 }
 
 // NewRepositories wires all repositories against both the primary and analyzed databases.
@@ -60,6 +62,7 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 		Offchain:   offchainrepo.NewRepository(primary, cfg.OffchainColl),
 		Crawlers:   crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
 		Contracts:  contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
+		Wallets:    walletrepo.NewRepository(analyzed, cfg.WalletColl),
 	}
 }
 
@@ -101,7 +104,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 		Agents: repos.Agents, Contracts: repos.Contracts,
 	})
 	walletSvc := service.NewWallet(service.WalletDeps{
-		Agents: repos.Agents, Feedback: repos.Feedback,
+		Agents: repos.Agents, Feedback: repos.Feedback, Wallet: repos.Wallets,
 	})
 
 	// Handlers
@@ -157,6 +160,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/chains/{chainId}/contracts", chainH.Contracts)
 
 	// /api/v1/wallet/:address/*
+	mux.Handle("GET /api/v1/wallet/{address}", c30s(http.HandlerFunc(walletH.Profile)))
 	mux.HandleFunc("GET /api/v1/wallet/{address}/feedbacks", walletH.FeedbackGiven)
 
 	// /api/v1/admin/* (gated)

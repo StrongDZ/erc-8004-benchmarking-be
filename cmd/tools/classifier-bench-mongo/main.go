@@ -7,12 +7,12 @@ package main
 //
 // Two benchmarks are supported:
 //
-//   Bench 1 (--source=category): rule-as-gold over the 5 deterministic
-//     categories {service_feedback, app_specific, config_feedback, spam,
-//     noise}. Samples N records per category from classification.rule.category,
-//     runs each LLM, and reports F1 vs the rule label. The "others" category
-//     is intentionally excluded — those records need a human-labelled gold
-//     set (Bench 2).
+//   Bench 1 (--source=category): rule-as-gold over the 4 deterministic
+//     categories {service_feedback, app_specific, config_feedback, junk}.
+//     Samples N records per category from classification.rule.category,
+//     runs each LLM via the AI service, and reports F1 vs the rule label.
+//     The "others" category is intentionally excluded — those records need
+//     a human-labelled gold set (Bench 2).
 //
 //   Bench 2 (--source=others / --source=labelled): all records with
 //     classification.rule.category = "others" (empty tags or unmatched
@@ -45,14 +45,15 @@ package main
 // Flags shared by all modes:
 //
 //   --out         CSV output path (default ./scripts/output/classifier_eval_<ts>.csv)
-//   --timeout     LLM request timeout seconds (default 120)
-//   --mode        ollama | llamacpp backend (default ollama)
-//   --base-url    override LLM_BASE_URL (default http://localhost:11434)
-//   --skip-llm    skip every LLM call (rule-only run, useful for export-only)
+//   --timeout     AI service request timeout seconds (default 120)
+//   --base-url    override AI_SERVICE_URL (default http://localhost:8000)
+//   --skip-llm    skip every AI service call (rule-only run, useful for export-only)
 //   --seed        RNG seed for stratified sampling (default 42)
-//   --llm-concurrency  max in-flight LLM HTTP calls per model pass (default 8).
+//   --llm-concurrency  max in-flight HTTP calls per model pass (default 1).
 //             Rows are independent; this overlaps work across different agents
 //             and feedbacks. Use 1 to restore the legacy strictly-serial loop.
+//             NOTE: the Python service serialises Ollama calls per loaded model
+//             anyway, so values >1 yield diminishing returns.
 
 import (
 	"context"
@@ -77,11 +78,12 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
 
-// modelSpec describes one LLM under test.
+// modelSpec describes one LLM under test (driven via the Python AI service).
+// The prompt version is owned by the Python service (default v4_xml in
+// shared/prompts.py); we only pass the model name through.
 type modelSpec struct {
-	csvKey        string // safe key used in CSV column names
-	model         string // ollama model name, e.g. "qwen3:1.7b"
-	promptVersion classifier.PromptVersion
+	csvKey string // safe key used in CSV column names
+	model  string // ollama model name, e.g. "qwen2.5:3b"
 }
 
 // modelsUnderTest is the panel of LLMs the bench sweeps in one run. Models
@@ -98,18 +100,13 @@ type modelSpec struct {
 //	ollama pull qwen2.5:14b-instruct
 //	ollama pull phi4
 //	ollama pull gemma3:12b
-//
-// To run a subset, comment out rows here. The baseline 3B row uses
-// Full6CatV2 (the prompt it was originally tuned for); larger models all use
-// Full6CatV3 (Track B enriched prompt with schema-aware offchain + scale).
 var modelsUnderTest = []modelSpec{
-	{csvKey: "qwen2_5_3b_v2", model: "qwen2.5:3b", promptVersion: classifier.PromptVersionFull6CatV2},
-	{csvKey: "qwen2_5_3b_v3", model: "qwen2.5:3b", promptVersion: classifier.PromptVersionFull6CatV3},
-	{csvKey: "qwen2_5_7b", model: "qwen2.5:7b-instruct", promptVersion: classifier.PromptVersionFull6CatV3},
-	{csvKey: "qwen3_8b", model: "qwen3:8b", promptVersion: classifier.PromptVersionFull6CatV3},
-	{csvKey: "gemma3_12b", model: "gemma3:12b", promptVersion: classifier.PromptVersionFull6CatV3},
-	{csvKey: "qwen2_5_14b", model: "qwen2.5:14b-instruct", promptVersion: classifier.PromptVersionFull6CatV3},
-	{csvKey: "phi4_14b", model: "phi4", promptVersion: classifier.PromptVersionFull6CatV3},
+	{csvKey: "qwen2_5_3b", model: "qwen2.5:3b"},
+	{csvKey: "qwen2_5_7b", model: "qwen2.5:7b-instruct"},
+	{csvKey: "qwen3_8b", model: "qwen3:8b"},
+	{csvKey: "gemma3_12b", model: "gemma3:12b"},
+	{csvKey: "qwen2_5_14b", model: "qwen2.5:14b-instruct"},
+	{csvKey: "phi4_14b", model: "phi4"},
 }
 
 // agentMeta is the slice of an AgentDocument we surface to the prompt builder.
@@ -141,10 +138,9 @@ func main() {
 
 		limit   = flag.Int("limit", 0, "hard cap on total samples after sampling (0 = no cap)")
 		outPath = flag.String("out", "", "CSV output path")
-		timeout = flag.Int("timeout", 120, "LLM request timeout seconds")
-		mode    = flag.String("mode", "ollama", "ollama | llamacpp")
-		baseURL = flag.String("base-url", "", "override LLM_BASE_URL")
-		skipLLM = flag.Bool("skip-llm", false, "skip every LLM call (rule-only run)")
+		timeout = flag.Int("timeout", 120, "AI service request timeout seconds")
+		baseURL = flag.String("base-url", "", "override AI_SERVICE_URL (default http://localhost:8000)")
+		skipLLM = flag.Bool("skip-llm", false, "skip every AI service call (rule-only run)")
 
 		llmConc = flag.Int("llm-concurrency", 1, "max concurrent LLM classify calls per model pass (1 = serial)")
 	)
@@ -168,11 +164,11 @@ func main() {
 		name := fmt.Sprintf("classifier_eval_%s_%s.csv", srcMode, stamp)
 		*outPath = filepath.Join("scripts", "output", name)
 	}
-	if envURL := os.Getenv("LLM_BASE_URL"); envURL != "" && *baseURL == "" {
+	if envURL := os.Getenv("AI_SERVICE_URL"); envURL != "" && *baseURL == "" {
 		*baseURL = envURL
 	}
 	if *baseURL == "" {
-		*baseURL = "http://localhost:11434"
+		*baseURL = "http://localhost:8000"
 	}
 
 	ctx := context.Background()
@@ -197,7 +193,7 @@ func main() {
 	var goldLabels map[string]GoldLabel
 	switch srcMode {
 	case "category":
-		buckets := []string{"spam", "noise", "service_feedback", "config_feedback", "app_specific"}
+		buckets := []string{"junk", "service_feedback", "config_feedback", "app_specific"}
 		for _, cat := range buckets {
 			docs, err := sampleByCategory(ctx, feedbacks, cat, *perBucket)
 			if err != nil {
@@ -258,27 +254,21 @@ func main() {
 		return
 	}
 
-	// ── 3. Build LLM clients ──
-	llmMode := classifier.ModeOllama
-	if strings.EqualFold(*mode, "llamacpp") {
-		llmMode = classifier.ModeLlamaCpp
-	}
-	llmClients := make([]*classifier.LLMClient, len(modelsUnderTest))
+	// ── 3. Build AI service clients (one per model — only the model field differs) ──
+	aiClients := make([]*classifier.AIClient, len(modelsUnderTest))
 	for i, m := range modelsUnderTest {
-		llmClients[i] = classifier.NewLLMClient(classifier.LLMClientConfig{
+		aiClients[i] = classifier.NewAIClient(classifier.AIClientConfig{
 			BaseURL:        *baseURL,
 			Model:          m.model,
-			Mode:           llmMode,
 			TimeoutSeconds: *timeout,
-			PromptVersion:  m.promptVersion,
 		})
 	}
 
-	if !*skipLLM && len(llmClients) > 0 {
+	if !*skipLLM && len(aiClients) > 0 {
 		hcCtx, hcCancel := context.WithTimeout(ctx, 10*time.Second)
-		if err := llmClients[0].HealthCheck(hcCtx); err != nil {
+		if err := aiClients[0].HealthCheck(hcCtx); err != nil {
 			hcCancel()
-			log.Fatalf("LLM health check failed: %v", err)
+			log.Fatalf("AI service health check failed: %v", err)
 		}
 		hcCancel()
 	}
@@ -300,9 +290,9 @@ func main() {
 			conc = 1
 		}
 		for mi, m := range modelsUnderTest {
-			client := llmClients[mi]
-			log.Printf("=== running model %s (prompt=%s) over %d samples (llm-concurrency=%d) ===",
-				m.model, m.promptVersion, len(rows), conc)
+			client := aiClients[mi]
+			log.Printf("=== running model %s over %d samples (llm-concurrency=%d) ===",
+				m.model, len(rows), conc)
 			startPass := time.Now()
 
 			sem := make(chan struct{}, conc)

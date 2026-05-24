@@ -69,6 +69,10 @@ type AgentDocument struct {
 	OnchainMetadata  map[string]OnchainMetadataValue `bson:"onchainMetadata,omitempty"` // from MetadataSet events
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
 	CreatedAt        int64    `bson:"createdAt,omitempty"` // omit zero from upsert $set; insert uses $setOnInsert in repo
+
+	// Post-propagation score (trust-graph propagation pass writes this).
+	TrustScorePropagated float64 `bson:"trustScorePropagated,omitempty"`
+	PropagationUpdatedAt int64   `bson:"propagationUpdatedAt,omitempty"`
 }
 
 // Repository wraps the agents collection.

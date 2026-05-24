@@ -15,11 +15,11 @@ import (
 	"strings"
 )
 
-// AllCategories lists the 6 canonical labels in display order. Anything else
+// AllCategories lists the 5 canonical labels in display order. Anything else
 // in either gold or predicted columns is bucketed under "<other>" so totals
 // always reconcile.
 var AllCategories = []string{
-	"spam", "noise", "service_feedback", "config_feedback", "app_specific", "others",
+	"junk", "service_feedback", "config_feedback", "app_specific", "others",
 }
 
 // CategoryStats holds precision/recall/F1 numbers for one category.
