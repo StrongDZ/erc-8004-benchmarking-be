@@ -27,6 +27,7 @@ import (
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
+	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
 
@@ -42,8 +43,10 @@ type Repositories struct {
 	Events     *eventrepo.Repository
 	Offchain   *offchainrepo.Repository
 	Crawlers   *crawlerrepo.Repository
-	Contracts  *contractsrepo.ContractsRepository
-	Wallets    *walletrepo.Repository
+	Contracts   *contractsrepo.ContractsRepository
+	Wallets     *walletrepo.Repository
+	OASFSkills  *oasfschema.Repository
+	OASFDomains *oasfschema.Repository
 }
 
 // NewRepositories wires all repositories against both the primary and analyzed databases.
@@ -61,8 +64,10 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 		Events:     eventrepo.NewRepository(primary, cfg.EventsColl),
 		Offchain:   offchainrepo.NewRepository(primary, cfg.OffchainColl),
 		Crawlers:   crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
-		Contracts:  contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
-		Wallets:    walletrepo.NewRepository(analyzed, cfg.WalletColl),
+		Contracts:   contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
+		Wallets:     walletrepo.NewRepository(analyzed, cfg.WalletColl),
+		OASFSkills:  oasfschema.NewRepository(primary, "oasf_skills"),
+		OASFDomains: oasfschema.NewRepository(primary, "oasf_domains"),
 	}
 }
 
@@ -87,6 +92,13 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	formula.Gamma = cfg.PenaltyGamma
 	formula.Theta = cfg.PenaltyTheta
 
+	composite := scoring.CompositeWeights{
+		Reputation: cfg.ScoreWeightReputation,
+		Services:   cfg.ScoreWeightServices,
+		Publisher:  cfg.ScoreWeightPublisher,
+		Compliance: cfg.ScoreWeightCompliance,
+	}
+
 	// Services
 	lbSvc := service.NewLeaderboard(service.LeaderboardDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.ScoreStats,
@@ -95,9 +107,15 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	agentSvc := service.NewAgent(service.AgentDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, ScoreStats: repos.ScoreStats,
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
-		Contracts: repos.Contracts, Formula: formula,
+		Contracts: repos.Contracts, Formula: formula, Composite: composite,
 	})
-	oasfSvc := service.NewOASF(service.OASFDeps{Agents: repos.Agents, ScoreStats: repos.ScoreStats, Formula: formula})
+	oasfSvc := service.NewOASF(service.OASFDeps{
+		Agents:            repos.Agents,
+		ScoreStats:        repos.ScoreStats,
+		Formula:           formula,
+		OASFSchemaSkills:  repos.OASFSkills,
+		OASFSchemaDomains: repos.OASFDomains,
+	})
 	chainSvc := service.NewChain(service.ChainDeps{Contracts: repos.Contracts, Agents: repos.Agents})
 	adminSvc := service.NewAdmin(service.AdminDeps{
 		Crawlers: repos.Crawlers, Events: repos.Events, Feedback: repos.Feedback,
@@ -121,6 +139,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	c60s := middleware.ResponseCache(mem, 60*time.Second)
 	c2m := middleware.ResponseCache(mem, 2*time.Minute)
 	c5m := middleware.ResponseCache(mem, 5*time.Minute)
+	c1h := middleware.ResponseCache(mem, 1*time.Hour)
 
 	mux := http.NewServeMux()
 
@@ -142,7 +161,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
 	mux.HandleFunc("GET /api/v1/offchain-by-uri", agH.OffchainByURI)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
-	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/reputation-score-history", c2m(http.HandlerFunc(agH.ReputationScoreHistory)))
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/trust-score-history", c2m(http.HandlerFunc(agH.TrustScoreHistory)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/activity-heatmap", c2m(http.HandlerFunc(agH.ActivityHeatmap)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/penalties", agH.Penalties)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/related", c60s(http.HandlerFunc(agH.Related)))
@@ -154,6 +173,8 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))
 	mux.Handle("GET /api/v1/oasf/skills", c2m(http.HandlerFunc(oasfH.Skills)))
 	mux.Handle("GET /api/v1/oasf/domains", c2m(http.HandlerFunc(oasfH.Domains)))
+	mux.Handle("GET /api/v1/oasf/schema/skills",  c1h(http.HandlerFunc(oasfH.SchemaSkills)))
+	mux.Handle("GET /api/v1/oasf/schema/domains", c1h(http.HandlerFunc(oasfH.SchemaDomains)))
 
 	// /api/v1/chains/*
 	mux.Handle("GET /api/v1/chains", c5m(http.HandlerFunc(chainH.List)))
