@@ -100,3 +100,35 @@ func (h *OASFHandler) browse(w http.ResponseWriter, r *http.Request, kind string
 	}
 	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
 }
+
+// SchemaSkills handles GET /oasf/schema/skills — full OASF skill taxonomy from DB.
+// @Summary OASF skill taxonomy
+// @Tags oasf
+// @Produce json
+// @Success 200 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /oasf/schema/skills [get]
+func (h *OASFHandler) SchemaSkills(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.svc.SchemaSkills(r.Context())
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.Success(w, r, entries)
+}
+
+// SchemaDomains handles GET /oasf/schema/domains — full OASF domain taxonomy from DB.
+// @Summary OASF domain taxonomy
+// @Tags oasf
+// @Produce json
+// @Success 200 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /oasf/schema/domains [get]
+func (h *OASFHandler) SchemaDomains(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.svc.SchemaDomains(r.Context())
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.Success(w, r, entries)
+}
