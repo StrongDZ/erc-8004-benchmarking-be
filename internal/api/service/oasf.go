@@ -13,13 +13,16 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
+	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 )
 
 // OASFDeps bundles the repos used by the OASF service.
 type OASFDeps struct {
-	Agents     *agentrepo.Repository
-	ScoreStats *scorestats.Repository
-	Formula    scoring.FormulaConfig
+	Agents            *agentrepo.Repository
+	ScoreStats        *scorestats.Repository
+	Formula           scoring.FormulaConfig
+	OASFSchemaSkills  *oasfschema.Repository
+	OASFSchemaDomains *oasfschema.Repository
 }
 
 // OASF encapsulates OASF discovery logic.
@@ -96,6 +99,16 @@ func (s *OASF) Browse(ctx context.Context, p BrowseParams) (*BrowseResult, error
 		rows[i].Rank = int(p.Skip) + i + 1
 	}
 	return &BrowseResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
+}
+
+// SchemaSkills returns all OASF skill entries from the DB.
+func (s *OASF) SchemaSkills(ctx context.Context) ([]oasfschema.Entry, error) {
+	return s.deps.OASFSchemaSkills.FindAll(ctx)
+}
+
+// SchemaDomains returns all OASF domain entries from the DB.
+func (s *OASF) SchemaDomains(ctx context.Context) ([]oasfschema.Entry, error) {
+	return s.deps.OASFSchemaDomains.FindAll(ctx)
 }
 
 func mapFacetNodes(in []agentrepo.OASFFacetNode) []dto.OASFFacetNode {
