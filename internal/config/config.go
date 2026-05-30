@@ -33,6 +33,7 @@ type Config struct {
 
 	// Score-refresh worker
 	ScoreRefreshCron string // cron expression, default "*/30 * * * *"
+	OASFSchemaRefreshCron string // cron expression, default "0 0 * * 0" (weekly Sunday midnight)
 
 	// Tag-scale normalization
 	TagStatsMinSamples int // feedbacks required before scale is locked (default 50)
@@ -170,6 +171,7 @@ func Load() (Config, error) {
 		WalletColl:         utils.Getenv("MONGO_COLLECTION_WALLETS", "wallets"),
 
 		ScoreRefreshCron: utils.Getenv("SCORE_REFRESH_CRON", "*/30 * * * *"),
+		OASFSchemaRefreshCron: utils.Getenv("OASF_SCHEMA_REFRESH_CRON", "0 0 * * 0"),
 
 		TagStatsMinSamples: utils.GetenvInt("TAG_STATS_MIN_SAMPLES", 1),
 
