@@ -86,6 +86,13 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "owner", Value: 1}},
 			Options: options.Index().SetName("idx_owner"),
 		},
+		// Sparse index on agentWallet to support cross-chain identity grouping
+		// (GET /agents/:chainId/:agentId/registrations). Sparse because most
+		// agents have an empty agentWallet field.
+		{
+			Keys:    bson.D{{Key: "agentWallet", Value: 1}},
+			Options: options.Index().SetName("idx_agent_wallet").SetSparse(true),
+		},
 	})
 	return err
 }
@@ -232,6 +239,24 @@ func (r *Repository) ScanOwnerEdges(ctx context.Context, chainID int64) ([]Agent
 	return out, nil
 }
 
+// SetSummarizedDescription writes the realtime description summary fields for an agent.
+// Returns true when the agent doc exists and the update applied (modifiedCount + matchedCount > 0).
+// Returns false when no agent matches (e.g. summary message arrived before agent upsert) — the
+// caller should ack-drop in that case; a later identity event will re-trigger.
+func (r *Repository) SetSummarizedDescription(ctx context.Context, chainID int64, agentID, summary, descHash string, at int64) (bool, error) {
+	filter := bson.M{"_id": AgentDocumentID(chainID, agentID)}
+	update := bson.M{"$set": bson.M{
+		"summarizedDescription":     summary,
+		"summarizedDescriptionHash": descHash,
+		"summarizedDescriptionAt":   at,
+	}}
+	res, err := r.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return false, fmt.Errorf("agent repo: set summarized description %d:%s: %w", chainID, agentID, err)
+	}
+	return res.MatchedCount > 0, nil
+}
+
 func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedScore) error {
 	if len(scores) == 0 {
 		return nil
@@ -248,4 +273,31 @@ func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedS
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	return err
+}
+
+// FindByAgentWallet returns all agents whose agentWallet equals the (already-normalized)
+// address. Used by cross-chain registration lookup. Returns an empty slice when no match.
+func (r *Repository) FindByAgentWallet(ctx context.Context, wallet string) ([]AgentDocument, error) {
+	if wallet == "" {
+		return nil, nil
+	}
+	docs, err := r.Find(ctx, bson.M{"agentWallet": wallet})
+	if err != nil {
+		return nil, fmt.Errorf("agent repo: find by agentWallet: %w", err)
+	}
+	return docs, nil
+}
+
+// FindByOwner returns all agents owned by the (already-normalized) owner address.
+// Used by cross-chain registration lookup when agentWallet is empty. Returns an empty
+// slice when no match.
+func (r *Repository) FindByOwner(ctx context.Context, owner string) ([]AgentDocument, error) {
+	if owner == "" {
+		return nil, nil
+	}
+	docs, err := r.Find(ctx, bson.M{"owner": owner})
+	if err != nil {
+		return nil, fmt.Errorf("agent repo: find by owner: %w", err)
+	}
+	return docs, nil
 }
