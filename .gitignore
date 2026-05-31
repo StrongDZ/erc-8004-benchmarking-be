@@ -1,34 +1,42 @@
-.env
-# Legacy: repo-local Ollama bind mount (no longer used; data lives in ~/ollama_data).
-ollama_data/
+# Compiled binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 bin/
-dist/
-*.log
+out/
 
-.cursorrules
-.agents
-.cursor
-docs/*
-!docs/superpowers/
-!docs/superpowers/plans/
-!docs/superpowers/plans/*.md
-tests/*
+# Test coverage and profiling outputs
+*.out
+*.test
+*.prof
+cpu.out
+mem.out
+
+# Dependency directories
+# Un-comment the next line if you intentionally choose to commit your vendor folder
+# !vendor/
+vendor/
+
+# Development environment and sensitive files
+.env
+.env.*
+!.env.example
+
+# IDEs and Text Editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
 scripts/*
+
 **/*_test.go
 
-# Exceptions: pure-logic unit tests (Mongo-free, no integration tests)
-!internal/infra/rabbitmq/*_test.go
-!internal/repository/wallet/*_test.go
-!internal/app/trustgraph/*_test.go
-!internal/app/trustpropagation/*_test.go
-!internal/app/oasfrefresh/*_test.go
-!internal/domain/identity/*_test.go
-!internal/api/service/*_test.go
-# Built binaries at repo root
-/classifier-bench
-/classifier-bench-mongo
-/score-refresh
-/trustrank
-.DS_Store
-# Private analysis notes (thesis-only)
-AI/
+#docs
+docs/*
+.superpowers/*
