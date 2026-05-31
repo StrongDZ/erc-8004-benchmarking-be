@@ -8,32 +8,38 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+
+	mongorepo "erc-8004-benchmarking-be/internal/repository"
 )
 
-// IndexCollectionName is the collection storing snapshot metadata.
-const IndexCollectionName = "snapshots"
+const (
+	IndexCollectionName = "snapshots"
+	IndexDatabaseName   = "bachelor_sensitivity_index"
+)
 
 // IndexRepository provides CRUD over bachelor_sensitivity_index.snapshots.
 type IndexRepository struct {
-	coll *mongodrv.Collection
+	mongorepo.MongoRepoImpl[SnapshotMeta]
 }
 
 // NewIndexRepository wires the repository to the given index database.
 // Caller should pass mc.Database("bachelor_sensitivity_index").
 func NewIndexRepository(db *mongodrv.Database) *IndexRepository {
-	return &IndexRepository{coll: db.Collection(IndexCollectionName)}
+	m := mongorepo.NewMongoRepo[SnapshotMeta](db, IndexCollectionName)
+	return &IndexRepository{MongoRepoImpl: *m}
 }
 
 // Insert writes a new SnapshotMeta. Fails if a document with the same _id exists.
 func (r *IndexRepository) Insert(ctx context.Context, meta SnapshotMeta) error {
-	_, err := r.coll.InsertOne(ctx, meta)
+	_, err := r.Coll.InsertOne(ctx, meta)
 	return err
 }
 
 // List returns all snapshots sorted by createdAt DESC.
 func (r *IndexRepository) List(ctx context.Context) ([]SnapshotMeta, error) {
-	opts := bson.D{}
-	cursor, err := r.coll.Find(ctx, opts)
+	findOpts := options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}})
+	cursor, err := r.Coll.Find(ctx, bson.M{}, findOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +54,7 @@ func (r *IndexRepository) List(ctx context.Context) ([]SnapshotMeta, error) {
 // FindByID returns the snapshot meta or nil when no document matches.
 func (r *IndexRepository) FindByID(ctx context.Context, id string) (*SnapshotMeta, error) {
 	var meta SnapshotMeta
-	err := r.coll.FindOne(ctx, bson.M{"_id": id}).Decode(&meta)
+	err := r.Coll.FindOne(ctx, bson.M{"_id": id}).Decode(&meta)
 	if err == mongodrv.ErrNoDocuments {
 		return nil, nil
 	}
@@ -60,9 +66,6 @@ func (r *IndexRepository) FindByID(ctx context.Context, id string) (*SnapshotMet
 
 // Delete removes one snapshot meta by ID.
 func (r *IndexRepository) Delete(ctx context.Context, id string) error {
-	_, err := r.coll.DeleteOne(ctx, bson.M{"_id": id})
+	_, err := r.Coll.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
-
-// IndexDatabaseName is the well-known name for the metadata index database.
-const IndexDatabaseName = "bachelor_sensitivity_index"
