@@ -1,4 +1,4 @@
-// trustrank-pass runs weighted TrustRank power iteration every
+// trustrank-pass runs weighted TrustRank power iteration on all chains every
 // TRUST_PROPAGATION_BATCH_INTERVAL_MIN minutes. Each tick also re-publishes
 // any feedback rows still missing a validationVerdict so trust-graph-updater
 // can grade them.
@@ -65,7 +65,6 @@ func main() {
 	}
 
 	cfg := trustpropagation.AppConfig{
-		ChainID:     envInt64("TRUST_PROPAGATION_CHAIN_ID", 0),
 		IntervalMin: envInt("TRUST_PROPAGATION_BATCH_INTERVAL_MIN", 10),
 		IterConfig: trustpropagation.PropagationIterConfig{
 			Alpha:         envFloat("TRUST_PROPAGATION_ALPHA", 0.85),
@@ -118,15 +117,6 @@ func envFloat(k string, def float64) float64 {
 func envInt(k string, def int) int {
 	if v := os.Getenv(k); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
-			return i
-		}
-	}
-	return def
-}
-
-func envInt64(k string, def int64) int64 {
-	if v := os.Getenv(k); v != "" {
-		if i, err := strconv.ParseInt(v, 10, 64); err == nil {
 			return i
 		}
 	}

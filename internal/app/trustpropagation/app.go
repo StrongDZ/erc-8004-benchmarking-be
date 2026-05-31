@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
+// allChains is the chainID filter passed to Mongo loaders and backfill: 0 means every chain.
+const allChains int64 = 0
+
 // AppConfig holds runtime tunables.
 type AppConfig struct {
-	ChainID      int64
 	IntervalMin  int
 	IterConfig   PropagationIterConfig
 	LoaderDeps   LoaderDeps
@@ -51,7 +53,7 @@ func (a *App) runPass(ctx context.Context) {
 	start := time.Now()
 
 	if a.cfg.BackfillDeps.Publisher != nil {
-		n, err := BackfillUnprocessed(ctx, a.cfg.ChainID, a.cfg.BackfillDeps)
+		n, err := BackfillUnprocessed(ctx, allChains, a.cfg.BackfillDeps)
 		if err != nil {
 			log.Printf("trustrank-pass: backfill: %v", err)
 		}
@@ -60,9 +62,9 @@ func (a *App) runPass(ctx context.Context) {
 		}
 	}
 
-	log.Printf("trustrank-pass: loading graph (chainID=%d)", a.cfg.ChainID)
+	log.Printf("trustrank-pass: loading graph (all chains)")
 
-	gd, err := LoadGraph(ctx, a.cfg.LoaderDeps, a.cfg.ChainID)
+	gd, err := LoadGraph(ctx, a.cfg.LoaderDeps, allChains)
 	if err != nil {
 		log.Printf("trustrank-pass: load graph: %v", err)
 		return

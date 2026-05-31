@@ -4,7 +4,10 @@ package mq
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"erc-8004-benchmarking-be/internal/repository/contracts"
 )
@@ -14,6 +17,7 @@ const (
 	QueueRawLogs            = "erc8004.raw_logs"
 	QueueAgentURI           = "erc8004.agent_uri"
 	QueueFeedbackClassified = "erc8004.feedback.classified"
+	QueueAgentDescSummary   = "erc8004.agent.desc.summary"
 )
 
 // EventURIQueueName returns the per-chain queue for event-sourced URI messages.
@@ -83,4 +87,29 @@ type ServiceURIMessage struct {
 type FeedbackClassifiedMessage struct {
 	FeedbackID string `json:"feedbackId"`
 	ChainID    int64  `json:"chainId"`
+}
+
+// AgentDescSummaryMessage is published to QueueAgentDescSummary by the trustrank
+// identity processor whenever an agent's description becomes non-empty or changes.
+// The desc-summarizer worker consumes it, calls the AI service /summarize endpoint,
+// and writes the result to agents.summarizedDescription.
+// DescHash is sha256[:16] of strings.TrimSpace(Description); the consumer uses it
+// as an idempotency key against agents.summarizedDescriptionHash.
+type AgentDescSummaryMessage struct {
+	ChainID     int64  `json:"chainId"`
+	AgentID     string `json:"agentId"`
+	Description string `json:"description"`
+	DescHash    string `json:"descHash"`
+	PublishedAt int64  `json:"publishedAt"`
+}
+
+// DescHash returns the sha256[:16] hex digest used as the description idempotency key.
+// Callers should normalise (TrimSpace) the description before hashing; this helper enforces it.
+func DescHash(description string) string {
+	trimmed := strings.TrimSpace(description)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return hex.EncodeToString(sum[:8]) // 8 bytes -> 16 hex chars
 }

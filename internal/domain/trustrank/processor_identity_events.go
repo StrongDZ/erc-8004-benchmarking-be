@@ -197,6 +197,10 @@ func (p *Processor) applyIdentityFromURI(bs *batchState, agentID, uri string) {
 		log.Printf("processor: WA031 legacy endpoints detected: chain=%d agent=%s uri=%s", bs.chainID, agentID, uri)
 	}
 
+	// Capture the previous description before overwriting so we can detect changes
+	// (covers both "new agent gains a description" and "description edited").
+	oldDesc := doc.Description
+
 	doc.AgentURI = uri
 	doc.Name = card.Name
 	doc.Type = strings.TrimSpace(card.Type)
@@ -241,6 +245,33 @@ func (p *Processor) applyIdentityFromURI(bs *batchState, agentID, uri string) {
 			})
 		}
 	}
+
+	// Enqueue a description-summary job when the description is non-empty AND
+	// changed (covers both "new agent with desc" and "desc edited"). Consumer
+	// dedupes via DescHash against agents.summarizedDescriptionHash.
+	if p.descPublisher != nil {
+		newDesc := strings.TrimSpace(card.Description)
+		if shouldPublishDescSummary(newDesc, oldDesc) {
+			bs.pendingDescSummary = append(bs.pendingDescSummary, mq.AgentDescSummaryMessage{
+				ChainID:     bs.chainID,
+				AgentID:     agentID,
+				Description: newDesc,
+				DescHash:    mq.DescHash(newDesc),
+				PublishedAt: time.Now().Unix(),
+			})
+		}
+	}
+}
+
+// shouldPublishDescSummary returns true when newDesc warrants a description-summary
+// publication: it must be non-empty (after trim) and differ from the previous
+// description (also trimmed). Covers both "new agent gains a description" and
+// "description edited"; returns false for noop / cleared descriptions.
+func shouldPublishDescSummary(newDesc, oldDesc string) bool {
+	if newDesc == "" {
+		return false
+	}
+	return newDesc != strings.TrimSpace(oldDesc)
 }
 
 // filterCaip10 returns only strings that match the CAIP-10 format eip155:{chainId}:{address}.

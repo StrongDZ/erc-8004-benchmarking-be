@@ -39,6 +39,12 @@ type FeedbackPublisher interface {
 	Publish(ctx context.Context, queueName string, msg any) error
 }
 
+// DescSummaryPublisher publishes AgentDescSummaryMessage events whenever an agent's
+// description becomes non-empty or changes. May be nil; when nil, publishing is skipped.
+type DescSummaryPublisher interface {
+	Publish(ctx context.Context, queueName string, msg any) error
+}
+
 // App orchestrates Stream 2: parallel per-chain event processing each cron tick.
 type App struct {
 	Contracts  *contractsrepo.ContractsRepository
@@ -283,6 +289,7 @@ type Processor struct {
 	compositeWeights scoring.CompositeWeights
 	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
 	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
+	descPublisher    DescSummaryPublisher // may be nil; publishes agent description-summary jobs
 	walletRepo       *wallet.Repository // may be nil; syncs owner → wallets for trust graph
 	coldStartT0      float64            // initial trustScore for new owner wallets
 	tagStatsRepo     *tagstats.StatsRepository
@@ -305,7 +312,8 @@ type batchState struct {
 	pendingIdentity    []identityrepo.IdentityChange
 	pendingFeedbacks   []feedback.FeedbackRecord
 	pendingFBUpdates   []feedback.FeedbackUpdate
-	pendingServiceURIs []mq.ServiceURIMessage // service endpoint URIs to publish asynchronously
+	pendingServiceURIs  []mq.ServiceURIMessage       // service endpoint URIs to publish asynchronously
+	pendingDescSummary  []mq.AgentDescSummaryMessage // description-summary jobs to publish asynchronously
 	pendingTierUpdates []tagstats.TierUpdate  // tag scale votes to flush in Phase 3
 	dirtyAgents        map[string]bool        // agentIDs that were created or mutated
 }
