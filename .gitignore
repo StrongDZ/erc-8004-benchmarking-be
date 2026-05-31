@@ -22,6 +22,7 @@ scripts/*
 !internal/app/trustgraph/*_test.go
 !internal/app/trustpropagation/*_test.go
 !internal/app/oasfrefresh/*_test.go
+!internal/domain/identity/*_test.go
 # Built binaries at repo root
 /classifier-bench
 /classifier-bench-mongo
