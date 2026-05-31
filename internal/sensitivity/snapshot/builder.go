@@ -63,7 +63,10 @@ func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptio
 
 	feedbacks := projectFeedbacks(fbs)
 	edges := buildEdges(fbs, agentDocs, opts.Defaults)
-	baseline := computeBaseline(ctx, src.AgentScoreStats, agents, opts)
+	baseline, err := computeBaseline(ctx, src.AgentScoreStats, agents, opts)
+	if err != nil {
+		return SnapshotData{}, fmt.Errorf("compute baseline: %w", err)
+	}
 
 	return SnapshotData{
 		Agents:    agents,
@@ -126,13 +129,14 @@ func loadAgents(ctx context.Context, coll *mongodrv.Collection, chainID int64, a
 		AgentID     string `bson:"agentId"`
 		Owner       string `bson:"owner"`
 		AgentWallet string `bson:"agentWallet"`
+		Verified    bool   `bson:"verified"`
 	}
 	if err := cur.All(ctx, &raw); err != nil {
 		return nil, err
 	}
 	out := make(map[string]agentMini, len(raw))
 	for _, r := range raw {
-		out[r.AgentID] = agentMini{Owner: r.Owner, AgentWallet: r.AgentWallet}
+		out[r.AgentID] = agentMini{Owner: r.Owner, AgentWallet: r.AgentWallet, Verified: r.Verified}
 	}
 	return out, nil
 }
@@ -162,6 +166,8 @@ func denormalizeAgents(fbs []feedback.FeedbackRecord, agentDocs map[string]agent
 	return out
 }
 
+// filterByMinFeedbacks performs an in-place filter; caller MUST NOT retain a
+// reference to the old slice header (the backing array is reused).
 func filterByMinFeedbacks(agents []AgentSnapshot, min int) []AgentSnapshot {
 	out := agents[:0]
 	for _, a := range agents {
@@ -180,6 +186,8 @@ func agentIDSet(agents []AgentSnapshot) map[string]struct{} {
 	return out
 }
 
+// filterFeedbacksByAgent performs an in-place filter; caller MUST NOT retain a
+// reference to the old slice header (the backing array is reused).
 func filterFeedbacksByAgent(fbs []feedback.FeedbackRecord, keep map[string]struct{}) []feedback.FeedbackRecord {
 	out := fbs[:0]
 	for _, fb := range fbs {
@@ -254,9 +262,11 @@ func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, d
 
 // computeBaseline pulls existing agent_score_stats rows for the given agents and
 // projects them into BaselineScore structs. Agents without a score row get zeros.
-func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []AgentSnapshot, opts BuildOptions) []BaselineScore {
+// Returns (nil, nil) when the collection handle is nil or there are no agents
+// to look up — that's an intentional caller signal, not a failure.
+func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []AgentSnapshot, opts BuildOptions) ([]BaselineScore, error) {
 	if coll == nil || len(agents) == 0 {
-		return nil
+		return nil, nil
 	}
 	ids := make([]string, 0, len(agents))
 	for _, a := range agents {
@@ -267,7 +277,7 @@ func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []Ag
 		"agentId": bson.M{"$in": ids},
 	})
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer cur.Close(ctx)
 	var rows []struct {
@@ -279,7 +289,7 @@ func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []Ag
 		CompositeScore  float64 `bson:"compositeScore"`
 	}
 	if err := cur.All(ctx, &rows); err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]BaselineScore, 0, len(rows))
 	for _, r := range rows {
@@ -293,5 +303,5 @@ func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []Ag
 			CompositeScore:  r.CompositeScore,
 		})
 	}
-	return out
+	return out, nil
 }
