@@ -11,6 +11,7 @@ import (
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
@@ -188,6 +189,17 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	); err != nil {
 		log.Printf("trustrank: upsert write-path stats chain=%d agent=%s: %v", bs.chainID, agentID, err)
 		// non-fatal — refresh worker will eventually reconcile via replay.
+		return
+	}
+
+	// Sync denormalized fields to agents collection immediately so leaderboard sort
+	// reflects the new score without waiting for the next score-refresh cycle.
+	if err := p.agentRepo.BulkUpdateScores(context.Background(), []agentrepo.ScoreUpdate{{
+		ID:             agentrepo.AgentDocumentID(bs.chainID, agentID),
+		CompositeScore: composite,
+		TotalTasks:     newTotalTasks,
+	}}); err != nil {
+		log.Printf("trustrank: sync agent score chain=%d agent=%s: %v", bs.chainID, agentID, err)
 	}
 }
 

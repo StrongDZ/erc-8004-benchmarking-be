@@ -24,6 +24,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/uri-boo
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rescale ./cmd/workers/rescale
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trust-graph-updater ./cmd/workers/trust-graph-updater
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustrank-pass ./cmd/workers/trustrank-pass
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/desc-summarizer ./cmd/workers/desc-summarizer
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/oasf-schema-refresh ./cmd/workers/oasf-schema-refresh
 
 FROM alpine:3.20 AS base-runtime
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 65532 appuser
@@ -65,4 +67,12 @@ ENTRYPOINT ["/usr/local/bin/trust-graph-updater"]
 FROM base-runtime AS trustrank-pass
 COPY --from=builder /out/trustrank-pass /usr/local/bin/trustrank-pass
 ENTRYPOINT ["/usr/local/bin/trustrank-pass"]
+
+FROM base-runtime AS desc-summarizer
+COPY --from=builder /out/desc-summarizer /usr/local/bin/desc-summarizer
+ENTRYPOINT ["/usr/local/bin/desc-summarizer"]
+
+FROM base-runtime AS oasf-schema-refresh
+COPY --from=builder /out/oasf-schema-refresh /usr/local/bin/oasf-schema-refresh
+ENTRYPOINT ["/usr/local/bin/oasf-schema-refresh"]
 

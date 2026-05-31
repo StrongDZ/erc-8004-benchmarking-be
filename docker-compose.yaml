@@ -222,6 +222,44 @@ services:
         environment:
             MONGO_URI: mongodb://mongo:27017
 
+    desc-summarizer:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: desc-summarizer
+        image: erc8004-desc-summarizer:latest
+        container_name: erc8004-desc-summarizer
+        restart: unless-stopped
+        stop_grace_period: 3m
+        depends_on:
+            mongo:
+                condition: service_healthy
+            rabbitmq:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            MONGO_URI: mongodb://mongo:27017
+            RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
+            # Host AI service (erc-8004-ai-service). Requires uvicorn on the machine.
+            AI_SERVICE_URL: http://host.docker.internal:8000
+
+    oasf-schema-refresh:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: oasf-schema-refresh
+        image: erc8004-oasf-schema-refresh:latest
+        container_name: erc8004-oasf-schema-refresh
+        restart: unless-stopped
+        depends_on:
+            mongo:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            MONGO_URI: mongodb://mongo:27017
+
     # Ollama in Docker Desktop (macOS) is CPU-only — no Metal GPU. Run the Ollama
     # desktop app on the host for GPU inference; containers use host.docker.internal:11434.
     #
