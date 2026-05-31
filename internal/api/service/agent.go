@@ -728,9 +728,8 @@ func (s *Agent) Registrations(ctx context.Context, chainID int64, agentID string
 		}
 		baseHash := identity.ContentHash(base)
 		for _, c := range all {
-			cc := c // capture
-			if identity.ContentHash(&cc) == baseHash {
-				candidates = append(candidates, cc)
+			if identity.ContentHash(&c) == baseHash {
+				candidates = append(candidates, c)
 			}
 		}
 		matchedBy = "owner+contentHash"

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
@@ -79,7 +80,7 @@ func newRegistrationsAgent(repo *fakeAgentRepo) *Agent {
 func TestRegistrations_NotFound(t *testing.T) {
 	svc := newRegistrationsAgent(newFakeRepo())
 	_, err := svc.Registrations(context.Background(), 1, "999")
-	if err != ErrAgentNotFound {
+	if !errors.Is(err, ErrAgentNotFound) {
 		t.Fatalf("want ErrAgentNotFound, got %v", err)
 	}
 }
