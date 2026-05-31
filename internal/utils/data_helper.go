@@ -141,33 +141,17 @@ func GetStringArg(args map[string]any, key string) (string, bool) {
 
 // GetUint64Arg reads a uint64 from decoded event args.
 // Supports JSON numbers, uint/int variants, and decimal strings (indexed uint256 from the EVM decoder).
+// MongoDB BSON decode into map[string]any typically yields int32 for small integers (e.g. valueDecimals).
 func GetUint64Arg(args map[string]any, key string) uint64 {
 	v, ok := args[key]
 	if !ok {
 		return 0
 	}
-	switch n := v.(type) {
-	case float64:
-		return uint64(n)
-	case int64:
-		return uint64(n)
-	case uint64:
-		return n
-	case int:
-		return uint64(n)
-	case string:
-		s := strings.TrimSpace(n)
-		if s == "" {
-			return 0
-		}
-		u, err := strconv.ParseUint(s, 10, 64)
-		if err != nil {
-			return 0
-		}
-		return u
-	default:
+	n, ok := ToInt64(v)
+	if !ok || n < 0 {
 		return 0
 	}
+	return uint64(n)
 }
 
 // GetUint8Arg reads a uint8 from decoded event args (e.g. valueDecimals). Values > 255 yield 0.

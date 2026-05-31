@@ -70,6 +70,12 @@ type AgentDocument struct {
 	OffchainMetadata map[string]any    `bson:"offchainMetadata,omitempty"` // from agentURI JSON (non-fixed fields)
 	CreatedAt        int64    `bson:"createdAt,omitempty"` // omit zero from upsert $set; insert uses $setOnInsert in repo
 
+	// Realtime description summary written by the desc-summarizer worker.
+	// Hash is sha256[:16] of the trimmed description used to produce the summary; consumer skips when input hash matches.
+	SummarizedDescription     string `bson:"summarizedDescription,omitempty" json:"summarizedDescription,omitempty"`
+	SummarizedDescriptionHash string `bson:"summarizedDescriptionHash,omitempty" json:"-"`
+	SummarizedDescriptionAt   int64  `bson:"summarizedDescriptionAt,omitempty" json:"summarizedDescriptionAt,omitempty"`
+
 	// Post-propagation score (trust-graph propagation pass writes this).
 	TrustScorePropagated float64 `bson:"trustScorePropagated,omitempty"`
 	PropagationUpdatedAt int64   `bson:"propagationUpdatedAt,omitempty"`

@@ -49,6 +49,10 @@ func replayAgent(
 	lastTs := int64(0)
 	mIdx := 0
 	consecFails := int64(0)
+	totalTasks := int64(0)
+	totalPassed := int64(0)
+	totalFailed := int64(0)
+	lastEventTs := int64(0)
 
 	var snapshots [3]float64 // raw rep value (interpolated) at each milestone
 	var eventScores []float64
@@ -62,6 +66,8 @@ func replayAgent(
 		}
 
 		ts := fb.Timestamp
+		lastEventTs = ts
+		totalTasks++
 
 		// Recompute vi at runtime from raw value + stored scale (vi is not persisted).
 		real, realOK := classifier.RawValueToReal(fb.Value, int(fb.ValueDecimals))
@@ -98,9 +104,11 @@ func replayAgent(
 		// If fail (vi < 0.40): also bake in the progressive penalty.
 		if vi < 0.40 {
 			consecFails++
+			totalFailed++
 			rep -= scoring.ComputePenalty(consecFails, formulaCfg.Gamma, formulaCfg.Theta)
 		} else {
 			consecFails = 0
+			totalPassed++
 		}
 
 		eventScores = append(eventScores, fb.Wi*effectiveVi)
@@ -148,20 +156,25 @@ func replayAgent(
 	)
 
 	return scorestats.AgentScoreStats{
-		ChainID:         chainID,
-		AgentID:         agentID,
-		ReputationScore: rep,
-		Delta24h:        composite - snap24hComposite,
-		Delta7d:         composite - snap7dComposite,
-		Delta30d:        composite - snap30dComposite,
-		Consistency:     computeConsistency(eventScores),
-		CompositeScore:  composite,
-		ReputationNorm:  repNorm,
-		ServicesScore:   svcResult.Score,
-		PublisherScore:  pubScore,
-		ComplianceScore: compScore,
-		ServiceWarnings: svcResult.Warnings,
-		ComputedAt:      now,
+		ChainID:          chainID,
+		AgentID:          agentID,
+		ReputationScore:  rep,
+		Delta24h:         composite - snap24hComposite,
+		Delta7d:          composite - snap7dComposite,
+		Delta30d:         composite - snap30dComposite,
+		Consistency:      computeConsistency(eventScores),
+		ScoreUpdateAt:    lastEventTs,
+		ConsecutiveFails: consecFails,
+		TotalTasks:       totalTasks,
+		TotalPassed:      totalPassed,
+		TotalFailed:      totalFailed,
+		CompositeScore:   composite,
+		ReputationNorm:   repNorm,
+		ServicesScore:    svcResult.Score,
+		PublisherScore:   pubScore,
+		ComplianceScore:  compScore,
+		ServiceWarnings:  svcResult.Warnings,
+		ComputedAt:       now,
 	}
 }
 

@@ -26,20 +26,22 @@ func statsOrZero(s *scorestats.AgentScoreStats) scorestats.AgentScoreStats {
 	return *s
 }
 
-// toAgentRow projects the document + stats into AgentRow.
-// stats may be nil — fields will default to zero in that case.
-func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scoring.FormulaConfig, _ int64) dto.AgentRow {
-	s := statsOrZero(stats)
-	// Reputation surfaces the raw accumulator value (unbounded), not the [0,100] component used in composite math.
-	breakdown := dto.ScoreBreakdown{
+// buildScoreBreakdown builds a ScoreBreakdown DTO from a stats record.
+// Reputation surfaces the raw accumulator value (unbounded), not the [0,100] component used in composite math.
+func buildScoreBreakdown(s scorestats.AgentScoreStats) dto.ScoreBreakdown {
+	return dto.ScoreBreakdown{
 		Reputation: round2(s.ReputationScore),
 		Services:   round2(s.ServicesScore),
 		Publisher:  round2(s.PublisherScore),
 		Compliance: round2(s.ComplianceScore),
 	}
-	services := make([]dto.AgentService, 0, len(d.Services))
-	for _, sv := range d.Services {
-		services = append(services, dto.AgentService{
+}
+
+// buildServicesSlice converts repo service records to DTO slice.
+func buildServicesSlice(svcs []agent.RegistrationService) []dto.AgentService {
+	out := make([]dto.AgentService, 0, len(svcs))
+	for _, sv := range svcs {
+		out = append(out, dto.AgentService{
 			Name:     sv.Name,
 			Endpoint: sv.Endpoint,
 			Version:  sv.Version,
@@ -47,6 +49,29 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 			Domains:  sv.Domains,
 		})
 	}
+	return out
+}
+
+// mapOnchainMeta converts repo onchain metadata map to DTO map.
+func mapOnchainMeta(meta map[string]agent.OnchainMetadataValue) map[string]dto.OnchainMetadataValue {
+	out := make(map[string]dto.OnchainMetadataValue, len(meta))
+	for k, v := range meta {
+		out[k] = dto.OnchainMetadataValue{
+			RawHex:       v.RawHex,
+			Decoded:      v.Decoded,
+			DetectedType: v.DetectedType,
+			Confidence:   v.Confidence,
+		}
+	}
+	return out
+}
+
+// toAgentRow projects the document + stats into AgentRow.
+// stats may be nil — fields will default to zero in that case.
+func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scoring.FormulaConfig, _ int64) dto.AgentRow {
+	s := statsOrZero(stats)
+	breakdown := buildScoreBreakdown(s)
+	services := buildServicesSlice(d.Services)
 	return dto.AgentRow{
 		ChainID:          d.ChainID,
 		AgentID:          d.AgentID,
@@ -79,34 +104,9 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, dist map[string]int64, cfg scoring.FormulaConfig, _ int64) dto.AgentProfile {
 	s := statsOrZero(stats)
 	penalty := scoring.ComputePenalty(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)
-	// Reputation surfaces the raw accumulator value (unbounded), not the [0,100] component used in composite math.
-	breakdown := dto.ScoreBreakdown{
-		Reputation: round2(s.ReputationScore),
-		Services:   round2(s.ServicesScore),
-		Publisher:  round2(s.PublisherScore),
-		Compliance: round2(s.ComplianceScore),
-	}
-
-	services := make([]dto.AgentService, 0, len(d.Services))
-	for _, sv := range d.Services {
-		services = append(services, dto.AgentService{
-			Name:     sv.Name,
-			Endpoint: sv.Endpoint,
-			Version:  sv.Version,
-			Skills:   sv.Skills,
-			Domains:  sv.Domains,
-		})
-	}
-
-	onchain := make(map[string]dto.OnchainMetadataValue, len(d.OnchainMetadata))
-	for k, v := range d.OnchainMetadata {
-		onchain[k] = dto.OnchainMetadataValue{
-			RawHex:       v.RawHex,
-			Decoded:      v.Decoded,
-			DetectedType: v.DetectedType,
-			Confidence:   v.Confidence,
-		}
-	}
+	breakdown := buildScoreBreakdown(s)
+	services := buildServicesSlice(d.Services)
+	onchain := mapOnchainMeta(d.OnchainMetadata)
 
 	return dto.AgentProfile{
 		ChainID:          d.ChainID,
@@ -217,7 +217,6 @@ func toIdentityEvent(c identity.IdentityChange) dto.IdentityEvent {
 		Timestamp:   unixToRFC3339(c.Timestamp),
 	}
 }
-
 
 // ── small helpers ───────────────────────────────────────────────────────────
 
