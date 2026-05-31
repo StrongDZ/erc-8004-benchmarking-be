@@ -738,6 +738,17 @@ func (s *Agent) Registrations(ctx context.Context, chainID int64, agentID string
 		matchedBy = "self"
 	}
 
+	// Filter: only include active registrations, plus the base one (even if inactive).
+	// This prevents stale/broken registrations from cluttering the cross-chain list.
+	filtered := make([]agentrepo.AgentDocument, 0, len(candidates))
+	for _, c := range candidates {
+		isBase := c.ChainID == chainID && c.AgentID == agentID
+		if c.Active || isBase {
+			filtered = append(filtered, c)
+		}
+	}
+	candidates = filtered
+
 	// Sort: current (chainID, agentID) first; rest ascending by chainId.
 	sort.Slice(candidates, func(i, j int) bool {
 		ci, cj := candidates[i], candidates[j]

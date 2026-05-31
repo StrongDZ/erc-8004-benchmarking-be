@@ -99,8 +99,8 @@ func TestRegistrations_MatchByAgentWallet(t *testing.T) {
 	if result.MatchedBy != "agentWallet" {
 		t.Errorf("want matchedBy=agentWallet, got %q", result.MatchedBy)
 	}
-	if len(result.Registrations) != 2 {
-		t.Fatalf("want 2 registrations, got %d", len(result.Registrations))
+	if len(result.Registrations) != 1 {
+		t.Fatalf("want 1 registration (inactive excluded), got %d", len(result.Registrations))
 	}
 	// First must be current.
 	if !result.Registrations[0].IsCurrent {
@@ -109,12 +109,21 @@ func TestRegistrations_MatchByAgentWallet(t *testing.T) {
 	if result.Registrations[0].ChainID != 1 {
 		t.Errorf("want first chainId=1, got %d", result.Registrations[0].ChainID)
 	}
-	// Second is the other chain.
-	if result.Registrations[1].ChainID != 10 {
-		t.Errorf("want second chainId=10, got %d", result.Registrations[1].ChainID)
+
+	// Case 2: calling from the inactive one — it must still be included as base.
+	result2, err := svc.Registrations(context.Background(), 10, "2")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Registrations[1].IsCurrent {
-		t.Error("non-current registration must have isCurrent=false")
+	if len(result2.Registrations) != 2 {
+		t.Fatalf("want 2 registrations (current base + active), got %d", len(result2.Registrations))
+	}
+	// Sorted: current first.
+	if result2.Registrations[0].ChainID != 10 || !result2.Registrations[0].IsCurrent {
+		t.Errorf("first must be current chainId=10, got chainId=%d isCurrent=%v", result2.Registrations[0].ChainID, result2.Registrations[0].IsCurrent)
+	}
+	if result2.Registrations[1].ChainID != 1 || result2.Registrations[1].IsCurrent {
+		t.Errorf("second must be active chainId=1, got chainId=%d isCurrent=%v", result2.Registrations[1].ChainID, result2.Registrations[1].IsCurrent)
 	}
 }
 
@@ -192,6 +201,7 @@ func TestRegistrations_SortOrder(t *testing.T) {
 	repo := newFakeRepo()
 	wallet := "0xdddd"
 	// Add in reverse order to verify sort.
+	// chainId 42161 is inactive and NOT base -> should be excluded.
 	repo.add(agentrepo.AgentDocument{ChainID: 42161, AgentID: "3", AgentWallet: wallet, Active: false})
 	repo.add(agentrepo.AgentDocument{ChainID: 10, AgentID: "2", AgentWallet: wallet, Active: true})
 	repo.add(agentrepo.AgentDocument{ChainID: 1, AgentID: "1", AgentWallet: wallet, Active: true})
@@ -201,8 +211,8 @@ func TestRegistrations_SortOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Registrations) != 3 {
-		t.Fatalf("want 3 registrations, got %d", len(result.Registrations))
+	if len(result.Registrations) != 2 {
+		t.Fatalf("want 2 registrations (inactive excluded), got %d", len(result.Registrations))
 	}
 	// first = current (chainId=10)
 	if result.Registrations[0].ChainID != 10 || !result.Registrations[0].IsCurrent {
@@ -211,9 +221,5 @@ func TestRegistrations_SortOrder(t *testing.T) {
 	// second = chainId=1 (ascending)
 	if result.Registrations[1].ChainID != 1 {
 		t.Errorf("second must be chainId=1, got %d", result.Registrations[1].ChainID)
-	}
-	// third = chainId=42161
-	if result.Registrations[2].ChainID != 42161 {
-		t.Errorf("third must be chainId=42161, got %d", result.Registrations[2].ChainID)
 	}
 }
