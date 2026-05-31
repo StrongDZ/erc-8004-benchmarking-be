@@ -56,6 +56,12 @@ func promptRow(fb feedbackrepo.FeedbackRecord, am agentMeta) []string {
 		}
 		tagsCSV += t
 	}
+	servicesJSON := ""
+	if len(am.services) > 0 {
+		if b, err := json.Marshal(am.services); err == nil {
+			servicesJSON = string(b)
+		}
+	}
 	return []string{
 		fb.ID,
 		strconv.FormatInt(fb.ChainID, 10),
@@ -69,7 +75,7 @@ func promptRow(fb feedbackrepo.FeedbackRecord, am agentMeta) []string {
 		fb.Endpoint,
 		off,
 		am.description,
-		am.services,
+		servicesJSON,
 		tagsCSV,
 	}
 }

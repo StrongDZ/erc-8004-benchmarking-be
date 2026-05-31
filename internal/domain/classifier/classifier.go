@@ -52,6 +52,15 @@ func Classify(tag1, tag2 string) Result {
 		return Result{Category: CategoryJunk, Confidence: 0.99, Source: "rule"}
 	}
 
+	// ── Stage 1C: All-digits junk ─────────────────────────────────
+	// Both tags consisting purely of digits carries no semantic signal
+	// (no domain, no quality adjective, no operation verb). Requiring BOTH
+	// keeps false positives near zero — single numeric tags often pair with
+	// a meaningful counterpart (e.g. tag2=block height + tag1=metric name).
+	if isAllDigitsJunk(t1, t2) {
+		return Result{Category: CategoryJunk, Confidence: 0.95, Source: "rule"}
+	}
+
 	// ── Stage 2: Config — high-confidence specific patterns first ────────────
 	// worker_rating + hex address (must precede generic configTag1Set match)
 	if t1 == "worker_rating" && workerAddrRe.MatchString(t2) {
@@ -197,6 +206,14 @@ func isNoise(t1, t2 string) bool {
 		return true
 	}
 	return false
+}
+
+// isAllDigitsJunk matches records where BOTH tags are non-empty and consist
+// purely of digits — they carry no semantic signal at all. Single-side numeric
+// tags often pair with meaningful counterparts (e.g. block height + metric
+// name), so this requires both sides to qualify as junk.
+func isAllDigitsJunk(t1, t2 string) bool {
+	return t1 != "" && t2 != "" && allDigitsRe.MatchString(t1) && allDigitsRe.MatchString(t2)
 }
 
 // IsAnomalousValue returns true when the raw on-chain value looks like an

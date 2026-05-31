@@ -16,6 +16,7 @@ var (
 	snakeCaseVerbRe = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z][a-z0-9]*){2,}$`)
 	base58TokenRe   = regexp.MustCompile(`^base:\d+$`)
 	emojiOnlyRe     = regexp.MustCompile(`^[\x{1F000}-\x{1FFFF}\x{2600}-\x{27FF}\s]+$`)
+	allDigitsRe     = regexp.MustCompile(`^[0-9]+$`)
 )
 
 // ─── Lookup Sets ──────────────────────────────────────────────────────────────
@@ -35,6 +36,12 @@ var configTag1Set = map[string]bool{
 	"a2a": true, "trust-score": true,
 	// Verification and delegation protocols
 	"human-verification": true, "agent-delegation": true,
+	// SentinelNet-style trust-oracle dimensions (automated metrics, generic infra).
+	// In the live corpus these tag1 values appear paired with tag2=sentinelnet-v1.
+	// Listed here so the rule resolves to config_feedback without relying on tag2
+	// (the tag1-first ordering means tag2 fallbacks are only consulted on misses).
+	"trustscore": true, "counterparty": true, "activity": true,
+	"longevity": true, "contractrisk": true,
 }
 
 // configTag2Set: tag2 values that indicate config_feedback when tag1 is unrecognized.
@@ -67,8 +74,8 @@ var appTag1Set = map[string]bool{
 	"airtime": true, "gift_card": true, "bill_payment": true,
 	// Task / research operations
 	"task-completion": true, "market-intelligence": true, "research-delivery": true,
-	// Risk / audit operations (camelCase promoted from regex to explicit for higher confidence)
-	"contractrisk": true,
+	// (contractrisk moved to configTag1Set: in the live corpus it is paired with
+	// sentinelnet-v1 oracle dimensions, i.e. a generic automated trust metric.)
 	// Creative / generative operations
 	"generateimage": true, "custom_song_creation": true,
 	"image_to_ugc_video_generation": true,

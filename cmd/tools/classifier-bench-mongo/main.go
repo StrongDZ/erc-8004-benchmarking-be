@@ -111,9 +111,13 @@ var modelsUnderTest = []modelSpec{
 
 // agentMeta is the slice of an AgentDocument we surface to the prompt builder.
 // Cached per-agent so repeated samples for the same agent only touch Mongo once.
+// services is structured so the Python context builder can filter generic
+// names (web/OASF/A2A/email) and match the feedback endpoint against agent service endpoints.
 type agentMeta struct {
 	description string
-	services    string
+	services    []classifier.AgentServicePayload
+	oasfDomains []string
+	oasfSkills  []string
 	tags        []string
 }
 
@@ -317,7 +321,7 @@ func main() {
 
 					callCtx, cancel := context.WithTimeout(gctx, time.Duration(*timeout+5)*time.Second)
 					t0 := time.Now()
-					res := client.Classify(callCtx, fb.Tag1, fb.Tag2, valueNorm, off, am.description, am.services, am.tags, fb.Endpoint, scale)
+					res := client.Classify(callCtx, fb.Tag1, fb.Tag2, valueNorm, off, am.description, am.services, am.oasfDomains, am.oasfSkills, am.tags, fb.Endpoint, scale)
 					elapsed := time.Since(t0)
 					cancel()
 
@@ -486,13 +490,30 @@ func buildAgentCache(ctx context.Context, agents *agentrepo.Repository, samples 
 			cache[s.ID] = agentMeta{}
 			continue
 		}
+		// Prefer the realtime summarised description (desc-summarizer worker) over
+		// the raw on-chain description so the LLM sees a compact business / domain
+		// signal instead of marketing fluff. Fall back to raw description when the
+		// summary is not yet computed.
+		desc := doc.SummarizedDescription
+		if desc == "" {
+			desc = doc.Description
+		}
 		meta := agentMeta{
-			description: doc.Description,
+			description: desc,
+			oasfDomains: doc.OASFDomains,
+			oasfSkills:  doc.OASFSkills,
 			tags:        doc.Tags,
 		}
 		if len(doc.Services) > 0 {
-			if b, err := json.Marshal(doc.Services); err == nil {
-				meta.services = string(b)
+			meta.services = make([]classifier.AgentServicePayload, 0, len(doc.Services))
+			for _, s := range doc.Services {
+				meta.services = append(meta.services, classifier.AgentServicePayload{
+					Name:     s.Name,
+					Endpoint: s.Endpoint,
+					Version:  s.Version,
+					Skills:   s.Skills,
+					Domains:  s.Domains,
+				})
 			}
 		}
 		keyToMeta[k] = meta

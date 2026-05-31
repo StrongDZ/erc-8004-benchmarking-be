@@ -20,15 +20,17 @@ type HybridInput struct {
 	ValueDecimals    int
 	OffchainContent  string
 	AgentDescription string
-	AgentServices    string
-	AgentTags        []string // denormalized onchain tags, e.g. ["defi","swap"]
-	Endpoint         string   // ERC-8004 v2.0 NewFeedback.endpoint — service URL
+	AgentServices    []AgentServicePayload // structured services so Python can filter generic + match endpoints
+	AgentOASFDomains []string              // normalised OASF domain paths
+	AgentOASFSkills  []string              // normalised OASF skill paths
+	AgentTags        []string              // denormalised onchain tags, e.g. ["defi","swap"]
+	Endpoint         string                // ERC-8004 v2.0 NewFeedback.endpoint — service URL
 }
 
 // HybridResult extends the base Result with LLM-specific metadata.
 type HybridResult struct {
 	Result                        // embedded rule-based result fields
-	LowConfidence bool            // true when 0.50 <= confidence < 0.70
+	LowConfidence bool            // true when 0 < confidence < 0.80 — kept category, flagged for review
 	ModelVer      string          // set when Source == "llm"
 	ValueNorm     float64         // normalised value used during classification
 }
@@ -42,15 +44,17 @@ var knownConfigTag2 = map[string]bool{
 }
 
 // knownAppTag2 maps tag2 values that always signal app_specific.
-var knownAppTag2 = map[string]bool{
-	"sentinelnet-v1": true,
-}
+// (sentinelnet-v1 removed: it is an automated trust oracle protocol, so it
+// belongs to config — see configTag2Set. The previous override here directly
+// contradicted configTag2Set and was effectively unreachable because the
+// rule classifier matches configTag2Set first.)
+var knownAppTag2 = map[string]bool{}
 
 // HybridClassifier combines the rule engine with an optional AI service fallback.
 // ai may be nil — in that case all fallback cases resolve to "others".
 type HybridClassifier struct {
 	ai                     *AIClient
-	confidenceThresholdLow float64 // low confidence floor (default 0.50)
+	confidenceThresholdLow float64 // low-confidence ceiling: results with conf < this are flagged (default 0.80)
 }
 
 // NewHybridClassifier constructs a HybridClassifier.
@@ -58,7 +62,7 @@ type HybridClassifier struct {
 func NewHybridClassifier(ai *AIClient) *HybridClassifier {
 	return &HybridClassifier{
 		ai:                     ai,
-		confidenceThresholdLow: 0.50,
+		confidenceThresholdLow: 0.80,
 	}
 }
 
@@ -102,6 +106,8 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 		in.OffchainContent,
 		in.AgentDescription,
 		in.AgentServices,
+		in.AgentOASFDomains,
+		in.AgentOASFSkills,
 		in.AgentTags,
 		in.Endpoint,
 		scale,

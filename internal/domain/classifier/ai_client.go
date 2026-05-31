@@ -21,8 +21,19 @@ type LLMResult struct {
 	Confidence    float64  `json:"confidence"`
 	Reason        string   `json:"reason"`
 	Source        string   `json:"source"` // "llm" | "fallback"
-	LowConfidence bool     `json:"-"`      // 0.50 <= confidence < 0.70
+	LowConfidence bool     `json:"-"`      // 0 < confidence < 0.80 — kept category, flagged for review
 	ModelVer      string   `json:"model_ver"`
+}
+
+// AgentServicePayload mirrors the Python ClassifyRequest.agent_services entry.
+// Kept here (not imported from repository/agent) so the classifier package stays
+// independent of repository wiring. Callers map their own service struct → this.
+type AgentServicePayload struct {
+	Name     string   `json:"name"`
+	Endpoint string   `json:"endpoint"`
+	Version  string   `json:"version,omitempty"`
+	Skills   []string `json:"skills,omitempty"`
+	Domains  []string `json:"domains,omitempty"`
 }
 
 // AIClientConfig configures the HTTP client.
@@ -58,18 +69,23 @@ func NewAIClient(cfg AIClientConfig) *AIClient {
 }
 
 // classifyRequest mirrors app/schemas.py:ClassifyRequest on the Python side.
+// agent_services is structured (not a string) — the Python context builder
+// filters generic services (web/OASF/A2A/email) and matches the feedback
+// endpoint against agent service endpoints, so it needs name + endpoint per service.
 type classifyRequest struct {
-	Tag1             string   `json:"tag1"`
-	Tag2             string   `json:"tag2"`
-	ValueNorm        float64  `json:"value_norm"`
-	Scale            string   `json:"scale,omitempty"`
-	OffchainContent  string   `json:"offchain_content,omitempty"`
-	Endpoint         string   `json:"endpoint,omitempty"`
-	AgentDescription string   `json:"agent_description,omitempty"`
-	AgentServices    string   `json:"agent_services,omitempty"`
-	AgentTags        []string `json:"agent_tags,omitempty"`
-	PromptVersion    string   `json:"prompt_version,omitempty"`
-	Model            string   `json:"model,omitempty"`
+	Tag1             string                `json:"tag1"`
+	Tag2             string                `json:"tag2"`
+	ValueNorm        float64               `json:"value_norm"`
+	Scale            string                `json:"scale,omitempty"`
+	OffchainContent  string                `json:"offchain_content,omitempty"`
+	Endpoint         string                `json:"endpoint,omitempty"`
+	AgentDescription string                `json:"agent_description,omitempty"`
+	AgentServices    []AgentServicePayload `json:"agent_services,omitempty"`
+	AgentOASFDomains []string              `json:"agent_oasf_domains,omitempty"`
+	AgentOASFSkills  []string              `json:"agent_oasf_skills,omitempty"`
+	AgentTags        []string              `json:"agent_tags,omitempty"`
+	PromptVersion    string                `json:"prompt_version,omitempty"`
+	Model            string                `json:"model,omitempty"`
 }
 
 // Classify sends one feedback record to the AI service.
@@ -81,7 +97,9 @@ func (c *AIClient) Classify(
 	valueNorm float64,
 	offchainContent string,
 	agentDescription string,
-	agentServices string,
+	agentServices []AgentServicePayload,
+	agentOASFDomains []string,
+	agentOASFSkills []string,
 	agentTags []string,
 	endpoint string,
 	scale string,
@@ -98,6 +116,8 @@ func (c *AIClient) Classify(
 		Endpoint:         endpoint,
 		AgentDescription: agentDescription,
 		AgentServices:    agentServices,
+		AgentOASFDomains: agentOASFDomains,
+		AgentOASFSkills:  agentOASFSkills,
 		AgentTags:        agentTags,
 		PromptVersion:    c.promptVersion,
 		Model:            c.model,
@@ -138,7 +158,9 @@ func (c *AIClient) Classify(
 	if out.Confidence > 1 {
 		out.Confidence = 1
 	}
-	out.LowConfidence = out.Confidence >= 0.50 && out.Confidence < 0.70
+	// Spec: "chỉ chọn khi conf > 0.80" — anything below 0.80 keeps its category
+	// (we do not force `others`) but is flagged so the operator can review it.
+	out.LowConfidence = out.Confidence > 0 && out.Confidence < 0.80
 	if out.Source == "" {
 		out.Source = "llm"
 	}
