@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
+	"erc-8004-benchmarking-be/internal/domain/identity"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
@@ -21,6 +23,7 @@ import (
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
+	"erc-8004-benchmarking-be/internal/utils"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 )
@@ -34,10 +37,12 @@ var (
 
 // ── Interfaces (defined at consumer site per DIP) ────────────────────────────
 
-type agentAgentRepo interface {
+type agentRepo interface {
 	FindByAgentID(ctx context.Context, chainID int64, agentID string) (*agentrepo.AgentDocument, error)
 	FindByIDs(ctx context.Context, chainID int64, agentIDs []string) ([]agentrepo.AgentDocument, error)
 	FindRelated(ctx context.Context, chainID int64, excludeAgentID string, skills, domains []string, limit int64) ([]agentrepo.AgentDocument, error)
+	FindByAgentWallet(ctx context.Context, wallet string) ([]agentrepo.AgentDocument, error)
+	FindByOwner(ctx context.Context, owner string) ([]agentrepo.AgentDocument, error)
 }
 
 type agentFeedbackRepo interface {
@@ -73,7 +78,7 @@ type agentContractRepo interface {
 
 // AgentDeps bundles repositories used by the Agent service.
 type AgentDeps struct {
-	Agents     agentAgentRepo
+	Agents     agentRepo
 	Feedback   agentFeedbackRepo
 	ScoreStats agentScoreStatsRepo
 	Identity   agentIdentityRepo
@@ -81,6 +86,7 @@ type AgentDeps struct {
 	Offchain   agentOffchainRepo
 	Contracts  agentContractRepo
 	Formula    scoring.FormulaConfig
+	Composite  scoring.CompositeWeights
 }
 
 // Agent encapsulates business logic for /agents/* endpoints.
@@ -333,16 +339,6 @@ func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*d
 		})
 	}
 
-	onchain := make(map[string]dto.OnchainMetadataValue, len(doc.OnchainMetadata))
-	for k, v := range doc.OnchainMetadata {
-		onchain[k] = dto.OnchainMetadataValue{
-			RawHex:       v.RawHex,
-			Decoded:      v.Decoded,
-			DetectedType: v.DetectedType,
-			Confidence:   v.Confidence,
-		}
-	}
-
 	return &dto.AgentOverview{
 		ChainID:          doc.ChainID,
 		AgentID:          doc.AgentID,
@@ -356,7 +352,7 @@ func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*d
 		CreatedTx:        createdTx,
 		AgentWallet:      agentWallet,
 		Services:         svcs,
-		OnchainMetadata:  onchain,
+		OnchainMetadata:  mapOnchainMeta(doc.OnchainMetadata),
 		OffchainMetadata: doc.OffchainMetadata,
 	}, nil
 }
@@ -420,26 +416,51 @@ func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, name, endp
 	return "unknown", ""
 }
 
-// ── Reputation history ───────────────────────────────────────────────────────
+// ── Trust-score history ──────────────────────────────────────────────────────
 
-// ReputationScoreHistory re-derives the reputation timeline from feedback_history.
-func (s *Agent) ReputationScoreHistory(ctx context.Context, chainID int64, agentID string) (*dto.ReputationScoreHistoryResult, error) {
+// TrustScoreHistory re-derives the composite trust-score timeline from feedback_history.
+// The reputation component is replayed event-by-event; services/publisher/compliance are
+// held constant at their current materialized values (frozen S/P/C approximation, matching
+// the 24h/7d/30d delta logic in the score-refresh worker). Each point is the composite
+// trust score in [0, 100].
+func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID string) (*dto.TrustScoreHistoryResult, error) {
 	feedbacks, err := s.deps.Feedback.ListForReputationHistory(ctx, chainID, agentID)
 	if err != nil {
-		return nil, fmt.Errorf("reputation history list: %w", err)
+		return nil, fmt.Errorf("trust score history list: %w", err)
 	}
 
 	cfg := s.deps.Formula
-	points := make([]dto.ReputationScorePoint, 0, len(feedbacks)*2+1)
+	w := s.deps.Composite
+
+	// Constant S/P/C contribution from the current materialized stats. When no stats doc
+	// exists yet, the tail is 0 and the composite reflects the reputation component only.
+	var tail float64
+	if stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); stats != nil {
+		tail = stats.ServicesScore*w.Services + stats.PublisherScore*w.Publisher + stats.ComplianceScore*w.Compliance
+	}
+
+	// toComposite maps a raw reputation value to the composite trust score [0, 100].
+	toComposite := func(rawRep float64) float64 {
+		c := scoring.NormalizeReputation(rawRep)*w.Reputation + tail
+		if c < 0 {
+			c = 0
+		}
+		if c > 100 {
+			c = 100
+		}
+		return c
+	}
+
+	points := make([]dto.TrustScorePoint, 0, len(feedbacks)*2+1)
 	var rep float64
 	var consecFails int64
 	var lastTs int64
 
 	for _, f := range feedbacks {
 		for _, midnight := range midnightsBetween(lastTs, f.Timestamp) {
-			points = append(points, dto.ReputationScorePoint{
+			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(decayForward(rep, lastTs, midnight, cfg)),
+				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
 				Type:      "decay",
 			})
 		}
@@ -455,9 +476,9 @@ func (s *Agent) ReputationScoreHistory(ctx context.Context, chainID int64, agent
 		}
 		lastTs = f.Timestamp
 
-		points = append(points, dto.ReputationScorePoint{
+		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(f.Timestamp),
-			Score:     round2(rep),
+			Score:     round2(toComposite(rep)),
 			Type:      "event",
 			TxHash:    f.TxHash,
 		})
@@ -466,20 +487,20 @@ func (s *Agent) ReputationScoreHistory(ctx context.Context, chainID int64, agent
 	if lastTs > 0 {
 		now := time.Now().Unix()
 		for _, midnight := range midnightsBetween(lastTs, now) {
-			points = append(points, dto.ReputationScorePoint{
+			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(decayForward(rep, lastTs, midnight, cfg)),
+				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
 				Type:      "decay",
 			})
 		}
-		points = append(points, dto.ReputationScorePoint{
+		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(now),
-			Score:     round2(scoring.ComputeCurrentScore(rep, lastTs, now, cfg)),
+			Score:     round2(toComposite(scoring.ComputeCurrentScore(rep, lastTs, now, cfg))),
 			Type:      "decay",
 		})
 	}
 
-	return &dto.ReputationScoreHistoryResult{Points: points}, nil
+	return &dto.TrustScoreHistoryResult{Points: points}, nil
 }
 
 func midnightsBetween(from, to int64) []int64 {
@@ -676,4 +697,78 @@ func (s *Agent) Penalties(ctx context.Context, p PenaltiesParams) (*PenaltiesRes
 		})
 	}
 	return &PenaltiesResult{Rows: out, Total: total, Page: p.Page, Limit: p.Limit}, nil
+}
+
+// Registrations returns all cross-chain registrations of the same agent identity.
+func (s *Agent) Registrations(ctx context.Context, chainID int64, agentID string) (*dto.AgentRegistrationList, error) {
+	base, err := s.deps.Agents.FindByAgentID(ctx, chainID, agentID)
+	if err != nil {
+		if errors.Is(err, mongodrv.ErrNoDocuments) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, fmt.Errorf("registrations find base: %w", err)
+	}
+
+	var candidates []agentrepo.AgentDocument
+	var matchedBy string
+
+	switch {
+	case base.AgentWallet != "":
+		wallet := utils.NormalizeAddress(base.AgentWallet)
+		candidates, err = s.deps.Agents.FindByAgentWallet(ctx, wallet)
+		if err != nil {
+			return nil, fmt.Errorf("registrations find by wallet: %w", err)
+		}
+		matchedBy = "agentWallet"
+	case base.Owner != "":
+		owner := utils.NormalizeAddress(base.Owner)
+		all, ferr := s.deps.Agents.FindByOwner(ctx, owner)
+		if ferr != nil {
+			return nil, fmt.Errorf("registrations find by owner: %w", ferr)
+		}
+		baseHash := identity.ContentHash(base)
+		for _, c := range all {
+			cc := c // capture
+			if identity.ContentHash(&cc) == baseHash {
+				candidates = append(candidates, cc)
+			}
+		}
+		matchedBy = "owner+contentHash"
+	default:
+		candidates = []agentrepo.AgentDocument{*base}
+		matchedBy = "self"
+	}
+
+	// Sort: current (chainID, agentID) first; rest ascending by chainId.
+	sort.Slice(candidates, func(i, j int) bool {
+		ci, cj := candidates[i], candidates[j]
+		iCurrent := ci.ChainID == chainID && ci.AgentID == agentID
+		jCurrent := cj.ChainID == chainID && cj.AgentID == agentID
+		if iCurrent != jCurrent {
+			return iCurrent
+		}
+		return ci.ChainID < cj.ChainID
+	})
+
+	regs := make([]dto.AgentRegistration, 0, len(candidates))
+	for _, c := range candidates {
+		regs = append(regs, dto.AgentRegistration{
+			ChainID:   c.ChainID,
+			AgentID:   c.AgentID,
+			Name:      c.Name,
+			Active:    c.Active,
+			IsCurrent: c.ChainID == chainID && c.AgentID == agentID,
+		})
+	}
+
+	agentWallet := ""
+	if matchedBy == "agentWallet" {
+		agentWallet = utils.NormalizeAddress(base.AgentWallet)
+	}
+
+	return &dto.AgentRegistrationList{
+		AgentWallet:   agentWallet,
+		MatchedBy:     matchedBy,
+		Registrations: regs,
+	}, nil
 }
