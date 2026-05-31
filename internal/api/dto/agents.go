@@ -181,19 +181,22 @@ type AgentOverview struct {
 	OffchainMetadata map[string]any                  `json:"offchainMetadata,omitempty"`
 }
 
-// ReputationScorePoint is one entry in /agents/:id/reputation-score-history.
-// type="event" marks the raw reputation right after a feedback was applied (incl. penalty when vi<0.40).
+// TrustScorePoint is one entry in /agents/:id/trust-score-history.
+// Score is the composite trust score in [0, 100] at that point in time: the reputation
+// component varies (replayed from feedback_history), while services/publisher/compliance
+// are held at their current values (frozen S/P/C approximation, same as the delta logic).
+// type="event" marks the value right after a feedback was applied (incl. penalty when vi<0.40).
 // type="decay" marks a midnight UTC sample between events, plus a final "now" sample.
-type ReputationScorePoint struct {
+type TrustScorePoint struct {
 	Timestamp string  `json:"timestamp"` // RFC3339 UTC
-	Score     float64 `json:"score"`
-	Type      string  `json:"type"` // "event" | "decay"
+	Score     float64 `json:"score"`     // composite trust score [0, 100]
+	Type      string  `json:"type"`      // "event" | "decay"
 	TxHash    string  `json:"txHash,omitempty"`
 }
 
-// ReputationScoreHistoryResult wraps the reputation timeline response.
-type ReputationScoreHistoryResult struct {
-	Points []ReputationScorePoint `json:"points"`
+// TrustScoreHistoryResult wraps the trust-score timeline response.
+type TrustScoreHistoryResult struct {
+	Points []TrustScorePoint `json:"points"`
 }
 
 // FeedbackRow is one item in /agents/:id/feedbacks (§3.3).
@@ -301,4 +304,25 @@ type ProofResponse struct {
 	Args         map[string]any `json:"args,omitempty"`
 	FeedbackURI  string         `json:"feedbackURI,omitempty"`
 	ResponseURIs []string       `json:"responseURIs,omitempty"`
+}
+
+// AgentRegistration is one row in the cross-chain registrations list returned by
+// GET /agents/:chainId/:agentId/registrations.
+type AgentRegistration struct {
+	ChainID   int64  `json:"chainId"`
+	AgentID   string `json:"agentId"`
+	Name      string `json:"name,omitempty"`
+	Active    bool   `json:"active"`
+	IsCurrent bool   `json:"isCurrent"`
+}
+
+// AgentRegistrationList is the response payload for
+// GET /agents/:chainId/:agentId/registrations. MatchedBy values:
+//   - "agentWallet"        : grouped by a non-empty agentWallet
+//   - "owner+contentHash"  : grouped by owner with identical identity content hash
+//   - "self"               : agentWallet and owner both empty; only the requested registration is returned
+type AgentRegistrationList struct {
+	AgentWallet   string              `json:"agentWallet,omitempty"`
+	MatchedBy     string              `json:"matchedBy"`
+	Registrations []AgentRegistration `json:"registrations"`
 }
