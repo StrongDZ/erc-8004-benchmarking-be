@@ -168,6 +168,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/radar", c60s(http.HandlerFunc(agH.Radar)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/proof/{txHash}", agH.Proof)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/anti-spam", agH.AntiSpam)
+	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/registrations", c30s(http.HandlerFunc(agH.Registrations)))
 
 	// /api/v1/oasf/*
 	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))

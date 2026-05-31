@@ -369,9 +369,10 @@ func (h *AgentHandler) OffchainByURI(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, out)
 }
 
-// ReputationScoreHistory handles GET /agents/:chainId/:agentId/reputation-score-history.
-// Returns the agent's reputation timeline derived from feedback_history (event + daily decay points).
-// @Summary Reputation score history
+// TrustScoreHistory handles GET /agents/:chainId/:agentId/trust-score-history.
+// Returns the agent's composite trust-score timeline derived from feedback_history
+// (event + daily decay points), with services/publisher/compliance held at current values.
+// @Summary Trust score history
 // @Tags agents
 // @Produce json
 // @Param chainId path int true "Chain ID"
@@ -380,13 +381,38 @@ func (h *AgentHandler) OffchainByURI(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} dto.Response
 // @Failure 404 {object} dto.Response
 // @Failure 500 {object} dto.Response
-// @Router /agents/{chainId}/{agentId}/reputation-score-history [get]
-func (h *AgentHandler) ReputationScoreHistory(w http.ResponseWriter, r *http.Request) {
+// @Router /agents/{chainId}/{agentId}/trust-score-history [get]
+func (h *AgentHandler) TrustScoreHistory(w http.ResponseWriter, r *http.Request) {
 	chainID, agentID, ok := h.parseAgentPath(w, r)
 	if !ok {
 		return
 	}
-	out, err := h.svc.ReputationScoreHistory(r.Context(), chainID, agentID)
+	out, err := h.svc.TrustScoreHistory(r.Context(), chainID, agentID)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
+}
+
+// Registrations handles GET /agents/:chainId/:agentId/registrations.
+// Returns all chain registrations sharing the same agent identity (by agentWallet or owner+contentHash).
+// @Summary Cross-chain agent registrations
+// @Tags agents
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/registrations [get]
+func (h *AgentHandler) Registrations(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+	out, err := h.svc.Registrations(r.Context(), chainID, agentID)
 	if err != nil {
 		writeServiceErr(w, r, err)
 		return
