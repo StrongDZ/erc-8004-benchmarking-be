@@ -124,6 +124,20 @@ func (a *App) runCycle(ctx context.Context) {
 			log.Printf("score-refresh: bulk upsert stats: %v", err)
 		}
 
+		// Sync compositeScore + totalTasks to agents collection so leaderboard sorts work
+		// without a join to agent_score_stats.
+		scoreUpdates := make([]agentrepo.ScoreUpdate, 0, len(statsBatch))
+		for _, s := range statsBatch {
+			scoreUpdates = append(scoreUpdates, agentrepo.ScoreUpdate{
+				ID:             agentrepo.AgentDocumentID(s.ChainID, s.AgentID),
+				CompositeScore: s.CompositeScore,
+				TotalTasks:     s.TotalTasks,
+			})
+		}
+		if err := a.agents.BulkUpdateScores(ctx, scoreUpdates); err != nil {
+			log.Printf("score-refresh: bulk update scores: %v", err)
+		}
+
 		total += len(agents)
 		skip += int64(len(agents))
 		if len(agents) < batchSize {

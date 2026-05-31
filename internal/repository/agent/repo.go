@@ -86,6 +86,15 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "owner", Value: 1}},
 			Options: options.Index().SetName("idx_owner"),
 		},
+		// Leaderboard sort indexes (denormalized from agent_score_stats).
+		{
+			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "compositeScore", Value: -1}},
+			Options: options.Index().SetName("idx_chain_composite_score"),
+		},
+		{
+			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "totalTasks", Value: -1}},
+			Options: options.Index().SetName("idx_chain_total_tasks"),
+		},
 		// Sparse index on agentWallet to support cross-chain identity grouping
 		// (GET /agents/:chainId/:agentId/registrations). Sparse because most
 		// agents have an empty agentWallet field.
@@ -273,6 +282,35 @@ func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedS
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	return err
+}
+
+// ScoreUpdate carries the scoring fields synced from agent_score_stats each cycle.
+type ScoreUpdate struct {
+	ID             string
+	CompositeScore float64
+	TotalTasks     int64
+}
+
+// BulkUpdateScores writes compositeScore + totalTasks to agents in bulk.
+// Called by the score-refresh worker after it upserts agent_score_stats.
+func (r *Repository) BulkUpdateScores(ctx context.Context, updates []ScoreUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	ops := make([]mongodrv.WriteModel, 0, len(updates))
+	for _, u := range updates {
+		ops = append(ops, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": u.ID}).
+			SetUpdate(bson.M{"$set": bson.M{
+				"compositeScore": u.CompositeScore,
+				"totalTasks":     u.TotalTasks,
+			}}))
+	}
+	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
+	if err != nil {
+		return fmt.Errorf("agent repo: bulk update scores: %w", err)
+	}
+	return nil
 }
 
 // FindByAgentWallet returns all agents whose agentWallet equals the (already-normalized)

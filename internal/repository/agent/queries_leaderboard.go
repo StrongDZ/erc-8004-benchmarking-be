@@ -6,12 +6,26 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// leaderboardSortDoc maps a LeaderboardSort to a Mongo sort document.
+// compositeScore and totalTasks are denormalized on AgentDocument so no join is needed.
+func leaderboardSortDoc(s LeaderboardSort) bson.D {
+	switch s {
+	case SortScoreAsc:
+		return bson.D{{Key: "compositeScore", Value: 1}}
+	case SortTasksDesc:
+		return bson.D{{Key: "totalTasks", Value: -1}}
+	case SortRecent:
+		return bson.D{{Key: "createdAt", Value: -1}}
+	default: // SortScoreDesc
+		return bson.D{{Key: "compositeScore", Value: -1}}
+	}
+}
 
 // LeaderboardFilter expresses the server-side filterable attributes of /leaderboard.
 // Score-based ("minScore") filters are applied in the handler after lazy decay because
@@ -43,14 +57,9 @@ const (
 )
 
 // FindLeaderboard returns a filtered, sorted, paginated slice of agents + total count.
+// compositeScore and totalTasks are denormalized on AgentDocument so all sorting is
+// done directly on the agents collection — no join to agent_score_stats needed.
 // `limit` is capped by the caller; this function does not clamp.
-//
-// For score-based sorts (SortScoreDesc / SortScoreAsc) the method performs a two-phase query:
-//
-//	Phase 1: query agent_score_stats sorted by compositeScore (or totalTasks) → get ordered agentIDs.
-//	Phase 2: bulk-fetch agent docs by agentID ∈ list, preserve stats-side order.
-//
-// For SortRecent the sort is on the agent document's createdAt field (no stats needed).
 func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, sortOrder LeaderboardSort, skip, limit int64) ([]AgentDocument, int64, error) {
 	query := buildLeaderboardQuery(f)
 
@@ -59,122 +68,12 @@ func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, s
 		return nil, 0, fmt.Errorf("agent repo: leaderboard count: %w", err)
 	}
 
-	switch sortOrder {
-	case SortRecent:
-		opts := options.Find().
-			SetSort(bson.D{{Key: "createdAt", Value: -1}}).
-			SetSkip(skip).SetLimit(limit)
-		docs, err := r.Find(ctx, query, opts)
-		if err != nil {
-			return nil, 0, fmt.Errorf("agent repo: leaderboard find: %w", err)
-		}
-		return docs, total, nil
-
-	default:
-		// Score / tasks sorts: delegate ordering to agent_score_stats.
-		//
-		// IMPORTANT: When a free-text query is active, the stats collection only knows
-		// chainId — it has no name/description/oasfSkills fields to filter against.
-		// Running Phase-1 on stats would return the full sorted list ignoring the text
-		// filter, then Phase-2 would blindly fetch those unfiltered agents, producing
-		// correct totals (0) but wrong rows (all agents shown).
-		// To avoid this inconsistency, fall back to a direct agent-collection sort
-		// whenever a text query is present. The reputationScore field is a close proxy
-		// for compositeScore and keeps the result set ordered correctly.
-		if strings.TrimSpace(f.Query) != "" || r.StatsColl == nil {
-			// Text-search path (or no stats collection): sort directly in agent collection.
-			var agentSortDoc bson.D
-			switch sortOrder {
-			case SortScoreAsc:
-				agentSortDoc = bson.D{{Key: "reputationScore", Value: 1}}
-			case SortTasksDesc:
-				agentSortDoc = bson.D{{Key: "totalTasks", Value: -1}}
-			default: // SortScoreDesc
-				agentSortDoc = bson.D{{Key: "reputationScore", Value: -1}}
-			}
-			opts := options.Find().SetSort(agentSortDoc).SetSkip(skip).SetLimit(limit)
-			docs, err := r.Find(ctx, query, opts)
-			if err != nil {
-				return nil, 0, fmt.Errorf("agent repo: leaderboard find (text query): %w", err)
-			}
-			return docs, total, nil
-		}
-
-		var statsSortDoc bson.D
-		switch sortOrder {
-		case SortScoreAsc:
-			statsSortDoc = bson.D{{Key: "compositeScore", Value: 1}}
-		case SortTasksDesc:
-			statsSortDoc = bson.D{{Key: "totalTasks", Value: -1}}
-		default: // SortScoreDesc
-			statsSortDoc = bson.D{{Key: "compositeScore", Value: -1}}
-		}
-
-		// Build stats-side chain filter from the agent query.
-		statsFilter := bson.M{}
-		if v, ok := query["chainId"]; ok {
-			statsFilter["chainId"] = v
-		}
-
-		statsOpts := options.Find().
-			SetSort(statsSortDoc).
-			SetSkip(skip).
-			SetLimit(limit).
-			SetProjection(bson.M{"chainId": 1, "agentId": 1})
-		cur, err := r.StatsColl.Find(ctx, statsFilter, statsOpts)
-		if err != nil {
-			return nil, 0, fmt.Errorf("agent repo: leaderboard stats sort: %w", err)
-		}
-		defer cur.Close(ctx)
-
-		type statsRow struct {
-			ChainID int64  `bson:"chainId"`
-			AgentID string `bson:"agentId"`
-		}
-		var rows []statsRow
-		if err := cur.All(ctx, &rows); err != nil {
-			return nil, 0, fmt.Errorf("agent repo: leaderboard stats decode: %w", err)
-		}
-		if len(rows) == 0 {
-			return nil, total, nil
-		}
-
-		// Phase 2: bulk-fetch agents by (chainId, agentId) pairs so multi-chain rows survive.
-		pairs := make(bson.A, 0, len(rows))
-		posMap := make(map[string]int, len(rows))
-		for i, row := range rows {
-			pairs = append(pairs, bson.M{"chainId": row.ChainID, "agentId": row.AgentID})
-			posMap[orderKey(row.ChainID, row.AgentID)] = i
-		}
-
-		agentDocs, err := r.Find(ctx, bson.M{"$or": pairs})
-		if err != nil {
-			return nil, 0, fmt.Errorf("agent repo: leaderboard agent fetch: %w", err)
-		}
-
-		// Restore stats-side order; key by (chainId, agentId) so agents with the same
-		// agentId on different chains aren't collapsed.
-		ordered := make([]AgentDocument, len(rows))
-		for _, d := range agentDocs {
-			if pos, ok := posMap[orderKey(d.ChainID, d.AgentID)]; ok {
-				ordered[pos] = d
-			}
-		}
-		// Compact out zero-value slots (agents missing from collection).
-		out := ordered[:0]
-		for _, d := range ordered {
-			if d.AgentID != "" {
-				out = append(out, d)
-			}
-		}
-		return out, total, nil
+	opts := options.Find().SetSort(leaderboardSortDoc(sortOrder)).SetSkip(skip).SetLimit(limit)
+	docs, err := r.Find(ctx, query, opts)
+	if err != nil {
+		return nil, 0, fmt.Errorf("agent repo: leaderboard find: %w", err)
 	}
-}
-
-// orderKey produces a stable map key for (chainId, agentId) pairs used during
-// score-sort phase-2 ordering.
-func orderKey(chainID int64, agentID string) string {
-	return strconv.FormatInt(chainID, 10) + ":" + agentID
+	return docs, total, nil
 }
 
 func buildLeaderboardQuery(f LeaderboardFilter) bson.M {
