@@ -54,7 +54,7 @@ type FeedbackSnapshot struct {
 	ClientAddress        string  `bson:"clientAddress"`
 	FeedbackIndex        uint64  `bson:"feedbackIndex"`
 	PriceUSDC            float64 `bson:"priceUSDC"`
-	ValueNormalized      float64 `bson:"valueNormalized"`        // vi ∈ [0,1] computed via classifier.NormalizeValueWithScale
+	ValueNormalized      float64 `bson:"valueNormalized"`        // vi ∈ [-1,1] computed via classifier.NormalizeValueWithScale
 	ValueScale           string  `bson:"valueScale,omitempty"`
 	Wi                   float64 `bson:"wi"`                     // copied from source for cross-check
 	ClassifierConfidence float64 `bson:"classifierConfidence"`
