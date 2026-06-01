@@ -11,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 )
@@ -202,22 +203,50 @@ func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 	out := make([]FeedbackSnapshot, 0, len(fbs))
 	for _, fb := range fbs {
 		out = append(out, FeedbackSnapshot{
-			ID:             fb.ID,
-			AgentID:        fb.AgentID,
-			ChainID:        fb.ChainID,
-			ClientAddress:  fb.ClientAddress,
-			FeedbackIndex:  fb.FeedbackIndex,
-			PriceUSDC:      fb.PriceUSDC,
-			Wi:             fb.Wi,
-			ValueScale:     fb.ValueScale,
-			Timestamp:      fb.Timestamp,
-			IsRevoked:      fb.IsRevoked,
-			IsSelfFeedback: fb.IsSelfFeedback,
-			Category:       fb.Classification.Rule.Category,
-			// Default zero values for quality signals — populated by Plan-C if needed.
+			ID:                   fb.ID,
+			AgentID:              fb.AgentID,
+			ChainID:              fb.ChainID,
+			ClientAddress:        fb.ClientAddress,
+			FeedbackIndex:        fb.FeedbackIndex,
+			PriceUSDC:            fb.PriceUSDC,
+			Wi:                   fb.Wi,
+			ValueScale:           fb.ValueScale,
+			ValueNormalized:      normalizeValue(fb),
+			ClassifierConfidence: classifierConfidence(fb),
+			Timestamp:            fb.Timestamp,
+			IsRevoked:            fb.IsRevoked,
+			IsSelfFeedback:       fb.IsSelfFeedback,
+			Category:             fb.Classification.Rule.Category,
+			// Remaining quality signals (reasoningLen, attachmentCount, …) are
+			// populated by Plan-C; Plan-A only needs ValueNormalized + confidence.
 		})
 	}
 	return out
+}
+
+// normalizeValue replays production value normalization (classifier.RawValueToReal
+// → NormalizeValueWithScale) to recover vi ∈ [-1,1] for the snapshot. Falls back to
+// AssignTier when the stored valueScale is empty.
+func normalizeValue(fb feedback.FeedbackRecord) float64 {
+	real, ok := classifier.RawValueToReal(fb.Value, int(fb.ValueDecimals))
+	if !ok {
+		return 0.0
+	}
+	scale := fb.ValueScale
+	if scale == "" {
+		scale = classifier.AssignTier(real)
+	}
+	return classifier.NormalizeValueWithScale(real, scale)
+}
+
+// classifierConfidence returns the LLM fallback confidence when the fallback ran,
+// otherwise 1.0 (the rule engine was certain). Matches how downstream scoring
+// treats rule-only classifications.
+func classifierConfidence(fb feedback.FeedbackRecord) float64 {
+	if fb.Classification.Fallback != nil && fb.Classification.Fallback.Confidence > 0 {
+		return fb.Classification.Fallback.Confidence
+	}
+	return 1.0
 }
 
 // buildEdges groups feedbacks by (client → agent owner) and computes initial wᵢ
