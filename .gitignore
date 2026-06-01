@@ -34,6 +34,13 @@ vendor/
 *.sw?
 
 scripts/*
+# Sensitivity-analysis Python deliverables are version-controlled (thesis artifacts),
+# but their generated CSV output and local venv are not.
+!scripts/sensitivity/
+scripts/sensitivity/output/
+scripts/sensitivity/.venv/
+scripts/sensitivity/**/figures/
+scripts/sensitivity/**/__pycache__/
 
 **/*_test.go
 
