@@ -3,6 +3,7 @@ package metrics
 // rank.go — Rank stability metrics: Spearman ρ, Kendall τ, Top-K churn.
 
 import (
+	"math"
 	"sort"
 )
 
@@ -121,23 +122,11 @@ func pearson(x, y []float64) float64 {
 		sxy += x[i] * y[i]
 	}
 	num := n*sxy - sx*sy
-	den := sqrt((n*sxx - sx*sx) * (n*syy - sy*sy))
+	den := math.Sqrt((n*sxx - sx*sx) * (n*syy - sy*sy))
 	if den == 0 {
 		return 0
 	}
 	return num / den
-}
-
-func sqrt(v float64) float64 {
-	if v <= 0 {
-		return 0
-	}
-	// Newton's iteration — avoids importing math from a hot path test.
-	x := v
-	for i := 0; i < 20; i++ {
-		x = 0.5 * (x + v/x)
-	}
-	return x
 }
 
 func topK(m map[string]float64, k int) []string {
