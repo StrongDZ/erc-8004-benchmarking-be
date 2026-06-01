@@ -66,8 +66,7 @@ func runSnapshot(args []string) {
 	}
 }
 
-// runBench is a stub — Plan-A will replace this with the real dispatcher.
+// runBench dispatches the parameter sensitivity bench (see bench.go).
 func runBench(args []string) {
-	fmt.Fprintln(os.Stderr, "bench: not implemented yet (will arrive in Plan-A)")
-	os.Exit(2)
+	benchDispatch(args)
 }
