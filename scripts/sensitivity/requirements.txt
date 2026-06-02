@@ -4,3 +4,4 @@ seaborn>=0.13
 scipy>=1.11
 numpy>=1.26
 jupyter>=1.0
+mpltern>=1.0
