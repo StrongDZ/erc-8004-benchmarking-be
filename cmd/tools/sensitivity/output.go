@@ -140,6 +140,46 @@ func writeGridCSV(path string, results []runner.RunResult, paramOrder []string, 
 	return nil
 }
 
+// writeSimplexCSV writes one row per Dirichlet sample with the 4 sampled weights
+// plus rank-stability + distribution metrics versus the baseline (default-weight)
+// composite scores.
+func writeSimplexCSV(path string, results []runner.RunResult, baseline map[string]float64) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	defer w.Flush()
+	if err := w.Write([]string{
+		"sample_id", "w_reputation", "w_services", "w_publisher", "w_compliance",
+		"spearman", "kendall", "mean", "std",
+	}); err != nil {
+		return err
+	}
+	for i, r := range results {
+		desc := metrics.Describe(mapValuesToSlice(r.Scores))
+		row := []string{
+			strconv.Itoa(i),
+			ftoa(r.Config["WReputation"]),
+			ftoa(r.Config["WServices"]),
+			ftoa(r.Config["WPublisher"]),
+			ftoa(r.Config["WCompliance"]),
+			ftoa(metrics.Spearman(baseline, r.Scores)),
+			ftoa(metrics.Kendall(baseline, r.Scores)),
+			ftoa(desc.Mean),
+			ftoa(desc.Std),
+		}
+		if err := w.Write(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // writeManifest writes a JSON manifest.json with run metadata.
 // readBuildVCS() is defined in snapshot_create.go (same package).
 func writeManifest(outDir, snapshotID, cluster, method string, seed int64, config map[string]any) error {

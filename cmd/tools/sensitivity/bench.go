@@ -26,12 +26,14 @@ func meanScalar(s map[string]float64) float64 {
 func benchDispatch(args []string) {
 	fs := flag.NewFlagSet("bench", flag.ExitOnError)
 	cluster := fs.String("cluster", "", "A | B | C | D (required)")
-	method := fs.String("method", "", "oat | tornado | sobol | grid (required)")
+	method := fs.String("method", "", "oat | tornado | sobol | grid | simplex (required)")
 	snapshotID := fs.String("snapshot", "", "snapshot ID from `snapshot list` (required)")
 	oatPoints := fs.Int("oat-points", 11, "[oat] points per param")
 	sobolN := fs.Int("sobol-n", 1024, "[sobol] base sample count")
 	sobolSeed := fs.Int64("sobol-seed", 42, "[sobol] RNG seed")
 	gridLevels := fs.Int("grid-levels", 5, "[grid] levels per top-3 param")
+	simplexN := fs.Int("simplex-n", 200, "[simplex] Dirichlet sample count (cluster B only)")
+	simplexSeed := fs.Int64("simplex-seed", 42, "[simplex] RNG seed (cluster B only)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -68,7 +70,11 @@ func benchDispatch(args []string) {
 	if err != nil {
 		log.Fatalf("read edges: %v", err)
 	}
-	data := snapshot.SnapshotData{Agents: agents, Feedbacks: feedbacks, Edges: edges}
+	baselineScores, err := r.ListBaseline(ctx)
+	if err != nil {
+		log.Fatalf("read baseline: %v", err)
+	}
+	data := snapshot.SnapshotData{Agents: agents, Feedbacks: feedbacks, Edges: edges, Baseline: baselineScores}
 	nowUnix := time.Now().Unix()
 
 	// Resolve cluster pipeline.
@@ -81,6 +87,9 @@ func benchDispatch(args []string) {
 	case "A":
 		specs = pipeline.ClusterAParamSpecs()
 		recompute = pipeline.ClusterARecompute(data, nowUnix)
+	case "B":
+		specs = pipeline.ClusterBParamSpecs()
+		recompute = pipeline.ClusterBRecompute(data)
 	default:
 		log.Fatalf("cluster %s pipeline not implemented yet — see Plan-%s", cl, cl)
 	}
@@ -157,7 +166,19 @@ func benchDispatch(args []string) {
 			map[string]any{"gridLevels": *gridLevels, "topParams": topOrder})
 		fmt.Printf("Grid: %d combos on %v → %s/grid.csv\n", len(results), topOrder, outDir)
 
+	case "simplex":
+		if cl != "B" {
+			log.Fatalf("--method=simplex only valid for cluster B")
+		}
+		results := pipeline.ClusterBSimplexRunner(data, *simplexN, *simplexSeed)
+		if err := writeSimplexCSV(filepath.Join(outDir, "simplex.csv"), results, baseline); err != nil {
+			log.Fatalf("write simplex csv: %v", err)
+		}
+		_ = writeManifest(outDir, *snapshotID, cl, "simplex", *simplexSeed,
+			map[string]any{"simplexN": *simplexN})
+		fmt.Printf("Simplex: %d samples → %s/simplex.csv\n", len(results), outDir)
+
 	default:
-		log.Fatalf("invalid --method=%s (want oat|tornado|sobol|grid)", *method)
+		log.Fatalf("invalid --method=%s (want oat|tornado|sobol|grid|simplex)", *method)
 	}
 }
