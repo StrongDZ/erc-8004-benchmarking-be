@@ -202,6 +202,8 @@ func filterFeedbacksByAgent(fbs []feedback.FeedbackRecord, keep map[string]struc
 func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 	out := make([]FeedbackSnapshot, 0, len(fbs))
 	for _, fb := range fbs {
+		// Quality signals for Cụm C (reasoningLen, attachmentCount, breakdown, proof).
+		rl, ac, bk, pp := ExtractQualitySignals(fb.FeedbackParsed)
 		out = append(out, FeedbackSnapshot{
 			ID:                   fb.ID,
 			AgentID:              fb.AgentID,
@@ -217,8 +219,10 @@ func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 			IsRevoked:            fb.IsRevoked,
 			IsSelfFeedback:       fb.IsSelfFeedback,
 			Category:             fb.Classification.Rule.Category,
-			// Remaining quality signals (reasoningLen, attachmentCount, …) are
-			// populated by Plan-C; Plan-A only needs ValueNormalized + confidence.
+			ReasoningLen:         rl,
+			AttachmentCount:      ac,
+			HasRatingBreakdown:   bk,
+			HasProofOfPayment:    pp,
 		})
 	}
 	return out
