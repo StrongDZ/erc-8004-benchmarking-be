@@ -8,7 +8,7 @@ hand-editing JSON. Safe to delete after the .ipynb is committed.
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
-SNAP_ID = "snap_20260601_151306"
+SNAP_ID = "snap_20260603_014800"
 
 cells = []
 
@@ -18,9 +18,11 @@ cells.append(nbf.v4.new_markdown_cell(
     "LowConfMultiplier, ServiceBonusContent, ServiceBonusProof.\n\n"
     "Output từ `sensitivity bench --cluster=A`. Đổi `SNAP_ID` ở cell dưới nếu chạy "
     "trên snapshot khác.\n\n"
-    "> **Lưu ý dữ liệu:** Bonus/LowConf params chỉ có hiệu lực khi snapshot đã được "
-    "populate quality signals (Plan-C) và có feedback confidence < ngưỡng; trên "
-    "snapshot baseline hiện tại chúng cho ảnh hưởng ≈ 0."
+    "> **Lưu ý dữ liệu:** Snapshot này đã populate quality signals. "
+    "`ServiceBonusContent` giờ có hiệu lực (nhỏ) vì reasoningLen/breakdown đã có; "
+    "còn `ServiceBonusProof` ≈ 0 (dữ liệu không có proof-of-payment) và "
+    "`LowConfThreshold`/`LowConfMultiplier` ≈ 0 (confidence = 1.0 cho mọi "
+    "service_feedback rule-classified)."
 ))
 
 cells.append(nbf.v4.new_code_cell(
