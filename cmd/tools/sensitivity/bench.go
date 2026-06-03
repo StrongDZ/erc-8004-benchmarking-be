@@ -90,6 +90,9 @@ func benchDispatch(args []string) {
 	case "B":
 		specs = pipeline.ClusterBParamSpecs()
 		recompute = pipeline.ClusterBRecompute(data)
+	case "C":
+		specs = pipeline.ClusterCParamSpecs()
+		recompute = pipeline.ClusterCRecompute(data)
 	default:
 		log.Fatalf("cluster %s pipeline not implemented yet — see Plan-%s", cl, cl)
 	}
