@@ -13,13 +13,13 @@ import (
 )
 
 // leaderboardSortDoc maps a LeaderboardSort to a Mongo sort document.
-// compositeScore and totalTasks are denormalized on AgentDocument so no join is needed.
+// compositeScore, totalTasks, and totalFeedbacks are denormalized on AgentDocument so no join is needed.
 func leaderboardSortDoc(s LeaderboardSort) bson.D {
 	switch s {
 	case SortScoreAsc:
 		return bson.D{{Key: "compositeScore", Value: 1}}
 	case SortTasksDesc:
-		return bson.D{{Key: "totalTasks", Value: -1}}
+		return bson.D{{Key: "totalFeedbacks", Value: -1}}
 	case SortRecent:
 		return bson.D{{Key: "createdAt", Value: -1}}
 	default: // SortScoreDesc
@@ -57,7 +57,7 @@ const (
 )
 
 // FindLeaderboard returns a filtered, sorted, paginated slice of agents + total count.
-// compositeScore and totalTasks are denormalized on AgentDocument so all sorting is
+// compositeScore, totalTasks, and totalFeedbacks are denormalized on AgentDocument so all sorting is
 // done directly on the agents collection — no join to agent_score_stats needed.
 // `limit` is capped by the caller; this function does not clamp.
 func (r *Repository) FindLeaderboard(ctx context.Context, f LeaderboardFilter, sortOrder LeaderboardSort, skip, limit int64) ([]AgentDocument, int64, error) {

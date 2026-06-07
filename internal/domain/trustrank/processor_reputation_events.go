@@ -125,6 +125,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		},
 	}
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
+	agentDoc.TotalFeedbacks++
+	bs.dirtyAgents[agentID] = true
 
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	bs.fbMap[fbID] = &fbRecord

@@ -83,7 +83,8 @@ type AgentDocument struct {
 	// Denormalized from agent_score_stats by score-refresh worker each cycle.
 	// Kept here so leaderboard queries can sort/filter without a $lookup join.
 	CompositeScore float64 `bson:"compositeScore,omitempty"`
-	TotalTasks     int64   `bson:"totalTasks,omitempty"`
+	TotalTasks     int64   `bson:"totalTasks,omitempty"`     // service_feedback count used in scoring
+	TotalFeedbacks int64   `bson:"totalFeedbacks,omitempty"` // all feedback categories (any classification)
 }
 
 // Repository wraps the agents collection.

@@ -95,6 +95,10 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "totalTasks", Value: -1}},
 			Options: options.Index().SetName("idx_chain_total_tasks"),
 		},
+		{
+			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "totalFeedbacks", Value: -1}},
+			Options: options.Index().SetName("idx_chain_total_feedbacks"),
+		},
 		// Sparse index on agentWallet to support cross-chain identity grouping
 		// (GET /agents/:chainId/:agentId/registrations). Sparse because most
 		// agents have an empty agentWallet field.
@@ -289,9 +293,10 @@ type ScoreUpdate struct {
 	ID             string
 	CompositeScore float64
 	TotalTasks     int64
+	TotalFeedbacks int64
 }
 
-// BulkUpdateScores writes compositeScore + totalTasks to agents in bulk.
+// BulkUpdateScores writes compositeScore + totalTasks + totalFeedbacks to agents in bulk.
 // Called by the score-refresh worker after it upserts agent_score_stats.
 func (r *Repository) BulkUpdateScores(ctx context.Context, updates []ScoreUpdate) error {
 	if len(updates) == 0 {
@@ -304,6 +309,7 @@ func (r *Repository) BulkUpdateScores(ctx context.Context, updates []ScoreUpdate
 			SetUpdate(bson.M{"$set": bson.M{
 				"compositeScore": u.CompositeScore,
 				"totalTasks":     u.TotalTasks,
+				"totalFeedbacks": u.TotalFeedbacks,
 			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))

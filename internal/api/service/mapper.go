@@ -84,6 +84,7 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 		ScoreUpdateAt:    s.ScoreUpdateAt,
 		ConsecutiveFails: s.ConsecutiveFails,
 		TotalTasks:       s.TotalTasks,
+		TotalFeedbacks:   feedbackTotal(d.TotalFeedbacks, nil),
 		TotalPassed:      s.TotalPassed,
 		TotalFailed:      s.TotalFailed,
 		SuccessRate:      safeRate(s.TotalPassed, s.TotalTasks),
@@ -135,6 +136,7 @@ func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, d
 			ConsecutiveFails:  s.ConsecutiveFails,
 			Penalty:           round2(penalty),
 			TotalTasks:        s.TotalTasks,
+			TotalFeedbacks:    feedbackTotal(d.TotalFeedbacks, dist),
 			TotalPassed:       s.TotalPassed,
 			TotalFailed:       s.TotalFailed,
 			SuccessRate:       safeRate(s.TotalPassed, s.TotalTasks),
@@ -225,6 +227,19 @@ func safeRate(num, den int64) float64 {
 		return 0
 	}
 	return round4(float64(num) / float64(den))
+}
+
+// feedbackTotal prefers the denormalized agents.totalFeedbacks; falls back to summing
+// class distribution for agents not yet backfilled by score-refresh.
+func feedbackTotal(denorm int64, dist map[string]int64) int64 {
+	if denorm > 0 {
+		return denorm
+	}
+	var sum int64
+	for _, v := range dist {
+		sum += v
+	}
+	return sum
 }
 
 func round2(v float64) float64 {

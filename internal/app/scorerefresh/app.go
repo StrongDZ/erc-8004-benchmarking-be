@@ -104,6 +104,7 @@ func (a *App) runCycle(ctx context.Context) {
 		}
 
 		statsBatch := make([]scorestats.AgentScoreStats, 0, len(agents))
+		fbCounts := make([]int64, 0, len(agents))
 		for i := range agents {
 			ag := &agents[i]
 			fbs, err := a.feedbacks.ListByAgent(ctx, ag.ChainID, ag.AgentID)
@@ -117,6 +118,7 @@ func (a *App) runCycle(ctx context.Context) {
 				a.publisherProvider, a.compositeWeights, a.complianceWeights,
 			)
 			statsBatch = append(statsBatch, stats)
+			fbCounts = append(fbCounts, int64(len(fbs)))
 		}
 
 		// BulkUpsert is the single write — agent_score_stats is the source of truth for scoring.
@@ -124,14 +126,19 @@ func (a *App) runCycle(ctx context.Context) {
 			log.Printf("score-refresh: bulk upsert stats: %v", err)
 		}
 
-		// Sync compositeScore + totalTasks to agents collection so leaderboard sorts work
-		// without a join to agent_score_stats.
+		// Sync compositeScore + totalTasks + totalFeedbacks to agents collection so leaderboard
+		// queries work without a join to agent_score_stats or feedback_history.
 		scoreUpdates := make([]agentrepo.ScoreUpdate, 0, len(statsBatch))
-		for _, s := range statsBatch {
+		for i, s := range statsBatch {
+			var fbCount int64
+			if i < len(fbCounts) {
+				fbCount = fbCounts[i]
+			}
 			scoreUpdates = append(scoreUpdates, agentrepo.ScoreUpdate{
 				ID:             agentrepo.AgentDocumentID(s.ChainID, s.AgentID),
 				CompositeScore: s.CompositeScore,
 				TotalTasks:     s.TotalTasks,
+				TotalFeedbacks: fbCount,
 			})
 		}
 		if err := a.agents.BulkUpdateScores(ctx, scoreUpdates); err != nil {

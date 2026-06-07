@@ -29,6 +29,7 @@ type AgentRow struct {
 	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
 	ConsecutiveFails int64          `json:"consecutiveFails"`
 	TotalTasks       int64          `json:"totalTasks"`
+	TotalFeedbacks   int64          `json:"totalFeedbacks"`
 	TotalPassed      int64          `json:"totalPassed"`
 	TotalFailed      int64          `json:"totalFailed"`
 	SuccessRate      float64        `json:"successRate"`
@@ -99,6 +100,7 @@ type AgentScoring struct {
 	ConsecutiveFails  int64            `json:"consecutiveFails"`
 	Penalty           float64          `json:"penalty"`
 	TotalTasks        int64            `json:"totalTasks"`
+	TotalFeedbacks    int64            `json:"totalFeedbacks"`
 	TotalPassed       int64            `json:"totalPassed"`
 	TotalFailed       int64            `json:"totalFailed"`
 	SuccessRate       float64          `json:"successRate"`
