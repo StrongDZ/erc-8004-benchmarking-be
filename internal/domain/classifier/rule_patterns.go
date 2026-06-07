@@ -26,7 +26,7 @@ var configTag1Set = map[string]bool{
 	// ERC-8004 spec signals
 	"reachable": true, "liveness": true, "successrate": true,
 	"responsetime": true, "blocktimefreshness": true,
-	"uptime": true, "revenues": true, "tradingyield": true,
+	"uptime": true,
 	// Infra probes
 	"liveness-check": true, "health-check": true, "ping": true,
 	"bulkcheck": true, "trust-oracle": true, "trust": true,
@@ -42,6 +42,8 @@ var configTag1Set = map[string]bool{
 	// (the tag1-first ordering means tag2 fallbacks are only consulted on misses).
 	"trustscore": true, "counterparty": true, "activity": true,
 	"longevity": true, "contractrisk": true,
+	// Automated verification / safety probes (generic infra, not domain-specific)
+	"ownerverified": true, "safety-score": true,
 }
 
 // configTag2Set: tag2 values that indicate config_feedback when tag1 is unrecognized.
@@ -49,46 +51,34 @@ var configTag1Set = map[string]bool{
 var configTag2Set = map[string]bool{
 	"oracle-screening": true, "liveness-check": true,
 	"win-rate": true, "coverage-rate": true, "exit-rate": true,
-	"service_quality": true, "automated-screening": true,
-	"a2a": true, "mcp": true, "web": true,
+	"automated-screening": true,
+	"a2a":                 true, "mcp": true, "web": true,
 	// SentinelNet oracle protocol and versioned trust guard protocols
 	"sentinelnet-v1": true, "trust-v2": true,
 }
 
 // appTag1Set: tag1 values that always mean app_specific.
+// Only entries confirmed app_specific by corpus (binary/unbounded scale) or with no corpus data yet.
 var appTag1Set = map[string]bool{
-	// Soul fragment dimensions
-	"personality": true, "knowledge": true, "timeline": true,
-	"relationship": true, "stance": true, "style": true,
-	// DeFi / token operations
-	"trade": true, "token": true, "swap_token": true, "swap": true,
-	"open_position": true, "open_dca": true, "close_dca": true,
-	"trade_perpetuals": true, "fund_startup": true, "lido": true,
-	"mandate": true, "faucet-drip": true, "token_info": true,
-	"transfer_token": true, "create_onetime_signal": true, "purchase": true,
-	// Agent economy
-	"tip": true, "watchorfight": true, "doppel": true,
-	// Agent lifecycle operations (spawn appears as tag1 in practice)
-	"spawn": true, "tycoon": true,
-	// Utility / payment operations
-	"airtime": true, "gift_card": true, "bill_payment": true,
-	// Task / research operations
-	"task-completion": true, "market-intelligence": true, "research-delivery": true,
-	// (contractrisk moved to configTag1Set: in the live corpus it is paired with
-	// sentinelnet-v1 oracle dimensions, i.e. a generic automated trust metric.)
-	// Creative / generative operations
-	"generateimage": true, "custom_song_creation": true,
-	"image_to_ugc_video_generation": true,
-	"curatenewsfeedbydigitaltwin":   true,
-	"x402-scan":                     true, "token_ai_analysis_trade_suggestion": true,
+	// Binary-scale vouch/faucet and unbounded-value reporters (corpus-confirmed app_specific).
+	"faucet-drip": true, "miner-vouch": true,
+	"revenues": true, "botcoin-skill": true,
+	// No corpus data — retained as app_specific by assumption.
+	"trade": true, "generateimage": true,
+	"curatenewsfeedbydigitaltwin": true, "tradingyield": true,
+}
+
+// serviceTag2Set: tag2 values that indicate service_feedback when tag1 is unrecognized.
+// Corpus: 100% of records with these tag2 values use pct100/star scale.
+var serviceTag2Set = map[string]bool{
+	"fragment": true, "mint": true, "record": true,
+	"create": true, "agent": true,
 }
 
 // appTag2Set: tag2 values that indicate app_specific when tag1 is unrecognized.
 var appTag2Set = map[string]bool{
-	"fragment": true, "mint": true, "record": true,
-	"create": true, "agent": true, "spawn": true,
-	// Action type tags
-	"agentaction": true,
+	// No corpus data — retained as app_specific by assumption.
+	"spawn": true, "agentaction": true,
 }
 
 // serviceTag1Set: known quality/review tag1 values → service_feedback.
@@ -107,7 +97,7 @@ var serviceTag1Set = map[string]bool{
 	"open": true, "standards-compliant": true, "gas-efficient": true,
 	"cost-effective": true, "low-latency": true, "scalable": true,
 	"layer-2": true, "privacy": true, "defi": true, "defai": true,
-	"x402": true, "accurate": true, "cool": true, "great": true,
+	"accurate": true, "cool": true, "great": true,
 	"general": true, "mcp": true, "security": true, "review": true,
 	"useful": true, "smart": true, "nice": true, "overall": true,
 	"accuracy": true, "infrastructure": true, "creative": true,
@@ -121,6 +111,24 @@ var serviceTag1Set = map[string]bool{
 	// Common typos — normalized here
 	"helpfull": true, "powerfull": true, "usefull": true,
 	"reliabel": true, "excelent": true,
+	// Manual/community quality scores
+	"score": true,
+	// Operation quality ratings — moved from appTag1Set.
+	// Corpus: 97–100% of these records use pct100/star scale → service_feedback.
+	"personality": true, "knowledge": true, "timeline": true,
+	"relationship": true, "stance": true, "style": true,
+	"token": true, "swap_token": true, "swap": true,
+	"open_position": true, "open_dca": true, "close_dca": true,
+	"trade_perpetuals": true, "fund_startup": true, "lido": true,
+	"mandate": true, "token_info": true,
+	"transfer_token": true, "create_onetime_signal": true, "purchase": true,
+	"tip": true, "watchorfight": true, "doppel": true,
+	"spawn": true, "tycoon": true,
+	"airtime": true, "gift_card": true, "bill_payment": true,
+	"task-completion": true, "market-intelligence": true, "research-delivery": true,
+	"custom_song_creation": true, "image_to_ugc_video_generation": true,
+	"x402-scan": true, "token_ai_analysis_trade_suggestion": true,
+	"meat-order": true, "frost-alert": true,
 }
 
 // noiseTag1Set: always noise, drop silently.

@@ -82,6 +82,13 @@ func Classify(tag1, tag2 string) Result {
 		}
 	}
 
+	// Stage 2: Config — trust with community/peer tag2 → service_feedback
+	// "trust" is in configTag1Set for the oracle-screening bulk (54k records), but
+	// when paired with human-evaluation tag2 values it is a quality signal, not infra.
+	if t1 == "trust" && (t2 == "community-verified" || t2 == "peer-review" || t2 == "user-review") {
+		return Result{Category: CategoryService, Confidence: 0.90, Source: "rule", NormalizedTag: "trust"}
+	}
+
 	// Stage 2: Config — tag1 direct match
 	if configTag1Set[t1] {
 		return Result{
@@ -143,6 +150,16 @@ func Classify(tag1, tag2 string) Result {
 	if configTag2Set[t2] {
 		return Result{
 			Category:      CategoryConfig,
+			Confidence:    0.90,
+			Source:        "rule",
+			NormalizedTag: t1,
+		}
+	}
+
+	// Stage 2: Service Feedback — tag2 discriminator
+	if serviceTag2Set[t2] {
+		return Result{
+			Category:      CategoryService,
 			Confidence:    0.90,
 			Source:        "rule",
 			NormalizedTag: t1,
