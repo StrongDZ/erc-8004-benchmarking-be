@@ -37,3 +37,9 @@ func (r *Repository) UpdateWeighting(ctx context.Context, feedbackID string, u W
 	_, err := r.UpdateOne(ctx, bson.M{"_id": feedbackID}, buildWeightingUpdate(u))
 	return err
 }
+
+// UpdateFallback writes the LLM fallback classification for one feedback record by _id.
+func (r *Repository) UpdateFallback(ctx context.Context, feedbackID string, f FallbackClassification) error {
+	_, err := r.UpdateOne(ctx, bson.M{"_id": feedbackID}, bson.M{"$set": bson.M{"classification.fallback": f}})
+	return err
+}

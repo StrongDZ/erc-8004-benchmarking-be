@@ -18,6 +18,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"erc-8004-benchmarking-be/internal/app/trustgraph"
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
@@ -44,6 +45,18 @@ func main() {
 	must(err, "rabbitmq connect")
 	defer conn.Close()
 
+	var hybridClassifier *classifier.HybridClassifier
+	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
+		ai := classifier.NewAIClient(classifier.AIClientConfig{
+			BaseURL:        llmURL,
+			TimeoutSeconds: envInt("LLM_TIMEOUT_SECONDS", 120),
+		})
+		hybridClassifier = classifier.NewHybridClassifier(ai)
+		log.Printf("trust-graph-updater: LLM fallback enabled at %s", llmURL)
+	} else {
+		log.Println("trust-graph-updater: LLM_BASE_URL not set; LLM fallback disabled (others → requeue)")
+	}
+
 	app := trustgraph.NewApp(trustgraph.Deps{
 		Conn:         conn,
 		FeedbackRepo: feedbackRepo,
@@ -54,6 +67,7 @@ func main() {
 			Workers:     envInt("TRUST_GRAPH_WORKERS", 8),
 			Prefetch:    envInt("TRUST_GRAPH_PREFETCH", 10),
 		},
+		Classifier: hybridClassifier,
 	})
 
 	log.Println("trust-graph-updater: starting")

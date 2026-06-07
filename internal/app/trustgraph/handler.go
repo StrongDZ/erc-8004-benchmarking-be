@@ -14,12 +14,14 @@ package trustgraph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
@@ -46,7 +48,13 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	// 3. Gate.
 	verdict, err := Validate(*fb)
 	if errors.Is(err, ErrPendingLLM) {
-		return ErrTransient
+		if a.deps.Classifier == nil {
+			return ErrTransient
+		}
+		if llmErr := a.resolveLLMFallback(ctx, fb); llmErr != nil {
+			return ErrTransient
+		}
+		verdict, err = Validate(*fb)
 	}
 	if err != nil {
 		return fmt.Errorf("trustgraph: validate %s: %w", feedbackID, err)
@@ -108,4 +116,40 @@ func walletClip(score float64) float64 {
 		return 100
 	}
 	return score
+}
+
+// resolveLLMFallback calls the HybridClassifier for a record stuck at ErrPendingLLM,
+// persists the result to MongoDB, and mutates fb.Classification.Fallback in place.
+// Returns non-nil when the LLM service was unavailable (caller should nack+requeue).
+func (a *App) resolveLLMFallback(ctx context.Context, fb *feedbackrepo.FeedbackRecord) error {
+	content := ""
+	if len(fb.FeedbackParsed) > 0 {
+		if b, err := json.Marshal(fb.FeedbackParsed); err == nil {
+			content = string(b)
+		}
+	}
+
+	res, _ := a.deps.Classifier.Classify(ctx, classifier.HybridInput{
+		Tag1:            fb.Tag1,
+		Tag2:            fb.Tag2,
+		ValueRaw:        fb.Value,
+		ValueDecimals:   int(fb.ValueDecimals),
+		OffchainContent: content,
+		Endpoint:        fb.Endpoint,
+	})
+
+	// Source=="fallback" means the LLM service is down; retry later.
+	if res.Source == "fallback" {
+		return errors.New("llm service unavailable")
+	}
+
+	fallback := feedbackrepo.FallbackClassification{
+		Category:   string(res.Category),
+		Confidence: res.Confidence,
+	}
+	if err := a.deps.FeedbackRepo.UpdateFallback(ctx, fb.ID, fallback); err != nil {
+		return err
+	}
+	fb.Classification.Fallback = &fallback
+	return nil
 }
