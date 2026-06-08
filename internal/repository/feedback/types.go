@@ -65,6 +65,7 @@ type FeedbackRecord struct {
 	ValidationVerdict string              `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
 	ValidationReason string               `bson:"validationReason,omitempty"` // detail when verdict != valid
 	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
+	Category       string                 `bson:"category,omitempty"`       // effective category: rule at ingest, LLM fallback overwrites
 	Classification FeedbackClassification `bson:"classification"`          // set by classifier
 	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
 	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet

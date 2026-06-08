@@ -31,6 +31,7 @@ func statsOrZero(s *scorestats.AgentScoreStats) scorestats.AgentScoreStats {
 func buildScoreBreakdown(s scorestats.AgentScoreStats) dto.ScoreBreakdown {
 	return dto.ScoreBreakdown{
 		Reputation: round2(s.ReputationScore),
+		Adoption:   round2(s.AdoptionScore),
 		Services:   round2(s.ServicesScore),
 		Publisher:  round2(s.PublisherScore),
 		Compliance: round2(s.ComplianceScore),
@@ -104,7 +105,8 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 // stats may be nil — defaults apply.
 func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, dist map[string]int64, cfg scoring.FormulaConfig, _ int64) dto.AgentProfile {
 	s := statsOrZero(stats)
-	penalty := scoring.ComputePenalty(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)
+	// v2 "penalty" = reliability reduction in [0,100]: how much the current fail streak docks reputation.
+	penalty := (1.0 - scoring.ComputeReliability(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)) * 100.0
 	breakdown := buildScoreBreakdown(s)
 	services := buildServicesSlice(d.Services)
 	onchain := mapOnchainMeta(d.OnchainMetadata)
@@ -131,6 +133,7 @@ func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, d
 		Scoring: dto.AgentScoring{
 			TrustScore:        round2(s.CompositeScore),
 			ReputationScore:   round2(s.ReputationScore),
+			AdoptionScore:     round2(s.AdoptionScore),
 			ScoreBreakdown:    breakdown,
 			ScoreUpdateAt:     s.ScoreUpdateAt,
 			ConsecutiveFails:  s.ConsecutiveFails,

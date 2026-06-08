@@ -3,10 +3,11 @@ package dto
 // agents.go — Public DTOs for agent-facing endpoints.
 // These mirror the JSON shapes in docs/API_SPEC_v1.md §2.1, §3.1–§3.11.
 
-// ScoreBreakdown surfaces the 4 component scores that compose the trust score.
-// Reputation is the raw accumulator value (unbounded). Services/Publisher/Compliance are normalized to [0, 100].
+// ScoreBreakdown surfaces the 5 component scores that compose the trust score.
+// All components are in [0, 100]. Reputation = Quality·Confidence·Reliability·100.
 type ScoreBreakdown struct {
 	Reputation float64 `json:"reputation"`
+	Adoption   float64 `json:"adoption"`
 	Services   float64 `json:"services"`
 	Publisher  float64 `json:"publisher"`
 	Compliance float64 `json:"compliance"`
@@ -15,17 +16,17 @@ type ScoreBreakdown struct {
 // AgentRow is one row of /leaderboard (§2.1) and /leaderboard/search (§2.2, trimmed via JSON tags).
 // TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentRow struct {
-	Rank             int            `json:"rank,omitempty"`
-	ChainID          int64          `json:"chainId"`
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name,omitempty"`
-	Image            string         `json:"image,omitempty"`
-	Owner            string         `json:"owner,omitempty"`
+	Rank    int    `json:"rank,omitempty"`
+	ChainID int64  `json:"chainId"`
+	AgentID string `json:"agentId"`
+	Name    string `json:"name,omitempty"`
+	Image   string `json:"image,omitempty"`
+	Owner   string `json:"owner,omitempty"`
 	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
-	TrustScore       float64        `json:"trustScore"`
-	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
-	ReputationScore float64        `json:"reputationScore"`
-	ScoreBreakdown  ScoreBreakdown `json:"scoreBreakdown"`
+	TrustScore float64 `json:"trustScore"`
+	// ReputationScore is the v2 reputation in [0, 100] = Quality·Confidence·Reliability·100.
+	ReputationScore  float64        `json:"reputationScore"`
+	ScoreBreakdown   ScoreBreakdown `json:"scoreBreakdown"`
 	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
 	ConsecutiveFails int64          `json:"consecutiveFails"`
 	TotalTasks       int64          `json:"totalTasks"`
@@ -91,13 +92,17 @@ type RisingStarRow struct {
 // TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentScoring struct {
 	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
-	TrustScore        float64          `json:"trustScore"`
-	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
-	// Distinct from ScoreBreakdown.Reputation which is the normalized [0, 100] reputation component.
-	ReputationScore   float64          `json:"reputationScore"`
-	ScoreBreakdown    ScoreBreakdown   `json:"scoreBreakdown"`
-	ScoreUpdateAt     int64            `json:"scoreUpdateAt"`
-	ConsecutiveFails  int64            `json:"consecutiveFails"`
+	TrustScore float64 `json:"trustScore"`
+	// ReputationScore is the v2 reputation in [0, 100] = Quality·Confidence·Reliability·100
+	// (same value as ScoreBreakdown.Reputation).
+	ReputationScore float64 `json:"reputationScore"`
+	// AdoptionScore is the log-scaled distinct-client breadth component in [0, 100].
+	AdoptionScore    float64        `json:"adoptionScore"`
+	ScoreBreakdown   ScoreBreakdown `json:"scoreBreakdown"`
+	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
+	ConsecutiveFails int64          `json:"consecutiveFails"`
+	// Penalty is the current reliability reduction in [0, 100]: (1 − Reliability)·100,
+	// i.e. the percentage the reputation is currently docked by the consecutive-fail streak.
 	Penalty           float64          `json:"penalty"`
 	TotalTasks        int64            `json:"totalTasks"`
 	TotalFeedbacks    int64            `json:"totalFeedbacks"`

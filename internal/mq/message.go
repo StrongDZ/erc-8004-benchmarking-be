@@ -101,6 +101,7 @@ type AgentDescSummaryMessage struct {
 	Description string `json:"description"`
 	DescHash    string `json:"descHash"`
 	PublishedAt int64  `json:"publishedAt"`
+	Attempt     int    `json:"attempt,omitempty"` // retry counter; 0 = first delivery
 }
 
 // DescHash returns the sha256[:16] hex digest used as the description idempotency key.

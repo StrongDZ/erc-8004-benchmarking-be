@@ -52,9 +52,19 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
-				{Key: "classification.rule.category", Value: 1},
+				{Key: "category", Value: 1},
 			},
 			Options: options.Index().SetName("idx_chain_category"),
+		},
+		{
+			Keys: bson.D{
+				{Key: "chainId", Value: 1},
+				{Key: "agentId", Value: 1},
+				{Key: "category", Value: 1},
+				{Key: "blockNumber", Value: 1},
+				{Key: "logIndex", Value: 1},
+			},
+			Options: options.Index().SetName("idx_chain_agent_category_block"),
 		},
 		// Partial index on revoked feedback for revocation timeline queries.
 		{
@@ -75,15 +85,15 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "tag1", Value: 1},
-				{Key: "classification.rule.category", Value: 1},
+				{Key: "category", Value: 1},
 				{Key: "isRevoked", Value: 1},
 				{Key: "timestamp", Value: 1},
 			},
 			Options: options.Index().
 				SetName("idx_tag1_category_revoked_ts").
 				SetPartialFilterExpression(bson.M{
-					"classification.rule.category": "service_feedback",
-					"isRevoked":               false,
+					"category":  "service_feedback",
+					"isRevoked": false,
 				}),
 		},
 		{
@@ -239,9 +249,9 @@ func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUp
 // whose timestamp is before beforeUnix. Used by the rescale worker Phase 1 and 3.
 func (r *Repository) FindServiceFeedbacksByTagPair(ctx context.Context, tag1, tag2 string, beforeUnix int64) ([]FeedbackRecord, error) {
 	filter := bson.M{
-		"tag1":                         tag1,
-		"tag2":                         tag2,
-		"classification.rule.category": "service_feedback",
+		"tag1":     tag1,
+		"tag2":     tag2,
+		"category": "service_feedback",
 		"isRevoked":                    false,
 		"isSelfFeedback":               false,
 		"timestamp":                    bson.M{"$lt": beforeUnix},

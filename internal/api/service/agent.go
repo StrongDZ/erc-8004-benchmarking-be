@@ -432,45 +432,41 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 	cfg := s.deps.Formula
 	w := s.deps.Composite
 
-	// Constant S/P/C contribution from the current materialized stats. When no stats doc
-	// exists yet, the tail is 0 and the composite reflects the reputation component only.
-	var tail float64
+	// Constant adoption / S / P / C contribution from the current materialized stats
+	// (frozen approximation, matching the score-refresh delta logic). Only the reputation
+	// component is replayed event-by-event.
+	var adoption, services, publisher, compliance float64
 	if stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); stats != nil {
-		tail = stats.ServicesScore*w.Services + stats.PublisherScore*w.Publisher + stats.ComplianceScore*w.Compliance
+		adoption, services, publisher, compliance = stats.AdoptionScore, stats.ServicesScore, stats.PublisherScore, stats.ComplianceScore
 	}
 
-	// toComposite maps a raw reputation value to the composite trust score [0, 100].
-	toComposite := func(rawRep float64) float64 {
-		c := scoring.NormalizeReputation(rawRep)*w.Reputation + tail
-		if c < 0 {
-			c = 0
-		}
-		if c > 100 {
-			c = 100
-		}
-		return c
+	// compositeAt maps a (decayed) mass state to the composite trust score [0, 100].
+	// Quality is present only once the agent has evidence (B > 0).
+	compositeAt := func(a, b float64, nFail int64) float64 {
+		rep := scoring.ComputeReputationScore(a, b, nFail, cfg.C, cfg.Gamma, cfg.Theta)
+		return scoring.ComputeCompositeFromStats(rep, adoption, services, publisher, compliance, b > 0, w)
 	}
 
 	points := make([]dto.TrustScorePoint, 0, len(feedbacks)*2+1)
-	var rep float64
+	var a, b float64 // A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ
 	var consecFails int64
 	var lastTs int64
 
 	for _, f := range feedbacks {
 		for _, midnight := range midnightsBetween(lastTs, f.Timestamp) {
+			da, db := scoring.DecayMass(a, b, lastTs, midnight, cfg)
 			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
+				Score:     round2(compositeAt(da, db, consecFails)),
 				Type:      "decay",
 			})
 		}
 
 		vi := computeVi(f)
 		wi := scoring.ComputeWi(f.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
-		rep = scoring.ApplyTaskScore(rep, lastTs, wi, vi, f.Timestamp, cfg)
+		a, b = scoring.ApplyFeedbackToMass(a, b, lastTs, wi, vi, f.Timestamp, cfg)
 		if vi < 0.40 {
 			consecFails++
-			rep -= scoring.ComputePenalty(consecFails, cfg.Gamma, cfg.Theta)
 		} else {
 			consecFails = 0
 		}
@@ -478,7 +474,7 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 
 		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(f.Timestamp),
-			Score:     round2(toComposite(rep)),
+			Score:     round2(compositeAt(a, b, consecFails)),
 			Type:      "event",
 			TxHash:    f.TxHash,
 		})
@@ -487,15 +483,17 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 	if lastTs > 0 {
 		now := time.Now().Unix()
 		for _, midnight := range midnightsBetween(lastTs, now) {
+			da, db := scoring.DecayMass(a, b, lastTs, midnight, cfg)
 			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
+				Score:     round2(compositeAt(da, db, consecFails)),
 				Type:      "decay",
 			})
 		}
+		da, db := scoring.DecayMass(a, b, lastTs, now, cfg)
 		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(now),
-			Score:     round2(toComposite(scoring.ComputeCurrentScore(rep, lastTs, now, cfg))),
+			Score:     round2(compositeAt(da, db, consecFails)),
 			Type:      "decay",
 		})
 	}
@@ -514,15 +512,6 @@ func midnightsBetween(from, to int64) []int64 {
 		out = append(out, ts)
 	}
 	return out
-}
-
-func decayForward(rep float64, lastTs, atTs int64, cfg scoring.FormulaConfig) float64 {
-	if lastTs <= 0 || atTs <= lastTs {
-		return rep
-	}
-	lambda := scoring.ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
-	deltaDays := float64(atTs-lastTs) / 86400.0
-	return rep * scoring.ComputeDecayFactor(lambda, deltaDays)
 }
 
 // ── Feedbacks ───────────────────────────────────────────────────────────────

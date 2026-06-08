@@ -53,9 +53,9 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 func (r *Repository) UpsertFromWritePath(
 	ctx context.Context,
 	chainID int64, agentID string,
-	reputationScore float64, scoreUpdateAt int64,
-	consecutiveFails, totalTasks, totalPassed, totalFailed int64,
-	composite, reputationNorm, services, publisher, compliance float64,
+	reputationScore, weightedScoreSum, weightMass float64, scoreUpdateAt int64,
+	consecutiveFails, totalTasks, totalPassed, totalFailed int64, monthUniqueUsers int,
+	composite, reputationNorm, adoption, services, publisher, compliance float64,
 	serviceWarnings []string,
 ) error {
 	filter := bson.M{"chainId": chainID, "agentId": agentID}
@@ -63,13 +63,17 @@ func (r *Repository) UpsertFromWritePath(
 		"chainId":          chainID,
 		"agentId":          agentID,
 		"reputationScore":  reputationScore,
+		"weightedScoreSum": weightedScoreSum,
+		"weightMass":       weightMass,
 		"scoreUpdateAt":    scoreUpdateAt,
 		"consecutiveFails": consecutiveFails,
 		"totalTasks":       totalTasks,
 		"totalPassed":      totalPassed,
 		"totalFailed":      totalFailed,
+		"monthUniqueUsers": monthUniqueUsers,
 		"compositeScore":   composite,
 		"reputationNorm":   reputationNorm,
+		"adoptionScore":    adoption,
 		"servicesScore":    services,
 		"publisherScore":   publisher,
 		"complianceScore":  compliance,
@@ -78,16 +82,6 @@ func (r *Repository) UpsertFromWritePath(
 	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	if err != nil {
 		return fmt.Errorf("scorestats: upsert from write path chainId=%d agentId=%s: %w", chainID, agentID, err)
-	}
-	return nil
-}
-
-// IncReputation atomically adds delta to reputationScore (used by rescale worker).
-func (r *Repository) IncReputation(ctx context.Context, chainID int64, agentID string, delta float64) error {
-	filter := bson.M{"chainId": chainID, "agentId": agentID}
-	_, err := r.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"reputationScore": delta}})
-	if err != nil {
-		return fmt.Errorf("scorestats: inc reputation chainId=%d agentId=%s: %w", chainID, agentID, err)
 	}
 	return nil
 }

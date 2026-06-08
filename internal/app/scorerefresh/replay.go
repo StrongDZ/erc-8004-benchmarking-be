@@ -1,14 +1,16 @@
 package scorerefresh
 
 // replay.go — Pure one-pass O(M) replay of an agent's feedback history.
-// Computes reputationScore (with penalty baked in) and delta snapshots at
-// T-30d, T-7d, T-24h milestones, yielding AgentScoreStats in a single pass.
-// Also computes the 4-component breakdown (services/publisher/compliance/repNorm)
-// and composite score each cycle.
+// Rebuilds the v2 weighted-mean mass accumulators A = Σ wᵢ·dᵢ·vᵢ and B = Σ wᵢ·dᵢ,
+// the distinct-client count (Adoption), and the consecutive-fail streak, then derives
+// reputation (Quality·Confidence·Reliability) and delta snapshots at T-30d, T-7d, T-24h.
+// Also computes the breakdown (adoption/services/publisher/compliance) and the
+// renormalized composite score each cycle, yielding AgentScoreStats in a single pass.
 
 import (
 	"context"
 	"math"
+	"strings"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
@@ -18,6 +20,11 @@ import (
 )
 
 const consistencyWindow = 20
+
+// adoptionWindowDays bounds the distinct-client (MonthUniqueUsers) count to recent
+// activity, so Adoption reflects CURRENT breadth rather than all-time (and fades when an
+// agent goes quiet, complementing the Confidence-decay anti-squatting on reputation).
+const adoptionWindowDays = 30
 
 // replayAgent computes AgentScoreStats for one agent by replaying their feedback history.
 // feedbacks must be sorted chronologically (blockNumber asc, logIndex asc).
@@ -45,7 +52,9 @@ func replayAgent(
 	milestones := [3]int64{now - 30*86400, now - 7*86400, now - 86400}
 
 	lambda := scoring.ComputeDecayRate(formulaCfg.Alpha, formulaCfg.TBaseDays)
-	rep := 0.0
+	// v2 weighted-mean mass accumulators: A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ.
+	a := 0.0
+	b := 0.0
 	lastTs := int64(0)
 	mIdx := 0
 	consecFails := int64(0)
@@ -53,21 +62,39 @@ func replayAgent(
 	totalPassed := int64(0)
 	totalFailed := int64(0)
 	lastEventTs := int64(0)
+	distinct := make(map[string]struct{})
+	adoptionWindowStart := now - adoptionWindowDays*86400
 
-	var snapshots [3]float64 // raw rep value (interpolated) at each milestone
+	var snapA, snapB [3]float64
+	var snapFails [3]int64
 	var eventScores []float64
+
+	// decayMass decays both mass accumulators forward to toTs (in place).
+	decayMass := func(toTs int64) {
+		if lastTs < toTs {
+			f := math.Exp(-lambda * float64(toTs-lastTs) / 86400.0)
+			a *= f
+			b *= f
+			lastTs = toTs
+		}
+	}
 
 	for _, fb := range feedbacks {
 		if fb.IsRevoked || fb.IsSelfFeedback {
 			continue
 		}
-		if fb.Classification.Rule.Category != string(classifier.CategoryService) {
-			continue
+
+		// Adoption: count distinct client addresses in the recent window across
+		// scored-or-relevant categories (service + config + app_specific), so heavily-used
+		// agents whose feedback is all config/app still earn breadth credit. Windowed to the
+		// last adoptionWindowDays so Adoption reflects current (not all-time) breadth.
+		if fb.Timestamp >= adoptionWindowStart && isAdoptionCategory(feedbackrepo.EffectiveCategory(fb)) {
+			distinct[strings.ToLower(fb.ClientAddress)] = struct{}{}
 		}
 
-		ts := fb.Timestamp
-		lastEventTs = ts
-		totalTasks++
+		if feedbackrepo.EffectiveCategory(fb) != string(classifier.CategoryService) {
+			continue
+		}
 
 		// Recompute vi at runtime from raw value + stored scale (vi is not persisted).
 		real, realOK := classifier.RawValueToReal(fb.Value, int(fb.ValueDecimals))
@@ -76,100 +103,85 @@ func replayAgent(
 		}
 		vi := classifier.NormalizeValueWithScale(real, fb.ValueScale)
 
-		// Record milestones that fall strictly before this event.
-		// Snapshot = rep decayed from lastTs to the milestone (score just before this event).
-		// When lastTs == 0 (no prior service events), rep == 0, so snapshots stay 0 ("thì thôi").
+		ts := fb.Timestamp
+		lastEventTs = ts
+		totalTasks++
+
+		// Record milestones that fall strictly before this event (mass + streak just
+		// before this event). When lastTs == 0 (no prior events), mass stays 0.
 		for mIdx < 3 && milestones[mIdx] < ts {
-			mt := milestones[mIdx]
-			if lastTs < mt {
-				deltaDays := float64(mt-lastTs) / 86400.0
-				rep *= math.Exp(-lambda * deltaDays)
-				lastTs = mt
-			}
-			snapshots[mIdx] = rep
+			decayMass(milestones[mIdx])
+			snapA[mIdx] = a
+			snapB[mIdx] = b
+			snapFails[mIdx] = consecFails
 			mIdx++
 		}
 
-		// Decay to this event's timestamp.
-		if lastTs < ts {
-			deltaDays := float64(ts-lastTs) / 86400.0
-			rep *= math.Exp(-lambda * deltaDays)
-			lastTs = ts
-		}
+		// Decay to this event's timestamp, then add the contribution.
+		decayMass(ts)
+		a += fb.Wi * vi
+		b += fb.Wi
 
-		// Apply event contribution: effectiveVi = vi - 0.40.
-		effectiveVi := vi - 0.40
-		rep += fb.Wi * effectiveVi
-
-		// If fail (vi < 0.40): also bake in the progressive penalty.
 		if vi < 0.40 {
 			consecFails++
 			totalFailed++
-			rep -= scoring.ComputePenalty(consecFails, formulaCfg.Gamma, formulaCfg.Theta)
 		} else {
 			consecFails = 0
 			totalPassed++
 		}
 
-		eventScores = append(eventScores, fb.Wi*effectiveVi)
+		eventScores = append(eventScores, fb.Wi*vi)
 	}
 
 	// Advance any remaining milestones after the last event.
 	for mIdx < 3 {
-		mt := milestones[mIdx]
-		if lastTs < mt {
-			deltaDays := float64(mt-lastTs) / 86400.0
-			rep *= math.Exp(-lambda * deltaDays)
-			lastTs = mt
-		}
-		snapshots[mIdx] = rep
+		decayMass(milestones[mIdx])
+		snapA[mIdx] = a
+		snapB[mIdx] = b
+		snapFails[mIdx] = consecFails
 		mIdx++
 	}
 
 	// Final decay to now.
-	if lastTs < now {
-		deltaDays := float64(now-lastTs) / 86400.0
-		rep *= math.Exp(-lambda * deltaDays)
+	decayMass(now)
+
+	reputation := scoring.ComputeReputationScore(a, b, consecFails, formulaCfg.C, formulaCfg.Gamma, formulaCfg.Theta)
+	qualityPresent := b > 0
+	adoption := scoring.ComputeAdoption(len(distinct), formulaCfg.AdoptionURef)
+
+	// Compute the remaining breakdown components and the renormalized composite.
+	svcResult, pubScore, compScore := computeComponentScores(
+		ctx, ag, offchainStatusByEndpoint, publisherProvider, complianceWeights,
+	)
+	composite := scoring.ComputeCompositeFromStats(reputation, adoption, svcResult.Score, pubScore, compScore, qualityPresent, compositeWeights)
+
+	// Composite-based deltas. Approximation: adoption / S / P / C are held constant at
+	// current values (no historical snapshots retained); only the reputation component
+	// varies across the window, which is the dominant short-term delta driver.
+	snapComposite := func(i int) float64 {
+		repAt := scoring.ComputeReputationScore(snapA[i], snapB[i], snapFails[i], formulaCfg.C, formulaCfg.Gamma, formulaCfg.Theta)
+		return scoring.ComputeCompositeFromStats(repAt, adoption, svcResult.Score, pubScore, compScore, snapB[i] > 0, compositeWeights)
 	}
-
-	// Compute 4-component breakdown and composite score.
-	svcResult, pubScore, compScore, repNorm := computeComponentScores(
-		ctx, ag, rep, offchainStatusByEndpoint,
-		publisherProvider, complianceWeights,
-	)
-	composite := scoring.ComputeCompositeScore(repNorm, svcResult.Score, pubScore, compScore, compositeWeights)
-
-	// Compute composite-based deltas.
-	// Approximation: S/P/C components are assumed constant at current values because
-	// we don't retain historical snapshots for those components. Only the reputation
-	// component varies across the snapshot window, which is the dominant driver of
-	// short-term delta anyway. This means delta accurately tracks the reputation
-	// component's contribution to composite change.
-	snap30dComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[0]), svcResult.Score, pubScore, compScore, compositeWeights,
-	)
-	snap7dComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[1]), svcResult.Score, pubScore, compScore, compositeWeights,
-	)
-	snap24hComposite := scoring.ComputeCompositeScore(
-		scoring.NormalizeReputation(snapshots[2]), svcResult.Score, pubScore, compScore, compositeWeights,
-	)
 
 	return scorestats.AgentScoreStats{
 		ChainID:          chainID,
 		AgentID:          agentID,
-		ReputationScore:  rep,
-		Delta24h:         composite - snap24hComposite,
-		Delta7d:          composite - snap7dComposite,
-		Delta30d:         composite - snap30dComposite,
+		ReputationScore:  reputation,
+		WeightedScoreSum: a,
+		WeightMass:       b,
+		Delta24h:         composite - snapComposite(2),
+		Delta7d:          composite - snapComposite(1),
+		Delta30d:         composite - snapComposite(0),
 		Consistency:      computeConsistency(eventScores),
 		ScoreUpdateAt:    lastEventTs,
 		ConsecutiveFails: consecFails,
 		TotalTasks:       totalTasks,
 		TotalPassed:      totalPassed,
 		TotalFailed:      totalFailed,
+		MonthUniqueUsers: len(distinct),
 		CompositeScore:   composite,
-		ReputationNorm:   repNorm,
+		ReputationNorm:   reputation,
+		AdoptionScore:    adoption,
 		ServicesScore:    svcResult.Score,
 		PublisherScore:   pubScore,
 		ComplianceScore:  compScore,
@@ -178,18 +190,26 @@ func replayAgent(
 	}
 }
 
-// computeComponentScores returns (svcResult, publisher, compliance, normalizedReputation)
-// for one agent. Requires preloaded offchain status map for that agent's services.
+// isAdoptionCategory reports whether a feedback category counts toward the Adoption
+// (distinct-client breadth) signal: service, config, and app-specific feedback.
+func isAdoptionCategory(category string) bool {
+	switch category {
+	case string(classifier.CategoryService), string(classifier.CategoryConfig), string(classifier.CategoryApp):
+		return true
+	default:
+		return false
+	}
+}
+
+// computeComponentScores returns (svcResult, publisher, compliance) for one agent.
+// Requires preloaded offchain status map for that agent's services.
 func computeComponentScores(
 	ctx context.Context,
 	ag *agentrepo.AgentDocument,
-	rawRep float64,
 	offchainStatusByEndpoint map[string]int,
 	publisherProvider scoring.PublisherScoreProvider,
 	complianceWeights scoring.ComplianceWeights,
-) (svcResult scoring.ServicesScoreResult, publisher, compliance, repNorm float64) {
-	repNorm = scoring.NormalizeReputation(rawRep)
-
+) (svcResult scoring.ServicesScoreResult, publisher, compliance float64) {
 	// Services: build health checks from declared services using the preloaded offchain status.
 	checks := make([]scoring.ServiceHealthCheck, 0, len(ag.Services))
 	for _, s := range ag.Services {
@@ -218,7 +238,7 @@ func computeComponentScores(
 		CardUpdatedAt:  ag.CardUpdatedAt,
 	}, complianceWeights)
 
-	return svcResult, publisher, compliance, repNorm
+	return svcResult, publisher, compliance
 }
 
 // computeConsistency returns a [0,1] consistency metric from event scores.

@@ -99,7 +99,7 @@ func validate(cfg Config) error {
 	}
 
 	// Validate composite score blend weights sum ≈ 1.0.
-	compositeSum := cfg.ScoreWeightReputation + cfg.ScoreWeightServices + cfg.ScoreWeightPublisher + cfg.ScoreWeightCompliance
+	compositeSum := cfg.ScoreWeightReputation + cfg.ScoreWeightAdoption + cfg.ScoreWeightServices + cfg.ScoreWeightPublisher + cfg.ScoreWeightCompliance
 	if math.Abs(compositeSum-1.0) > 0.001 {
 		log.Printf("WARNING: composite score weights sum to %.4f (expected 1.0); check SCORE_WEIGHT_* env vars", compositeSum)
 	}

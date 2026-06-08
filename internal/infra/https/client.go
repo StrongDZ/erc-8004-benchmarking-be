@@ -18,7 +18,7 @@ import (
 const (
 	defaultTimeout         = 10 * time.Second
 	defaultMaxBodyBytes    = 2 << 20 // 2 MiB
-	defaultRetryMaxTry     = 2       // up to 3 attempts total (first attempt + 2 retries)
+	defaultRetryMaxTry     = 1       // up to 3 attempts total (first attempt + 2 retries)
 	defaultRetryStartDelay = 100 * time.Millisecond
 )
 
@@ -151,6 +151,7 @@ func (c *Client) FetchBody(ctx context.Context, url string) ([]byte, http.Header
 		}
 		return nil, res.header, res.status, fmt.Errorf("https fetch: GET failed after retries: url=%s: %w", url, err)
 	}
+
 	return res.body, res.header, res.status, nil
 }
 

@@ -151,5 +151,6 @@ func (a *App) resolveLLMFallback(ctx context.Context, fb *feedbackrepo.FeedbackR
 		return err
 	}
 	fb.Classification.Fallback = &fallback
+	fb.Category = fallback.Category
 	return nil
 }

@@ -56,7 +56,7 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 	q := bson.M{"chainId": f.ChainID, "agentId": f.AgentID}
 
 	if f.Category != "" {
-		q["classification.rule.category"] = f.Category
+		q["category"] = f.Category
 	}
 	switch f.Status {
 	case "revoked":
@@ -66,12 +66,12 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 			bson.M{"revokeTxHash": bson.M{"$exists": false}},
 			bson.M{"revokeTxHash": ""},
 		}
-		q["classification.rule.category"] = bson.M{"$ne": "junk"}
+		q["category"] = bson.M{"$ne": "junk"}
 	case "junk":
-		q["classification.rule.category"] = "junk"
+		q["category"] = "junk"
 	case "anomalous":
 		q["vi"] = 0
-		q["classification.rule.category"] = bson.M{"$ne": "junk"}
+		q["category"] = bson.M{"$ne": "junk"}
 	}
 	if f.From != nil || f.To != nil {
 		rng := bson.M{}
@@ -126,7 +126,7 @@ func (r *Repository) ClassDistribution(ctx context.Context, chainID int64, agent
 	pipeline := mongodrv.Pipeline{
 		{{Key: "$match", Value: bson.M{"chainId": chainID, "agentId": agentID}}},
 		{{Key: "$group", Value: bson.M{
-			"_id":   "$classification.category",
+			"_id":   "$category",
 			"count": bson.M{"$sum": 1},
 		}}},
 	}

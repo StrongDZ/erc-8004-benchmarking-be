@@ -25,9 +25,9 @@ import (
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
+	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
-	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
 
@@ -36,13 +36,13 @@ import (
 
 // Repositories groups all read-side repos the API depends on.
 type Repositories struct {
-	Agents     *agentrepo.Repository
-	Feedback   *feedbackrepo.Repository
-	ScoreStats *scorestatsrepo.Repository
-	Identity   *identityrepo.Repository
-	Events     *eventrepo.Repository
-	Offchain   *offchainrepo.Repository
-	Crawlers   *crawlerrepo.Repository
+	Agents      *agentrepo.Repository
+	Feedback    *feedbackrepo.Repository
+	ScoreStats  *scorestatsrepo.Repository
+	Identity    *identityrepo.Repository
+	Events      *eventrepo.Repository
+	Offchain    *offchainrepo.Repository
+	Crawlers    *crawlerrepo.Repository
 	Contracts   *contractsrepo.ContractsRepository
 	Wallets     *walletrepo.Repository
 	OASFSkills  *oasfschema.Repository
@@ -57,13 +57,13 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 	primary := client.Database(cfg.MongoDatabase)
 	analyzed := client.Database(cfg.AnalyzedDatabase)
 	return &Repositories{
-		Agents:     agentrepo.NewRepository(analyzed, cfg.AgentsColl, cfg.ScoreStatsColl),
-		Feedback:   feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
-		ScoreStats: scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
-		Identity:   identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
-		Events:     eventrepo.NewRepository(primary, cfg.EventsColl),
-		Offchain:   offchainrepo.NewRepository(primary, cfg.OffchainColl),
-		Crawlers:   crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
+		Agents:      agentrepo.NewRepository(analyzed, cfg.AgentsColl, cfg.ScoreStatsColl),
+		Feedback:    feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
+		ScoreStats:  scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
+		Identity:    identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
+		Events:      eventrepo.NewRepository(primary, cfg.EventsColl),
+		Offchain:    offchainrepo.NewRepository(primary, cfg.OffchainColl),
+		Crawlers:    crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
 		Contracts:   contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
 		Wallets:     walletrepo.NewRepository(analyzed, cfg.WalletColl),
 		OASFSkills:  oasfschema.NewRepository(primary, "oasf_skills"),
@@ -89,11 +89,14 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	formula.Beta = cfg.TrustRankBeta
 	formula.K = cfg.TrustRankK
 	formula.TBaseDays = cfg.TrustRankTBase
+	formula.C = cfg.ConfidenceC
 	formula.Gamma = cfg.PenaltyGamma
 	formula.Theta = cfg.PenaltyTheta
+	formula.AdoptionURef = cfg.AdoptionURef
 
 	composite := scoring.CompositeWeights{
 		Reputation: cfg.ScoreWeightReputation,
+		Adoption:   cfg.ScoreWeightAdoption,
 		Services:   cfg.ScoreWeightServices,
 		Publisher:  cfg.ScoreWeightPublisher,
 		Compliance: cfg.ScoreWeightCompliance,
@@ -174,7 +177,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))
 	mux.Handle("GET /api/v1/oasf/skills", c2m(http.HandlerFunc(oasfH.Skills)))
 	mux.Handle("GET /api/v1/oasf/domains", c2m(http.HandlerFunc(oasfH.Domains)))
-	mux.Handle("GET /api/v1/oasf/schema/skills",  c1h(http.HandlerFunc(oasfH.SchemaSkills)))
+	mux.Handle("GET /api/v1/oasf/schema/skills", c1h(http.HandlerFunc(oasfH.SchemaSkills)))
 	mux.Handle("GET /api/v1/oasf/schema/domains", c1h(http.HandlerFunc(oasfH.SchemaDomains)))
 
 	// /api/v1/chains/*

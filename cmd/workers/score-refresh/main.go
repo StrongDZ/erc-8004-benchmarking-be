@@ -56,17 +56,20 @@ func main() {
 	}
 
 	formulaCfg := scoring.FormulaConfig{
-		Alpha:     cfg.TrustRankAlpha,
-		Beta:      cfg.TrustRankBeta,
-		K:         cfg.TrustRankK,
-		TBaseDays: cfg.TrustRankTBase,
-		Gamma:     cfg.PenaltyGamma,
-		Theta:     cfg.PenaltyTheta,
-		SBase:     0.0,
+		Alpha:        cfg.TrustRankAlpha,
+		Beta:         cfg.TrustRankBeta,
+		K:            cfg.TrustRankK,
+		TBaseDays:    cfg.TrustRankTBase,
+		C:            cfg.ConfidenceC,
+		Gamma:        cfg.PenaltyGamma,
+		Theta:        cfg.PenaltyTheta,
+		AdoptionURef: cfg.AdoptionURef,
+		SBase:        0.0,
 	}
 
 	compositeWeights := scoring.CompositeWeights{
 		Reputation: cfg.ScoreWeightReputation,
+		Adoption:   cfg.ScoreWeightAdoption,
 		Services:   cfg.ScoreWeightServices,
 		Publisher:  cfg.ScoreWeightPublisher,
 		Compliance: cfg.ScoreWeightCompliance,

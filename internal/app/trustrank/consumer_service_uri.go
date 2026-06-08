@@ -7,13 +7,13 @@ package trustrank
 //
 // Policy: always ack — no retry. Errors are logged clearly. Results are written
 // to offchain_data with the appropriate status (-1 / 1 / 5).
+//
+// Manages a shared ConsumerPool; call EnsureChain to register a reader per chain.
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
-	"time"
+	"strconv"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -24,81 +24,66 @@ import (
 )
 
 // ServiceURIConsumer fetches service endpoint URIs and writes results to offchain_data.
+// It manages a shared ConsumerPool; call EnsureChain per chain.
 type ServiceURIConsumer struct {
-	conn     *amqp.Connection
+	rmqinfra.BaseHandler[mq.ServiceURIMessage]
+	pool     *rmqinfra.ConsumerPool[mq.ServiceURIMessage]
 	offchain *offchainrepo.Repository
 	resolver *domainuri.Resolver
 	prefetch int
+	workers  int
 }
 
-// NewServiceURIConsumer constructs a consumer. prefetch controls AMQP QoS prefetch count.
+// NewServiceURIConsumer constructs a consumer pool. prefetch controls AMQP QoS per chain reader;
+// workers is the number of concurrent HTTP handler goroutines shared across all chains.
 func NewServiceURIConsumer(
 	conn *amqp.Connection,
 	offchain *offchainrepo.Repository,
 	resolver *domainuri.Resolver,
-	prefetch int,
+	prefetch, workers int,
 ) *ServiceURIConsumer {
 	if prefetch < 1 {
 		prefetch = 1
 	}
-	return &ServiceURIConsumer{
-		conn:     conn,
+	if workers < 1 {
+		workers = 8
+	}
+	c := &ServiceURIConsumer{
 		offchain: offchain,
 		resolver: resolver,
 		prefetch: prefetch,
+		workers:  workers,
 	}
+	c.pool = rmqinfra.New[mq.ServiceURIMessage](conn, c)
+	return c
 }
 
-// RunChain opens a channel, declares the queue, and consumes until ctx is cancelled.
-// Intended to run as a goroutine; one instance per chain.
-func (c *ServiceURIConsumer) RunChain(ctx context.Context, chainID int64) error {
-	queueName := mq.ServiceURIQueueName(chainID)
-
-	ch, err := c.conn.Channel()
-	if err != nil {
-		return fmt.Errorf("service_uri_consumer chain=%d: open channel: %w", chainID, err)
-	}
-	defer ch.Close()
-
-	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("service_uri_consumer chain=%d: declare queue: %w", chainID, err)
-	}
-
-	if err := ch.Qos(c.prefetch, 0, false); err != nil {
-		return fmt.Errorf("service_uri_consumer chain=%d: set qos: %w", chainID, err)
-	}
-
-	tag := fmt.Sprintf("service-uri-chain%d-%d", chainID, time.Now().UnixNano())
-	deliveries, err := ch.Consume(queueName, tag, false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("service_uri_consumer chain=%d: start consume: %w", chainID, err)
-	}
-
-	log.Printf("service_uri_consumer: chain=%d started queue=%s", chainID, queueName)
-
-	return rmqinfra.GracefulConsumeLoop(ctx, ch, tag, deliveries, rmqinfra.GracefulConsumeParamsDefaults(), func(hctx context.Context, d amqp.Delivery) error {
-		var msg mq.ServiceURIMessage
-		if err := json.Unmarshal(d.Body, &msg); err != nil {
-			log.Printf("service_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
-			_ = d.Ack(false)
-			return nil
-		}
-
-		// Always ack — service URI fetch is best-effort, no retry.
-		c.HandleServiceURI(hctx, msg)
-		_ = d.Ack(false)
-		return nil
-	})
+// EnsureChain registers a reader for chainID (idempotent, non-blocking).
+func (c *ServiceURIConsumer) EnsureChain(ctx context.Context, chainID int64) {
+	c.pool.EnsureReader(ctx, strconv.FormatInt(chainID, 10))
 }
 
-// HandleServiceURI fetches the service endpoint URI and writes the result to offchain_data.
-// Used by RunChain and ServiceURIConsumerPool workers.
-func (c *ServiceURIConsumer) HandleServiceURI(ctx context.Context, msg mq.ServiceURIMessage) {
+func (c *ServiceURIConsumer) Init(_ string) rmqinfra.ReaderConfig {
+	return rmqinfra.ReaderConfig{Prefetch: c.prefetch, Workers: c.workers}
+}
+
+func (c *ServiceURIConsumer) QueueName(key string) string {
+	chainID, _ := strconv.ParseInt(key, 10, 64)
+	return mq.ServiceURIQueueName(chainID)
+}
+
+// Handle fetches the service URI and records the result. Always returns nil (best-effort, always ack).
+func (c *ServiceURIConsumer) Handle(ctx context.Context, msg mq.ServiceURIMessage) error {
 	c.handleMessage(ctx, msg)
+	return nil
+}
+
+// OnError always returns false — service URI fetch is best-effort, no retry.
+func (c *ServiceURIConsumer) OnError(_ context.Context, _ error, _ mq.ServiceURIMessage) bool {
+	return false
 }
 
 // handleMessage fetches the service endpoint URI and writes the result to offchain_data.
-// All errors are logged; nothing is returned (always ack).
 func (c *ServiceURIConsumer) handleMessage(ctx context.Context, msg mq.ServiceURIMessage) {
 	if ctx.Err() != nil {
 		return

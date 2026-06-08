@@ -236,12 +236,12 @@ func (a *App) applyOneDelta(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 	defer session.EndSession(ctx)
 
 	_, err = session.WithTransaction(ctx, func(sessCtx mongodrv.SessionContext) (interface{}, error) {
-		// 1. $inc reputationScore on agent_score_stats (single source of truth).
-		if err := a.statsRepo.IncReputation(sessCtx, d.ChainID, d.AgentID, d.Delta); err != nil {
-			return nil, err
-		}
+		// In the v2 weighted-mean model, reputation is recomputed from the corrected
+		// vᵢ by the score-refresh full replay each cycle — no incremental $inc is needed
+		// or meaningful (reputationScore is derived, not an accumulator). This worker now
+		// only persists the corrected scale on feedbacks (Phase 3) and tracks idempotency.
 
-		// 2. Mark delta as applied (score correction picked up by score-refresh worker on next cycle).
+		// 1. Mark delta as applied (the score correction is picked up on the next refresh cycle).
 		if err := a.deltaRepo.MarkApplied(sessCtx, d.ID); err != nil {
 			return nil, err
 		}

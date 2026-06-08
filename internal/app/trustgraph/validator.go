@@ -51,7 +51,7 @@ func Validate(fb feedback.FeedbackRecord) (ValidationResult, error) {
 			Confidence: 1.0,
 		}, nil
 	}
-	switch fb.Classification.Rule.Category {
+	switch feedback.EffectiveCategory(fb) {
 	case "junk":
 		return ValidationResult{Code: VerdictJunk, Confidence: 0.99,
 			Reason: "rule classifier: junk"}, nil
