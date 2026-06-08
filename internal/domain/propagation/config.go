@@ -2,8 +2,7 @@ package propagation
 
 // PropagationConfig holds all tunable hyperparameters for the trust graph.
 type PropagationConfig struct {
-	WiMin float64
-	WiMax float64
+	WiBase float64
 
 	QWeightReasoning   float64
 	QWeightAttachment  float64
@@ -21,8 +20,7 @@ type PropagationConfig struct {
 // DefaultPropagationConfig returns the design-doc recommended values.
 func DefaultPropagationConfig() PropagationConfig {
 	return PropagationConfig{
-		WiMin: 0.2,
-		WiMax: 1.5,
+		WiBase: 0.4,
 
 		QWeightReasoning:  0.20,
 		QWeightAttachment: 0.25,

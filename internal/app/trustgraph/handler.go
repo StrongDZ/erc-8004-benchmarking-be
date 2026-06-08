@@ -79,7 +79,7 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	} else {
 		qi := extractQualityInput(*fb, verdict.Confidence)
 		qualityScore = propagation.ComputeQualityScore(a.deps.PropCfg, qi)
-		wi = propagation.ComputeWeight(a.deps.PropCfg, sender.TrustScore, qualityScore)
+		wi = propagation.ComputeWeight(a.deps.PropCfg, qualityScore)
 		delta = propagation.ComputeRewardDelta(a.deps.PropCfg, wi)
 	}
 
