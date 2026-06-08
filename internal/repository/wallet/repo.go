@@ -188,6 +188,20 @@ func (r *Repository) ApplyTrustDelta(ctx context.Context, in DeltaInput) error {
 	return nil
 }
 
+// IncrementFeedbackCounters bumps feedbackTotalCount and the valid/junk counter
+// for a wallet WITHOUT touching trustScore (owned by the propagation pass).
+func (r *Repository) IncrementFeedbackCounters(ctx context.Context, chainID int64, address string, isValid bool) error {
+	id := WalletDocumentID(chainID, address)
+	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
+		"$set": bson.M{"updatedAt": time.Now().Unix()},
+		"$inc": computeCounterIncrements(isValid),
+	})
+	if err != nil {
+		return fmt.Errorf("wallet repo: increment counters (%d, %s): %w", chainID, address, err)
+	}
+	return nil
+}
+
 // FindAllByAddress returns wallet documents for a given address across all chains,
 // sorted by trustScorePropagated descending. At most 10 results.
 func (r *Repository) FindAllByAddress(ctx context.Context, address string) ([]WalletDocument, error) {

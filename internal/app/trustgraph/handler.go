@@ -7,10 +7,9 @@ package trustgraph
 //  2. Skip if already processed (idempotency guard).
 //  3. Validate (gate).
 //  4. UpsertCold sender wallet.
-//  5a. Gated → penalty Δ-, wi=0.
-//  5b. Valid → extract quality, compute wi, reward Δ+.
+//  5. Compute weight (no delta; propagation owns trustScore).
 //  6. Write weighting fields to feedback_history.
-//  7. Apply trust delta to wallet.
+//  7. Increment reviewer counters (valid/junk).
 
 import (
 	"context"
@@ -24,7 +23,6 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // ErrTransient signals a recoverable failure — caller nacks+requeues.
@@ -65,57 +63,31 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	sender, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0)
-	if err != nil {
+	if _, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0); err != nil {
 		return ErrTransient
 	}
 
-	// 5. Compute weight + delta.
+	// 5. Compute weight (for reputation) — no trust delta; propagation owns trustScore.
 	now := time.Now().Unix()
-	var wi, qualityScore, delta float64
-
-	if verdict.IsGated() {
-		delta = propagation.ComputePenaltyDelta(a.deps.PropCfg, verdict.Confidence)
-	} else {
+	var wi, qualityScore float64
+	if !verdict.IsGated() {
 		qi := extractQualityInput(*fb, verdict.Confidence)
 		qualityScore = propagation.ComputeQualityScore(a.deps.PropCfg, qi)
 		wi = propagation.ComputeWeight(a.deps.PropCfg, qualityScore)
-		delta = propagation.ComputeRewardDelta(a.deps.PropCfg, wi)
 	}
 
 	// 6. Write feedback weighting.
 	if err := a.deps.FeedbackRepo.UpdateWeighting(ctx, feedbackID, feedbackrepo.WeightingUpdate{
-		Wi:           wi,
-		QualityScore: qualityScore,
-		Verdict:      verdict.Code,
-		Reason:       verdict.Reason,
-		ComputedAt:   now,
+		Wi: wi, QualityScore: qualityScore, Verdict: verdict.Code, Reason: verdict.Reason, ComputedAt: now,
 	}); err != nil {
 		return ErrTransient
 	}
 
-	// 7. Apply trust delta.
-	newTrust := walletClip(sender.TrustScore + delta)
-	if err := a.deps.WalletRepo.ApplyTrustDelta(ctx, walletrepo.DeltaInput{
-		ChainID:  chainID,
-		Address:  fb.ClientAddress,
-		NewTrust: newTrust,
-		IsValid:  !verdict.IsGated(),
-	}); err != nil {
+	// 7. Increment reviewer counters (valid/junk). trustScore is set by trustrank-pass.
+	if err := a.deps.WalletRepo.IncrementFeedbackCounters(ctx, chainID, fb.ClientAddress, !verdict.IsGated()); err != nil {
 		return ErrTransient
 	}
-
 	return nil
-}
-
-func walletClip(score float64) float64 {
-	if score < 0 {
-		return 0
-	}
-	if score > 100 {
-		return 100
-	}
-	return score
 }
 
 // resolveLLMFallback calls the HybridClassifier for a record stuck at ErrPendingLLM,
