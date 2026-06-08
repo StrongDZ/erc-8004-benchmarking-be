@@ -1,6 +1,5 @@
 package trustpropagation
 
-// NodeKind distinguishes wallet and agent nodes.
 type NodeKind uint8
 
 const (
@@ -10,20 +9,20 @@ const (
 
 // GraphNode is a node in the trust graph.
 type GraphNode struct {
-	ID             string
-	Kind           NodeKind
-	TrustScore     float64 // current trust score [0,100]
-	CompositeScore float64 // agent-only: for seed vector
+	ID        string
+	Kind      NodeKind
+	DirectRep float64 // [0,100] direct-reputation prior (teleport input)
+	OwnerID   string  // agent-only: node ID of the owning wallet ("" if none)
 }
 
-// GraphEdge is a directed weighted edge.
+// GraphEdge is a directed client→agent trust edge (frequency weight).
 type GraphEdge struct {
 	From   string
 	To     string
-	Weight float64
+	Weight float64 // count of valid feedbacks from this client to this agent
 }
 
-// GraphData holds the full graph snapshot.
+// GraphData holds the full graph snapshot. agent→owner is derived from GraphNode.OwnerID.
 type GraphData struct {
 	Nodes []GraphNode
 	Edges []GraphEdge

@@ -1,6 +1,7 @@
 package trustpropagation
 
-// writer.go — WritePropagedScores bulk-writes trustScorePropagated to wallets + agents.
+// writer.go — persists propagation results into wallets.trustScore (single
+// canonical wallet trust score). Agents are conduits; not persisted.
 
 import (
 	"context"
@@ -11,40 +12,19 @@ import (
 	walletrep "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
-// WriterDeps holds repo dependencies for WritePropagedScores.
 type WriterDeps struct {
 	WalletRepo *walletrep.Repository
-	AgentRepo  *agentrep.Repository
 }
 
-// BuildNodeKindMap returns nodeID → NodeKind from GraphData.
-func BuildNodeKindMap(gd GraphData) map[string]NodeKind {
-	m := make(map[string]NodeKind, len(gd.Nodes))
-	for _, nd := range gd.Nodes {
-		m[nd.ID] = nd.Kind
-	}
-	return m
-}
-
-// WritePropagedScores routes propagated scores to the correct collection.
-func WritePropagedScores(ctx context.Context, deps WriterDeps, scores map[string]float64, nodeKinds map[string]NodeKind) error {
+// WriteWalletScores bulk-writes wallet trust scores keyed by wallet node ID.
+func WriteWalletScores(ctx context.Context, deps WriterDeps, scores map[string]float64) error {
 	now := time.Now().Unix()
-
-	var walletUpdates, agentUpdates []agentrep.PropagatedScore
+	updates := make([]agentrep.WalletScore, 0, len(scores))
 	for id, score := range scores {
-		ps := agentrep.PropagatedScore{ID: id, Score: score, At: now}
-		if nodeKinds[id] == NodeKindAgent {
-			agentUpdates = append(agentUpdates, ps)
-		} else {
-			walletUpdates = append(walletUpdates, ps)
-		}
+		updates = append(updates, agentrep.WalletScore{ID: id, Score: score, At: now})
 	}
-
-	if err := deps.WalletRepo.BulkSetPropagated(ctx, walletUpdates); err != nil {
-		return fmt.Errorf("write propagated: wallets: %w", err)
-	}
-	if err := deps.AgentRepo.BulkSetPropagated(ctx, agentUpdates); err != nil {
-		return fmt.Errorf("write propagated: agents: %w", err)
+	if err := deps.WalletRepo.BulkSetTrustScore(ctx, updates); err != nil {
+		return fmt.Errorf("write wallet scores: %w", err)
 	}
 	return nil
 }

@@ -230,14 +230,15 @@ func (r *Repository) ScanAll(ctx context.Context, chainID int64) ([]WalletDocume
 	return r.Find(ctx, filter, options.Find().
 		SetProjection(bson.M{
 			"_id": 1, "address": 1, "chainId": 1,
-			"trustScore": 1, "ownedAgentIds": 1,
+			"feedbackValidCount": 1, "feedbackJunkCount": 1, "ownedAgentIds": 1,
 		}).
 		SetBatchSize(10000),
 	)
 }
 
-// BulkSetPropagated writes trustScorePropagated for wallets in bulk.
-func (r *Repository) BulkSetPropagated(ctx context.Context, scores []agentrep.PropagatedScore) error {
+// BulkSetTrustScore writes the propagation result into trustScore (the single
+// canonical wallet trust score) using unordered bulk writes.
+func (r *Repository) BulkSetTrustScore(ctx context.Context, scores []agentrep.WalletScore) error {
 	if len(scores) == 0 {
 		return nil
 	}
@@ -246,10 +247,9 @@ func (r *Repository) BulkSetPropagated(ctx context.Context, scores []agentrep.Pr
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": s.ID}).
 			SetUpdate(bson.M{"$set": bson.M{
-				"trustScorePropagated": s.Score,
+				"trustScore":           clipTrustScore(s.Score),
 				"propagationUpdatedAt": s.At,
-			}}),
-		)
+			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	return err

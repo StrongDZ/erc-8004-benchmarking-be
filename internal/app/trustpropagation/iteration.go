@@ -1,32 +1,28 @@
 package trustpropagation
 
-// iteration.go — TrustRankPass: weighted TrustRank power iteration.
-// Formula: t^{k+1} = (1-α)·d + α·M·t^k
-// Cycle handling: damping factor (1-α) leaks mass to seed each step.
+// iteration.go — EigenTrust-style scalar propagation.
+//   t[j] = α·inflow[j] + (1-α)·p[j]
+//   inflow[agent] = Σ_clients M[agent][client]·t[client]   (source-normalized)
+//   inflow[owner] = mean over owned agents of t[agent]      (mean = anti-gaming)
+//   p             = direct reputation normalized to sum 1   (teleport)
+// Output: min-max scaled scores for WALLET nodes only.
 
 import "math"
 
-// PropagationIterConfig holds hyperparameters for one pass.
-type PropagationIterConfig struct {
-	Alpha         float64
-	Epsilon       float64
-	MaxIter       int
-	SeedThreshold float64
+type IterConfig struct {
+	Alpha   float64
+	Epsilon float64 // L1 convergence threshold
+	MaxIter int
 }
 
-// DefaultIterConfig returns design-doc defaults.
-func DefaultIterConfig() PropagationIterConfig {
-	return PropagationIterConfig{Alpha: 0.85, Epsilon: 1e-4, MaxIter: 30, SeedThreshold: 80}
-}
+func DefaultIterConfig() IterConfig { return IterConfig{Alpha: 0.85, Epsilon: 1e-6, MaxIter: 50} }
 
-// TrustRankPass runs one full propagation pass.
-// Returns map[nodeID]score ∈ [0,100] and the actual iteration count.
-func TrustRankPass(gd GraphData, cfg PropagationIterConfig) (map[string]float64, int) {
+// EigenTrustPass returns wallet scores ∈ [0,100] (min-max over wallets) + iters.
+func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
 	n := len(gd.Nodes)
 	if n == 0 {
 		return map[string]float64{}, 0
 	}
-
 	idx := make(map[string]int, n)
 	for i, nd := range gd.Nodes {
 		idx[nd.ID] = i
@@ -43,83 +39,70 @@ func TrustRankPass(gd GraphData, cfg PropagationIterConfig) (map[string]float64,
 	}
 	M := BuildCSR(n, edges)
 
-	// Seed vector d: normalized compositeScore for qualifying agents.
-	d := make([]float64, n)
-	var seedSum float64
+	ownedAgents := make(map[int][]int)
 	for i, nd := range gd.Nodes {
-		if nd.Kind == NodeKindAgent && nd.CompositeScore > cfg.SeedThreshold {
-			d[i] = nd.CompositeScore
-			seedSum += nd.CompositeScore
-		}
-	}
-	if seedSum > 0 {
-		for i := range d {
-			d[i] /= seedSum
-		}
-	} else {
-		for i := range d {
-			d[i] = 1.0 / float64(n)
+		if nd.Kind == NodeKindAgent && nd.OwnerID != "" {
+			if oi, ok := idx[nd.OwnerID]; ok {
+				ownedAgents[oi] = append(ownedAgents[oi], i)
+			}
 		}
 	}
 
-	// Initial t: normalized current trust.
+	p := make([]float64, n)
+	var pSum float64
+	for i, nd := range gd.Nodes {
+		p[i] = nd.DirectRep
+		pSum += nd.DirectRep
+	}
+	if pSum > 0 {
+		for i := range p {
+			p[i] /= pSum
+		}
+	} else {
+		for i := range p {
+			p[i] = 1.0 / float64(n)
+		}
+	}
+
 	t := make([]float64, n)
-	var tSum float64
-	for i, nd := range gd.Nodes {
-		t[i] = nd.TrustScore
-		tSum += nd.TrustScore
-	}
-	if tSum > 0 {
-		for i := range t {
-			t[i] /= tSum
-		}
-	} else {
-		for i := range t {
-			t[i] = 1.0 / float64(n)
-		}
-	}
-
-	alpha := cfg.Alpha
-	oMinusAlpha := 1.0 - alpha
+	copy(t, p)
+	alpha, oneMinus := cfg.Alpha, 1.0-cfg.Alpha
 
 	iters := 0
 	for iters = 0; iters < cfg.MaxIter; iters++ {
 		mv := M.SpMV(t)
-
-		// Dangling mass → distribute via d.
-		var dangMass float64
-		for j := 0; j < n; j++ {
-			if M.IsDangling(j) {
-				dangMass += t[j]
-			}
-		}
-
 		next := make([]float64, n)
-		for i := range next {
-			next[i] = oMinusAlpha*d[i] + alpha*(mv[i]+dangMass*d[i])
-		}
-
-		maxDiff := 0.0
-		for i := range next {
-			if diff := math.Abs(next[i] - t[i]); diff > maxDiff {
-				maxDiff = diff
+		for j := 0; j < n; j++ {
+			inflow := mv[j]
+			if owned := ownedAgents[j]; len(owned) > 0 {
+				var sum float64
+				for _, ai := range owned {
+					sum += t[ai]
+				}
+				inflow += sum / float64(len(owned))
 			}
+			next[j] = alpha*inflow + oneMinus*p[j]
+		}
+		var l1 float64
+		for j := range next {
+			l1 += math.Abs(next[j] - t[j])
 		}
 		t = next
-		if maxDiff < cfg.Epsilon {
+		if l1 < cfg.Epsilon {
 			break
 		}
 	}
-	iters++ // Count this as one iteration completed
+	iters++
 
-	raw := make(map[string]float64, n)
+	raw := make(map[string]float64)
 	for i, nd := range gd.Nodes {
-		raw[nd.ID] = t[i]
+		if nd.Kind == NodeKindWallet {
+			raw[nd.ID] = t[i]
+		}
 	}
 	return minMaxScale(raw, 0, 100), iters
 }
 
-// minMaxScale maps values to [lo, hi]. Returns mid when all values are equal.
 func minMaxScale(in map[string]float64, lo, hi float64) map[string]float64 {
 	if len(in) == 0 {
 		return in
@@ -134,16 +117,15 @@ func minMaxScale(in map[string]float64, lo, hi float64) map[string]float64 {
 		}
 	}
 	out := make(map[string]float64, len(in))
-	span := maxV - minV
-	if span < 1e-12 {
+	if span := maxV - minV; span < 1e-12 {
 		mid := (lo + hi) / 2
 		for k := range in {
 			out[k] = mid
 		}
-		return out
-	}
-	for k, v := range in {
-		out[k] = lo + (v-minV)/span*(hi-lo)
+	} else {
+		for k, v := range in {
+			out[k] = lo + (v-minV)/span*(hi-lo)
+		}
 	}
 	return out
 }

@@ -1,4 +1,4 @@
-// trustrank-pass runs weighted TrustRank power iteration on all chains every
+// trustrank-pass runs EigenTrust-style propagation on all chains every
 // TRUST_PROPAGATION_BATCH_INTERVAL_MIN minutes. Each tick also re-publishes
 // any feedback rows still missing a validationVerdict so trust-graph-updater
 // can grade them.
@@ -66,11 +66,10 @@ func main() {
 
 	cfg := trustpropagation.AppConfig{
 		IntervalMin: envInt("TRUST_PROPAGATION_BATCH_INTERVAL_MIN", 10),
-		IterConfig: trustpropagation.PropagationIterConfig{
-			Alpha:         envFloat("TRUST_PROPAGATION_ALPHA", 0.85),
-			Epsilon:       1e-4,
-			MaxIter:       30,
-			SeedThreshold: envFloat("TRUST_PROPAGATION_SEED_THRESHOLD", 80),
+		IterConfig: trustpropagation.IterConfig{
+			Alpha:   envFloat("TRUST_PROPAGATION_ALPHA", 0.85),
+			Epsilon: envFloat("TRUST_PROPAGATION_EPSILON", 1e-6),
+			MaxIter: envInt("TRUST_PROPAGATION_MAX_ITER", 50),
 		},
 		LoaderDeps: trustpropagation.LoaderDeps{
 			WalletRepo:     walletRepo,
@@ -80,13 +79,12 @@ func main() {
 		},
 		WriterDeps: trustpropagation.WriterDeps{
 			WalletRepo: walletRepo,
-			AgentRepo:  agentRepo,
 		},
 		BackfillDeps: backfillDeps,
 	}
 
-	log.Printf("trustrank-pass: starting (interval=%dm alpha=%.2f seed=%.0f)",
-		cfg.IntervalMin, cfg.IterConfig.Alpha, cfg.IterConfig.SeedThreshold)
+	log.Printf("trustrank-pass: starting (interval=%dm alpha=%.2f epsilon=%g maxIter=%d)",
+		cfg.IntervalMin, cfg.IterConfig.Alpha, cfg.IterConfig.Epsilon, cfg.IterConfig.MaxIter)
 	trustpropagation.NewApp(cfg).Run(ctx)
 }
 
