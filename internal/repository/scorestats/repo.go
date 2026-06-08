@@ -186,3 +186,38 @@ func (r *Repository) ScanCompositeScores(ctx context.Context, chainID int64) ([]
 	}
 	return out, nil
 }
+
+// AgentComponents is a lightweight projection of an agent's score components,
+// used by the propagation pass to compute the publisher-excluded direct prior.
+type AgentComponents struct {
+	ChainID         int64   `bson:"chainId"`
+	AgentID         string  `bson:"agentId"`
+	ReputationNorm  float64 `bson:"reputationNorm"`
+	AdoptionScore   float64 `bson:"adoptionScore"`
+	ServicesScore   float64 `bson:"servicesScore"`
+	ComplianceScore float64 `bson:"complianceScore"`
+	WeightMass      float64 `bson:"weightMass"` // B>0 ⇒ reputation present
+}
+
+// ScanComponentScores returns component breakdowns for all agents on a chain.
+// Pass chainID=0 to scan all chains.
+func (r *Repository) ScanComponentScores(ctx context.Context, chainID int64) ([]AgentComponents, error) {
+	filter := bson.M{}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "agentId": 1, "reputationNorm": 1, "adoptionScore": 1,
+			"servicesScore": 1, "complianceScore": 1, "weightMass": 1, "_id": 0,
+		}).SetBatchSize(5000))
+	if err != nil {
+		return nil, fmt.Errorf("scorestats: scan component scores: %w", err)
+	}
+	defer cur.Close(ctx)
+	var out []AgentComponents
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("scorestats: decode component scores: %w", err)
+	}
+	return out, nil
+}
