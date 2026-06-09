@@ -76,10 +76,6 @@ type AgentDocument struct {
 	SummarizedDescriptionHash string `bson:"summarizedDescriptionHash,omitempty" json:"-"`
 	SummarizedDescriptionAt   int64  `bson:"summarizedDescriptionAt,omitempty" json:"summarizedDescriptionAt,omitempty"`
 
-	// Post-propagation score (trust-graph propagation pass writes this).
-	TrustScorePropagated float64 `bson:"trustScorePropagated,omitempty"`
-	PropagationUpdatedAt int64   `bson:"propagationUpdatedAt,omitempty"`
-
 	// Denormalized from agent_score_stats by score-refresh worker each cycle.
 	// Kept here so leaderboard queries can sort/filter without a $lookup join.
 	CompositeScore float64 `bson:"compositeScore,omitempty"`

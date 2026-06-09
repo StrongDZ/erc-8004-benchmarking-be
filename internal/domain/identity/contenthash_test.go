@@ -49,7 +49,6 @@ func TestContentHash_IgnoresIdentifiers(t *testing.T) {
 	b.Owner = "0xother"
 	b.AgentWallet = "0xotherwallet"
 	b.CreatedAt = 1700000000
-	b.TrustScorePropagated = 73.4
 	if ContentHash(a) != ContentHash(b) {
 		t.Fatalf("hash must not depend on chainId/agentId/owner/agentWallet/createdAt/score")
 	}

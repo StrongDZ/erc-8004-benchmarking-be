@@ -107,21 +107,20 @@ func (s *Wallet) FeedbackGiven(ctx context.Context, p WalletFeedbacksParams) (*W
 
 // WalletProfileResult is the response shape for GET /wallet/{address}.
 type WalletProfileResult struct {
-	Address              string   `json:"address"`
-	ChainID              int64    `json:"chainId"`
-	Kind                 string   `json:"kind"`
-	TrustScore           float64  `json:"trustScore"`
-	TrustScorePropagated float64  `json:"trustScorePropagated"`
-	FeedbackTotalCount   int64    `json:"feedbackTotalCount"`
-	FeedbackValidCount   int64    `json:"feedbackValidCount"`
-	FeedbackJunkCount    int64    `json:"feedbackJunkCount"`
-	JunkRatio            float64  `json:"junkRatio"`
-	OwnedAgentIDs        []string `json:"ownedAgentIds,omitempty"`
+	Address            string   `json:"address"`
+	ChainID            int64    `json:"chainId"`
+	Kind               string   `json:"kind"`
+	TrustScore         float64  `json:"trustScore"`
+	FeedbackTotalCount int64    `json:"feedbackTotalCount"`
+	FeedbackValidCount int64    `json:"feedbackValidCount"`
+	FeedbackJunkCount  int64    `json:"feedbackJunkCount"`
+	JunkRatio          float64  `json:"junkRatio"`
+	OwnedAgentIDs      []string `json:"ownedAgentIds,omitempty"`
 }
 
 // Profile returns the trust profile for a wallet address.
 // When chainID > 0 it returns the record for that specific chain; otherwise it
-// returns the record with the highest trustScorePropagated across all chains.
+// returns the record with the highest trustScore across all chains.
 // Returns nil, nil when the wallet has not been seen yet (not an error).
 func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*WalletProfileResult, error) {
 	address = strings.TrimSpace(address)
@@ -152,16 +151,15 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 	}
 
 	return &WalletProfileResult{
-		Address:              doc.Address,
-		ChainID:              doc.ChainID,
-		Kind:                 doc.Kind,
-		TrustScore:           doc.TrustScore,
-		TrustScorePropagated: doc.TrustScorePropagated,
-		FeedbackTotalCount:   doc.FeedbackTotalCount,
-		FeedbackValidCount:   doc.FeedbackValidCount,
-		FeedbackJunkCount:    doc.FeedbackJunkCount,
-		JunkRatio:            doc.JunkRatio,
-		OwnedAgentIDs:        doc.OwnedAgentIDs,
+		Address:            doc.Address,
+		ChainID:            doc.ChainID,
+		Kind:               doc.Kind,
+		TrustScore:         doc.TrustScore,
+		FeedbackTotalCount: doc.FeedbackTotalCount,
+		FeedbackValidCount: doc.FeedbackValidCount,
+		FeedbackJunkCount:  doc.FeedbackJunkCount,
+		JunkRatio:          doc.JunkRatio,
+		OwnedAgentIDs:      doc.OwnedAgentIDs,
 	}, nil
 }
 

@@ -35,7 +35,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 		{
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
-				{Key: "trustScorePropagated", Value: -1},
+				{Key: "trustScore", Value: -1},
 			},
 			Options: options.Index().SetName("idx_chain_trust_pp_desc"),
 		},
@@ -43,7 +43,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys: bson.D{
 				{Key: "chainId", Value: 1},
 				{Key: "kind", Value: 1},
-				{Key: "trustScorePropagated", Value: -1},
+				{Key: "trustScore", Value: -1},
 			},
 			Options: options.Index().SetName("idx_chain_kind_trust_pp"),
 		},
@@ -203,7 +203,7 @@ func (r *Repository) IncrementFeedbackCounters(ctx context.Context, chainID int6
 }
 
 // FindAllByAddress returns wallet documents for a given address across all chains,
-// sorted by trustScorePropagated descending. At most 10 results.
+// sorted by trustScore descending. At most 10 results.
 func (r *Repository) FindAllByAddress(ctx context.Context, address string) ([]WalletDocument, error) {
 	norm := normalizeAddress(address)
 	if norm == "" {
@@ -211,7 +211,7 @@ func (r *Repository) FindAllByAddress(ctx context.Context, address string) ([]Wa
 	}
 	docs, err := r.Find(ctx, bson.M{"address": norm},
 		options.Find().
-			SetSort(bson.D{{Key: "trustScorePropagated", Value: -1}}).
+			SetSort(bson.D{{Key: "trustScore", Value: -1}}).
 			SetLimit(10),
 	)
 	if err != nil {

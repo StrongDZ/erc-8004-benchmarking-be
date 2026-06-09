@@ -21,7 +21,7 @@ func NewWalletHandler(svc *service.Wallet) *WalletHandler { return &WalletHandle
 
 // Profile handles GET /wallet/{address}.
 // Returns the trust profile for a wallet address.
-// Optional query param: chainId (int64). Without it, returns the record with highest trustScorePropagated.
+// Optional query param: chainId (int64). Without it, returns the record with highest trustScore.
 // @Summary Wallet trust profile
 // @Description Returns the trust score and stats for a wallet address.
 // @Tags wallet

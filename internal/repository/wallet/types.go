@@ -27,9 +27,8 @@ type WalletDocument struct {
 	// Base score (write-time, incrementally updated by trust-graph-updater).
 	TrustScore float64 `bson:"trustScore"` // [0, 100]
 
-	// Post-propagation score (batch pass writes this).
-	TrustScorePropagated float64 `bson:"trustScorePropagated"`
-	PropagationUpdatedAt int64   `bson:"propagationUpdatedAt,omitempty"`
+	// Post-propagation score timestamp (batch pass writes this).
+	PropagationUpdatedAt int64 `bson:"propagationUpdatedAt,omitempty"`
 
 	// Aggregates.
 	OwnedAgentIDs       []string `bson:"ownedAgentIds,omitempty"`
