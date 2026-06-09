@@ -436,15 +436,17 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 	// (frozen approximation, matching the score-refresh delta logic). Only the reputation
 	// component is replayed event-by-event.
 	var adoption, services, publisher, compliance float64
+	publisherPresent := false
 	if stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); stats != nil {
 		adoption, services, publisher, compliance = stats.AdoptionScore, stats.ServicesScore, stats.PublisherScore, stats.ComplianceScore
+		publisherPresent = stats.PublisherPresent
 	}
 
 	// compositeAt maps a (decayed) mass state to the composite trust score [0, 100].
 	// Quality is present only once the agent has evidence (B > 0).
 	compositeAt := func(a, b float64, nFail int64) float64 {
 		rep := scoring.ComputeReputationScore(a, b, nFail, cfg.C, cfg.Gamma, cfg.Theta)
-		return scoring.ComputeCompositeFromStats(rep, adoption, services, publisher, compliance, b > 0, w)
+		return scoring.ComputeCompositeFromStats(rep, adoption, services, publisher, compliance, b > 0, publisherPresent, w)
 	}
 
 	points := make([]dto.TrustScorePoint, 0, len(feedbacks)*2+1)

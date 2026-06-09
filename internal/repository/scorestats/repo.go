@@ -55,7 +55,7 @@ func (r *Repository) UpsertFromWritePath(
 	chainID int64, agentID string,
 	reputationScore, weightedScoreSum, weightMass float64, scoreUpdateAt int64,
 	consecutiveFails, totalTasks, totalPassed, totalFailed int64, monthUniqueUsers int,
-	composite, reputationNorm, adoption, services, publisher, compliance float64,
+	composite, reputationNorm, adoption, services, publisher float64, publisherPresent bool, compliance float64,
 	serviceWarnings []string,
 ) error {
 	filter := bson.M{"chainId": chainID, "agentId": agentID}
@@ -76,6 +76,7 @@ func (r *Repository) UpsertFromWritePath(
 		"adoptionScore":    adoption,
 		"servicesScore":    services,
 		"publisherScore":   publisher,
+		"publisherPresent": publisherPresent,
 		"complianceScore":  compliance,
 		"serviceWarnings":  serviceWarnings,
 	}}

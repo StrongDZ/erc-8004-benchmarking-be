@@ -150,17 +150,17 @@ func replayAgent(
 	adoption := scoring.ComputeAdoption(len(distinct), formulaCfg.AdoptionURef)
 
 	// Compute the remaining breakdown components and the renormalized composite.
-	svcResult, pubScore, compScore := computeComponentScores(
+	svcResult, pubScore, pubPresent, compScore := computeComponentScores(
 		ctx, ag, offchainStatusByEndpoint, publisherProvider, complianceWeights,
 	)
-	composite := scoring.ComputeCompositeFromStats(reputation, adoption, svcResult.Score, pubScore, compScore, qualityPresent, compositeWeights)
+	composite := scoring.ComputeCompositeFromStats(reputation, adoption, svcResult.Score, pubScore, compScore, qualityPresent, pubPresent, compositeWeights)
 
 	// Composite-based deltas. Approximation: adoption / S / P / C are held constant at
 	// current values (no historical snapshots retained); only the reputation component
 	// varies across the window, which is the dominant short-term delta driver.
 	snapComposite := func(i int) float64 {
 		repAt := scoring.ComputeReputationScore(snapA[i], snapB[i], snapFails[i], formulaCfg.C, formulaCfg.Gamma, formulaCfg.Theta)
-		return scoring.ComputeCompositeFromStats(repAt, adoption, svcResult.Score, pubScore, compScore, snapB[i] > 0, compositeWeights)
+		return scoring.ComputeCompositeFromStats(repAt, adoption, svcResult.Score, pubScore, compScore, snapB[i] > 0, pubPresent, compositeWeights)
 	}
 
 	return scorestats.AgentScoreStats{
@@ -184,6 +184,7 @@ func replayAgent(
 		AdoptionScore:    adoption,
 		ServicesScore:    svcResult.Score,
 		PublisherScore:   pubScore,
+		PublisherPresent: pubPresent,
 		ComplianceScore:  compScore,
 		ServiceWarnings:  svcResult.Warnings,
 		ComputedAt:       now,
@@ -201,7 +202,7 @@ func isAdoptionCategory(category string) bool {
 	}
 }
 
-// computeComponentScores returns (svcResult, publisher, compliance) for one agent.
+// computeComponentScores returns (svcResult, publisher, publisherPresent, compliance) for one agent.
 // Requires preloaded offchain status map for that agent's services.
 func computeComponentScores(
 	ctx context.Context,
@@ -209,7 +210,7 @@ func computeComponentScores(
 	offchainStatusByEndpoint map[string]int,
 	publisherProvider scoring.PublisherScoreProvider,
 	complianceWeights scoring.ComplianceWeights,
-) (svcResult scoring.ServicesScoreResult, publisher, compliance float64) {
+) (svcResult scoring.ServicesScoreResult, publisher float64, publisherPresent bool, compliance float64) {
 	// Services: build health checks from declared services using the preloaded offchain status.
 	checks := make([]scoring.ServiceHealthCheck, 0, len(ag.Services))
 	for _, s := range ag.Services {
@@ -220,8 +221,8 @@ func computeComponentScores(
 	}
 	svcResult = scoring.ComputeServicesScore(checks)
 
-	// Publisher: pluggable provider (currently NeutralPublisherProvider returning 50).
-	publisher = publisherProvider.Score(ctx, ag.Owner, ag.ChainID)
+	// Publisher: pluggable provider (currently NeutralPublisherProvider returning 50/true).
+	publisher, publisherPresent = publisherProvider.Score(ctx, ag.Owner, ag.ChainID)
 
 	// Compliance: field-presence scoring against ERC-8004 card spec.
 	compliance = scoring.ComputeComplianceScore(scoring.ComplianceInput{
@@ -238,7 +239,7 @@ func computeComponentScores(
 		CardUpdatedAt:  ag.CardUpdatedAt,
 	}, complianceWeights)
 
-	return svcResult, publisher, compliance
+	return svcResult, publisher, publisherPresent, compliance
 }
 
 // computeConsistency returns a [0,1] consistency metric from event scores.

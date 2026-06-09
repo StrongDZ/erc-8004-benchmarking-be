@@ -181,20 +181,17 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	monthUniqueUsers := prev.MonthUniqueUsers
 	services := prev.ServicesScore
 	publisher := prev.PublisherScore
+	publisherPresent := prev.PublisherPresent
 	compliance := prev.ComplianceScore
-	if publisher == 0 {
-		// Neutral default until first refresh cycle populates publisher reputation.
-		publisher = 50.0
-	}
 	// qualityPresent is true: we just recorded a scored service feedback (B > 0).
-	composite := scoring.ComputeCompositeFromStats(newRep, adoption, services, publisher, compliance, true, p.compositeWeights)
+	composite := scoring.ComputeCompositeFromStats(newRep, adoption, services, publisher, compliance, true, publisherPresent, p.compositeWeights)
 
 	if err := p.statsRepo.UpsertFromWritePath(
 		context.Background(),
 		bs.chainID, agentID,
 		newRep, newA, newB, ev.Timestamp,
 		newConsecFails, newTotalTasks, newPassed, newFailed, monthUniqueUsers,
-		composite, newRep, adoption, services, publisher, compliance,
+		composite, newRep, adoption, services, publisher, publisherPresent, compliance,
 		prev.ServiceWarnings,
 	); err != nil {
 		log.Printf("trustrank: upsert write-path stats chain=%d agent=%s: %v", bs.chainID, agentID, err)

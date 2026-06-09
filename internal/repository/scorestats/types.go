@@ -33,8 +33,9 @@ type AgentScoreStats struct {
 	ReputationNorm  float64 `bson:"reputationNorm"` // == ReputationScore (kept for API/back-compat)
 	AdoptionScore   float64 `bson:"adoptionScore"`  // log-scaled distinct-client breadth [0,100]
 	ServicesScore   float64 `bson:"servicesScore"`
-	PublisherScore  float64 `bson:"publisherScore"`
-	ComplianceScore float64 `bson:"complianceScore"`
+	PublisherScore   float64 `bson:"publisherScore"`
+	PublisherPresent bool    `bson:"publisherPresent"`
+	ComplianceScore  float64 `bson:"complianceScore"`
 	// ServiceWarnings lists service names that need attention
 	// (e.g., JSON-required endpoint fetched but content was not valid JSON).
 	ServiceWarnings []string `bson:"serviceWarnings,omitempty"`

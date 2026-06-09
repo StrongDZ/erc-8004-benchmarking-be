@@ -284,14 +284,16 @@ func ComputeComplianceScore(in ComplianceInput, w ComplianceWeights) float64 {
 
 // ComputeCompositeFromStats is a convenience wrapper that blends the five v2 components
 // using weight renormalization (see ComputeCompositeRenorm). qualityPresent must be true
-// only when the agent has at least one scored service feedback; the other four components
-// are always present. Each score is expected in [0,100]; result is clamped to [0,100].
-func ComputeCompositeFromStats(reputation, adoption, services, publisher, compliance float64, qualityPresent bool, w CompositeWeights) float64 {
+// only when the agent has at least one scored service feedback; publisherPresent must be
+// true when a publisher signal is available (false drops the publisher weight and
+// redistributes it to the other components). Each score is expected in [0,100]; result is
+// clamped to [0,100].
+func ComputeCompositeFromStats(reputation, adoption, services, publisher, compliance float64, qualityPresent, publisherPresent bool, w CompositeWeights) float64 {
 	return ComputeCompositeRenorm([]WeightedComponent{
 		{Score: reputation, Weight: w.Reputation, Present: qualityPresent},
 		{Score: adoption, Weight: w.Adoption, Present: true},
 		{Score: services, Weight: w.Services, Present: true},
-		{Score: publisher, Weight: w.Publisher, Present: true},
+		{Score: publisher, Weight: w.Publisher, Present: publisherPresent},
 		{Score: compliance, Weight: w.Compliance, Present: true},
 	})
 }
