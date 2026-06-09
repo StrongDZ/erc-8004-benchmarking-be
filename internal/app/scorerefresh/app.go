@@ -17,6 +17,7 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // App runs the periodic score-refresh cycle.
@@ -25,10 +26,10 @@ type App struct {
 	feedbacks         *feedbackrepo.Repository
 	scoreStats        *scorestats.Repository
 	offchain          *offchainrepo.Repository
+	wallets           *walletrepo.Repository
 	formulaCfg        scoring.FormulaConfig
 	compositeWeights  scoring.CompositeWeights
 	complianceWeights scoring.ComplianceWeights
-	publisherProvider scoring.PublisherScoreProvider
 	cronExpr          string
 }
 
@@ -38,10 +39,10 @@ func NewApp(
 	feedbacks *feedbackrepo.Repository,
 	scoreStats *scorestats.Repository,
 	offchain *offchainrepo.Repository,
+	wallets *walletrepo.Repository,
 	formulaCfg scoring.FormulaConfig,
 	compositeWeights scoring.CompositeWeights,
 	complianceWeights scoring.ComplianceWeights,
-	publisherProvider scoring.PublisherScoreProvider,
 	cronExpr string,
 ) *App {
 	return &App{
@@ -49,10 +50,10 @@ func NewApp(
 		feedbacks:         feedbacks,
 		scoreStats:        scoreStats,
 		offchain:          offchain,
+		wallets:           wallets,
 		formulaCfg:        formulaCfg,
 		compositeWeights:  compositeWeights,
 		complianceWeights: complianceWeights,
-		publisherProvider: publisherProvider,
 		cronExpr:          cronExpr,
 	}
 }
@@ -72,6 +73,13 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) runCycle(ctx context.Context) {
 	now := time.Now().Unix()
 	log.Printf("score-refresh: cycle start ts=%d", now)
+
+	ratedTrust, err := a.wallets.ScanRatedTrust(ctx)
+	if err != nil {
+		log.Printf("score-refresh: scan rated trust: %v", err)
+		// non-fatal: empty snapshot → every publisher absent this cycle
+	}
+	publisherProvider := NewWalletTrustPublisherProvider(ratedTrust)
 
 	const batchSize = 200
 	skip := int64(0)
@@ -115,7 +123,7 @@ func (a *App) runCycle(ctx context.Context) {
 			stats := replayAgent(
 				ctx, ag, fbs, now,
 				a.formulaCfg, offchainStatus,
-				a.publisherProvider, a.compositeWeights, a.complianceWeights,
+				publisherProvider, a.compositeWeights, a.complianceWeights,
 			)
 			statsBatch = append(statsBatch, stats)
 			fbCounts = append(fbCounts, int64(len(fbs)))

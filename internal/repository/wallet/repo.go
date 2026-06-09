@@ -256,6 +256,38 @@ func (r *Repository) BulkSetTrustScore(ctx context.Context, scores []agentrep.Wa
 	return err
 }
 
+// RatedTrust is a minimal projection used by ScanRatedTrust.
+type RatedTrust struct {
+	ID         string  `bson:"_id"`
+	TrustScore float64 `bson:"trustScore"`
+}
+
+// ScanRatedTrust returns (_id, trustScore) for every RATED wallet across all chains.
+// Used to build the publisher-reputation snapshot for score-refresh.
+func (r *Repository) ScanRatedTrust(ctx context.Context) ([]RatedTrust, error) {
+	cur, err := r.Coll.Find(ctx,
+		bson.M{"trustRated": true},
+		options.Find().SetProjection(bson.M{"_id": 1, "trustScore": 1}).SetBatchSize(10000),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("wallet repo: scan rated trust: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var out []RatedTrust
+	for cur.Next(ctx) {
+		var rt RatedTrust
+		if err := cur.Decode(&rt); err != nil {
+			return nil, fmt.Errorf("wallet repo: scan rated trust decode: %w", err)
+		}
+		out = append(out, rt)
+	}
+	if err := cur.Err(); err != nil {
+		return nil, fmt.Errorf("wallet repo: scan rated trust cursor: %w", err)
+	}
+	return out, nil
+}
+
 // BulkSetUnrated marks wallets with no trust evidence: clears trustScore and sets trustRated=false.
 func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64) error {
 	if len(ids) == 0 {

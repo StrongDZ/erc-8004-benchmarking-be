@@ -19,6 +19,7 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 func main() {
@@ -47,6 +48,7 @@ func main() {
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	scoreStats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
 	offchain := offchainrepo.NewRepository(rawDB, cfg.OffchainColl)
+	wallets := walletrepo.NewRepository(analyzedDB, cfg.WalletColl)
 
 	if err := agents.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("agents indexes: %v", err)
@@ -80,11 +82,9 @@ func main() {
 		Tier2Total: cfg.ComplianceTier2Weight,
 	}
 
-	publisherProvider := scoring.NeutralPublisherProvider{Default: 50.0}
-
 	app := scorerefreshapp.NewApp(
-		agents, feedbacks, scoreStats, offchain,
-		formulaCfg, compositeWeights, complianceWeights, publisherProvider,
+		agents, feedbacks, scoreStats, offchain, wallets,
+		formulaCfg, compositeWeights, complianceWeights,
 		cfg.ScoreRefreshCron,
 	)
 
