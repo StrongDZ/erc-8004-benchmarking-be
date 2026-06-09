@@ -12,9 +12,6 @@ type PropagationConfig struct {
 
 	ReasoningLenFull    int
 	AttachmentCountFull int
-
-	Eta   float64
-	Kappa float64
 }
 
 // DefaultPropagationConfig returns the design-doc recommended values.
@@ -30,8 +27,5 @@ func DefaultPropagationConfig() PropagationConfig {
 
 		ReasoningLenFull:    200,
 		AttachmentCountFull: 3,
-
-		Eta:   0.5,
-		Kappa: 2.0,
 	}
 }

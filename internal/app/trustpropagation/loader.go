@@ -39,7 +39,7 @@ func LoadGraph(ctx context.Context, deps LoaderDeps, chainID int64) (GraphData, 
 	if err != nil {
 		return GraphData{}, fmt.Errorf("load graph: owner edges: %w", err)
 	}
-	feedbackEdges, err := deps.FeedbackRepo.ScanAllNonJunkEdges(ctx, chainID)
+	feedbackEdges, err := deps.FeedbackRepo.ScanValidEdges(ctx, chainID)
 	if err != nil {
 		return GraphData{}, fmt.Errorf("load graph: edges: %w", err)
 	}

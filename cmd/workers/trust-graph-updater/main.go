@@ -57,11 +57,14 @@ func main() {
 		log.Println("trust-graph-updater: LLM_BASE_URL not set; LLM fallback disabled (others → requeue)")
 	}
 
+	propCfg := propagation.DefaultPropagationConfig()
+	propCfg.WiBase = envFloat("TRUST_WI_BASE", propCfg.WiBase)
+
 	app := trustgraph.NewApp(trustgraph.Deps{
 		Conn:         conn,
 		FeedbackRepo: feedbackRepo,
 		WalletRepo:   walletRepo,
-		PropCfg:      propagation.DefaultPropagationConfig(),
+		PropCfg:      propCfg,
 		Cfg: trustgraph.AppConfig{
 			ColdStartT0: envFloat("TRUST_WEIGHT_COLD_START_T0", 10.0),
 			Workers:     envInt("TRUST_GRAPH_WORKERS", 8),
