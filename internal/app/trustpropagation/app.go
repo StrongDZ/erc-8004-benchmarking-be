@@ -72,13 +72,13 @@ func (a *App) runPass(ctx context.Context) {
 	log.Printf("trustrank-pass: loaded %d nodes %d edges in %v", len(gd.Nodes), len(gd.Edges), time.Since(start))
 
 	t1 := time.Now()
-	scores, iters := EigenTrustPass(gd, a.cfg.IterConfig)
-	log.Printf("trustrank-pass: iteration done in %v (%d iters)", time.Since(t1), iters)
+	ws, iters := EigenTrustPass(gd, a.cfg.IterConfig)
+	log.Printf("trustrank-pass: iteration done in %v (%d iters, %d rated, %d unrated)", time.Since(t1), iters, len(ws.Rated), len(ws.Unrated))
 
 	t2 := time.Now()
-	if err := WriteWalletScores(ctx, a.cfg.WriterDeps, scores); err != nil {
+	if err := WriteWalletScores(ctx, a.cfg.WriterDeps, ws); err != nil {
 		log.Printf("trustrank-pass: write: %v", err)
 		return
 	}
-	log.Printf("trustrank-pass: wrote %d wallet scores in %v (total: %v)", len(scores), time.Since(t2), time.Since(start))
+	log.Printf("trustrank-pass: wrote %d rated %d unrated wallet scores in %v (total: %v)", len(ws.Rated), len(ws.Unrated), time.Since(t2), time.Since(start))
 }

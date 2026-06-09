@@ -28,3 +28,9 @@ type GraphData struct {
 	Nodes []GraphNode
 	Edges []GraphEdge
 }
+
+// WalletScores is the output of a propagation pass.
+type WalletScores struct {
+	Rated   map[string]float64 // wallet node ID -> [0,100] (p99-normalized)
+	Unrated []string           // wallet node IDs with no trust evidence
+}

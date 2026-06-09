@@ -30,6 +30,10 @@ type WalletDocument struct {
 	// Post-propagation score timestamp (batch pass writes this).
 	PropagationUpdatedAt int64 `bson:"propagationUpdatedAt,omitempty"`
 
+	// TrustRated is true when this wallet received trust inflow (owns ≥1 agent with weightMass>0).
+	// False means no trust evidence; trustScore is nil/unset for unrated wallets.
+	TrustRated bool `bson:"trustRated"`
+
 	// Aggregates.
 	OwnedAgentIDs       []string `bson:"ownedAgentIds,omitempty"`
 	FeedbackTotalCount  int64    `bson:"feedbackTotalCount"`

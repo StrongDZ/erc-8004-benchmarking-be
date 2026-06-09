@@ -248,7 +248,27 @@ func (r *Repository) BulkSetTrustScore(ctx context.Context, scores []agentrep.Wa
 			SetFilter(bson.M{"_id": s.ID}).
 			SetUpdate(bson.M{"$set": bson.M{
 				"trustScore":           clipTrustScore(s.Score),
+				"trustRated":           true,
 				"propagationUpdatedAt": s.At,
+			}}))
+	}
+	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
+	return err
+}
+
+// BulkSetUnrated marks wallets with no trust evidence: clears trustScore and sets trustRated=false.
+func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ops := make([]mongodrv.WriteModel, 0, len(ids))
+	for _, id := range ids {
+		ops = append(ops, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": id}).
+			SetUpdate(bson.M{"$set": bson.M{
+				"trustRated":           false,
+				"trustScore":           nil,
+				"propagationUpdatedAt": at,
 			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))

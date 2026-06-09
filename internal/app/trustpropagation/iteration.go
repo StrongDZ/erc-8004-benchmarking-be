@@ -7,7 +7,10 @@ package trustpropagation
 //   p             = direct reputation normalized to sum 1   (teleport)
 // Output: min-max scaled scores for WALLET nodes only.
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
 type IterConfig struct {
 	Alpha   float64
@@ -17,11 +20,11 @@ type IterConfig struct {
 
 func DefaultIterConfig() IterConfig { return IterConfig{Alpha: 0.85, Epsilon: 1e-6, MaxIter: 50} }
 
-// EigenTrustPass returns wallet scores ∈ [0,100] (min-max over wallets) + iters.
-func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
+// EigenTrustPass returns rated wallet scores ∈ [0,100] (p99-normalized) and unrated wallet IDs + iters.
+func EigenTrustPass(gd GraphData, cfg IterConfig) (WalletScores, int) {
 	n := len(gd.Nodes)
 	if n == 0 {
-		return map[string]float64{}, 0
+		return WalletScores{Rated: map[string]float64{}, Unrated: nil}, 0
 	}
 	idx := make(map[string]int, n)
 	for i, nd := range gd.Nodes {
@@ -50,6 +53,17 @@ func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
 			if oi, ok := idx[nd.OwnerID]; ok {
 				ownedAgents[oi] = append(ownedAgents[oi], i)
 			}
+		}
+	}
+
+	ratedWallet := make(map[int]bool, len(ownedAgents))
+	for oi, owned := range ownedAgents {
+		var wsum float64
+		for _, ai := range owned {
+			wsum += weight[ai]
+		}
+		if wsum > 0 {
+			ratedWallet[oi] = true
 		}
 	}
 
@@ -102,38 +116,60 @@ func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
 	}
 	iters++
 
-	raw := make(map[string]float64)
+	ratedRaw := make(map[string]float64)
+	unrated := make([]string, 0)
 	for i, nd := range gd.Nodes {
-		if nd.Kind == NodeKindWallet {
-			raw[nd.ID] = t[i]
+		if nd.Kind != NodeKindWallet {
+			continue
+		}
+		if ratedWallet[i] {
+			ratedRaw[nd.ID] = t[i]
+		} else {
+			unrated = append(unrated, nd.ID)
 		}
 	}
-	return minMaxScale(raw, 0, 100), iters
+	return WalletScores{Rated: p99Scale(ratedRaw), Unrated: unrated}, iters
 }
 
-func minMaxScale(in map[string]float64, lo, hi float64) map[string]float64 {
+// p99Scale winsorizes at the 99th percentile: out = clamp(100·(v-min)/(p99-min), 0, 100).
+// Capping at p99 (not max) prevents a single hub from anchoring the whole scale.
+func p99Scale(in map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(in))
 	if len(in) == 0 {
-		return in
+		return out
 	}
-	minV, maxV := math.MaxFloat64, -math.MaxFloat64
+	vals := make([]float64, 0, len(in))
+	minV := math.MaxFloat64
 	for _, v := range in {
+		vals = append(vals, v)
 		if v < minV {
 			minV = v
 		}
-		if v > maxV {
-			maxV = v
-		}
 	}
-	out := make(map[string]float64, len(in))
-	if span := maxV - minV; span < 1e-12 {
-		mid := (lo + hi) / 2
+	sort.Float64s(vals)
+	idx := int(math.Ceil(0.99*float64(len(vals)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(vals) {
+		idx = len(vals) - 1
+	}
+	p99 := vals[idx]
+	span := p99 - minV
+	if span < 1e-12 {
 		for k := range in {
-			out[k] = mid
+			out[k] = 50
 		}
-	} else {
-		for k, v := range in {
-			out[k] = lo + (v-minV)/span*(hi-lo)
+		return out
+	}
+	for k, v := range in {
+		s := (v - minV) / span * 100
+		if s < 0 {
+			s = 0
+		} else if s > 100 {
+			s = 100
 		}
+		out[k] = s
 	}
 	return out
 }

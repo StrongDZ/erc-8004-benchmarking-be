@@ -16,15 +16,18 @@ type WriterDeps struct {
 	WalletRepo *walletrep.Repository
 }
 
-// WriteWalletScores bulk-writes wallet trust scores keyed by wallet node ID.
-func WriteWalletScores(ctx context.Context, deps WriterDeps, scores map[string]float64) error {
+// WriteWalletScores bulk-writes rated wallet trust scores and clears unrated wallets.
+func WriteWalletScores(ctx context.Context, deps WriterDeps, ws WalletScores) error {
 	now := time.Now().Unix()
-	updates := make([]agentrep.WalletScore, 0, len(scores))
-	for id, score := range scores {
-		updates = append(updates, agentrep.WalletScore{ID: id, Score: score, At: now})
+	rated := make([]agentrep.WalletScore, 0, len(ws.Rated))
+	for id, score := range ws.Rated {
+		rated = append(rated, agentrep.WalletScore{ID: id, Score: score, At: now})
 	}
-	if err := deps.WalletRepo.BulkSetTrustScore(ctx, updates); err != nil {
-		return fmt.Errorf("write wallet scores: %w", err)
+	if err := deps.WalletRepo.BulkSetTrustScore(ctx, rated); err != nil {
+		return fmt.Errorf("write rated scores: %w", err)
+	}
+	if err := deps.WalletRepo.BulkSetUnrated(ctx, ws.Unrated, now); err != nil {
+		return fmt.Errorf("write unrated scores: %w", err)
 	}
 	return nil
 }
