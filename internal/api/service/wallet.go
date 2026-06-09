@@ -110,7 +110,8 @@ type WalletProfileResult struct {
 	Address            string   `json:"address"`
 	ChainID            int64    `json:"chainId"`
 	Kind               string   `json:"kind"`
-	TrustScore         float64  `json:"trustScore"`
+	TrustScore         *float64 `json:"trustScore"`
+	Rated              bool     `json:"rated"`
 	FeedbackTotalCount int64    `json:"feedbackTotalCount"`
 	FeedbackValidCount int64    `json:"feedbackValidCount"`
 	FeedbackJunkCount  int64    `json:"feedbackJunkCount"`
@@ -150,11 +151,19 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 		}
 	}
 
+	rated := doc.TrustRated
+	var trust *float64
+	if rated {
+		v := doc.TrustScore
+		trust = &v
+	}
+
 	return &WalletProfileResult{
 		Address:            doc.Address,
 		ChainID:            doc.ChainID,
 		Kind:               doc.Kind,
-		TrustScore:         doc.TrustScore,
+		TrustScore:         trust,
+		Rated:              rated,
 		FeedbackTotalCount: doc.FeedbackTotalCount,
 		FeedbackValidCount: doc.FeedbackValidCount,
 		FeedbackJunkCount:  doc.FeedbackJunkCount,

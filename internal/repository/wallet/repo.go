@@ -211,7 +211,7 @@ func (r *Repository) FindAllByAddress(ctx context.Context, address string) ([]Wa
 	}
 	docs, err := r.Find(ctx, bson.M{"address": norm},
 		options.Find().
-			SetSort(bson.D{{Key: "trustScore", Value: -1}}).
+			SetSort(bson.D{{Key: "trustRated", Value: -1}, {Key: "trustScore", Value: -1}}).
 			SetLimit(10),
 	)
 	if err != nil {
