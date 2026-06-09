@@ -53,7 +53,8 @@ func LoadGraph(ctx context.Context, deps LoaderDeps, chainID int64) (GraphData, 
 		id := nodeID(c.ChainID, c.AgentID)
 		nodeMap[id] = GraphNode{ID: id, Kind: NodeKindAgent,
 			DirectRep: scoring.AgentDirectReputation(c.ReputationNorm, c.AdoptionScore,
-				c.ServicesScore, c.ComplianceScore, c.WeightMass > 0, cw)}
+				c.ServicesScore, c.ComplianceScore, c.WeightMass > 0, cw),
+			Weight: c.WeightMass}
 	}
 	for _, oe := range ownerEdges {
 		ownerAddr := strings.ToLower(oe.Owner)

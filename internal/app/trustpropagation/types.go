@@ -13,6 +13,7 @@ type GraphNode struct {
 	Kind      NodeKind
 	DirectRep float64 // [0,100] direct-reputation prior (teleport input)
 	OwnerID   string  // agent-only: node ID of the owning wallet ("" if none)
+	Weight    float64 // agent-only: evidence mass (weightMass) for owner aggregation
 }
 
 // GraphEdge is a directed client→agent trust edge (frequency weight).

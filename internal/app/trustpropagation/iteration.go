@@ -28,6 +28,11 @@ func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
 		idx[nd.ID] = i
 	}
 
+	weight := make([]float64, n)
+	for i, nd := range gd.Nodes {
+		weight[i] = nd.Weight
+	}
+
 	edges := make([]csrEdge, 0, len(gd.Edges))
 	for _, e := range gd.Edges {
 		fi, okF := idx[e.From]
@@ -75,11 +80,14 @@ func EigenTrustPass(gd GraphData, cfg IterConfig) (map[string]float64, int) {
 		for j := 0; j < n; j++ {
 			inflow := mv[j]
 			if owned := ownedAgents[j]; len(owned) > 0 {
-				var sum float64
+				var wsum, num float64
 				for _, ai := range owned {
-					sum += t[ai]
+					wsum += weight[ai]
+					num += weight[ai] * t[ai]
 				}
-				inflow += sum / float64(len(owned))
+				if wsum > 0 {
+					inflow += num / wsum
+				}
 			}
 			next[j] = alpha*inflow + oneMinus*p[j]
 		}
