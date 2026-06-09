@@ -3,9 +3,10 @@ package trustpropagation
 // iteration.go — EigenTrust-style scalar propagation.
 //   t[j] = α·inflow[j] + (1-α)·p[j]
 //   inflow[agent] = Σ_clients M[agent][client]·t[client]   (source-normalized)
-//   inflow[owner] = mean over owned agents of t[agent]      (mean = anti-gaming)
+//   inflow[owner] = weightMass-weighted mean of owned agents' t[agent]  (anti-gaming)
 //   p             = direct reputation normalized to sum 1   (teleport)
-// Output: min-max scaled scores for WALLET nodes only.
+// Output: WalletScores — rated wallets (inflow>0) p99-normalized to [0,100];
+// wallets with no trust evidence listed as Unrated.
 
 import (
 	"math"
