@@ -16,6 +16,7 @@ import (
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/identity"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
@@ -70,6 +71,9 @@ type agentOffchainRepo interface {
 	HasSuccessfulFetch(ctx context.Context, uri string) (bool, error)
 	GetContent(ctx context.Context, uri string) (string, bool, error)
 	FindByURIs(ctx context.Context, uris []string) ([]offchainrepo.OffchainData, error)
+	UpsertSuccess(ctx context.Context, uri, jsonText, sourceType, eventType, contractType string) error
+	UpsertFetchedNotJSON(ctx context.Context, uri, rawBody, sourceType, eventType, contractType string) error
+	UpsertFailure(ctx context.Context, uri, sourceType, eventType, contractType, errMsg string) error
 }
 
 type agentContractRepo interface {
@@ -85,6 +89,7 @@ type AgentDeps struct {
 	Events     agentEventRepo
 	Offchain   agentOffchainRepo
 	Contracts  agentContractRepo
+	Resolver   *domainuri.Resolver
 	Formula    scoring.FormulaConfig
 	Composite  scoring.CompositeWeights
 }
