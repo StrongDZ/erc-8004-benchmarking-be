@@ -3,6 +3,7 @@ package handlers
 // agent.go âÿÿ HTTP handlers for /agents/:chainId/:agentId/* endpoints.
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -413,6 +414,41 @@ func (h *AgentHandler) Registrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.Registrations(r.Context(), chainID, agentID)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
+}
+
+// ReconnectServiceEndpoint handles POST /agents/:chainId/:agentId/services/reconnect.
+// Re-probes one of the agent's registered service endpoints immediately, persists the
+// result to offchain_data, and returns the updated service health.
+// @Summary Reconnect to a registered service endpoint
+// @Tags agents
+// @Accept json
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Param body body dto.ReconnectServiceRequest true "Endpoint to reconnect"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/services/reconnect [post]
+func (h *AgentHandler) ReconnectServiceEndpoint(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+
+	var req dto.ReconnectServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	out, err := h.svc.ReconnectServiceEndpoint(r.Context(), chainID, agentID, req.Endpoint)
 	if err != nil {
 		writeServiceErr(w, r, err)
 		return

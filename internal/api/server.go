@@ -18,6 +18,8 @@ import (
 	"erc-8004-benchmarking-be/internal/api/service"
 	"erc-8004-benchmarking-be/internal/config"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
+	httpclient "erc-8004-benchmarking-be/internal/infra/https"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
@@ -33,6 +35,16 @@ import (
 
 	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+// rawFetchAdapter adapts internal/infra/https.Client to domainuri.RawFetcher.
+type rawFetchAdapter struct {
+	c *httpclient.Client
+}
+
+func (a *rawFetchAdapter) Fetch(ctx context.Context, url string) ([]byte, error) {
+	body, _, _, err := a.c.FetchBody(ctx, url)
+	return body, err
+}
 
 // Repositories groups all read-side repos the API depends on.
 type Repositories struct {
@@ -107,10 +119,17 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.ScoreStats,
 		Crawlers: repos.Crawlers, Formula: formula,
 	})
+	// URI resolver for on-demand service-endpoint reconnects.
+	httpCl := httpclient.NewClientWithOptions(httpclient.ClientOptions{
+		Timeout:   cfg.HTTPSFetchTimeout,
+		UserAgent: cfg.HTTPSUserAgent,
+	})
+	resolver := domainuri.NewResolver(&rawFetchAdapter{c: httpCl}, cfg.IPFSGateway, cfg.ArweaveGateway)
+
 	agentSvc := service.NewAgent(service.AgentDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, ScoreStats: repos.ScoreStats,
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
-		Contracts: repos.Contracts, Formula: formula, Composite: composite,
+		Contracts: repos.Contracts, Resolver: resolver, Formula: formula, Composite: composite,
 	})
 	oasfSvc := service.NewOASF(service.OASFDeps{
 		Agents:            repos.Agents,
@@ -172,6 +191,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/proof/{txHash}", agH.Proof)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/anti-spam", agH.AntiSpam)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/registrations", c30s(http.HandlerFunc(agH.Registrations)))
+	mux.HandleFunc("POST /api/v1/agents/{chainId}/{agentId}/services/reconnect", agH.ReconnectServiceEndpoint)
 
 	// /api/v1/oasf/*
 	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))
