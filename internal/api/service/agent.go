@@ -646,6 +646,76 @@ func (s *Agent) OffchainDataByURI(ctx context.Context, uri string) (*dto.Offchai
 	return out, nil
 }
 
+// ReconnectServiceEndpoint re-probes one of the agent's registered service endpoints right now,
+// writes the result to offchain_data (success, non-JSON, or failure — same as the background
+// ServiceURIConsumer), and returns the updated ServiceOverview for that service.
+func (s *Agent) ReconnectServiceEndpoint(ctx context.Context, chainID int64, agentID, endpoint string) (*dto.ServiceOverview, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil, fmt.Errorf("%w: endpoint is required", ErrInvalidInput)
+	}
+
+	doc, err := s.deps.Agents.FindByAgentID(ctx, chainID, agentID)
+	if err != nil {
+		if errors.Is(err, mongodrv.ErrNoDocuments) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, fmt.Errorf("reconnect service: find agent: %w", err)
+	}
+
+	var svc *agentrepo.RegistrationService
+	for i := range doc.Services {
+		if doc.Services[i].Endpoint == endpoint {
+			svc = &doc.Services[i]
+			break
+		}
+	}
+	if svc == nil {
+		return nil, fmt.Errorf("%w: endpoint is not a registered service for this agent", ErrInvalidInput)
+	}
+
+	sourceType := domainuri.DetectURIType(endpoint).String()
+	const eventType = "service_endpoint"
+	const contractType = "identity"
+
+	body, isJSON, fetchErr := s.deps.Resolver.FetchRaw(ctx, endpoint)
+
+	var health, healthInfo string
+	switch {
+	case fetchErr != nil:
+		health, healthInfo = "fail", fetchErr.Error()
+		if dbErr := s.deps.Offchain.UpsertFailure(ctx, endpoint, sourceType, eventType, contractType, fetchErr.Error()); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write fetch-failure: %w", dbErr)
+		}
+
+	case !isJSON:
+		if scoring.IsJSONRequired(svc.Name) {
+			health, healthInfo = "warning", "fetched but not valid JSON; expected JSON for this endpoint type"
+		} else {
+			health, healthInfo = "ok", ""
+		}
+		if dbErr := s.deps.Offchain.UpsertFetchedNotJSON(ctx, endpoint, string(body), sourceType, eventType, contractType); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write not-json: %w", dbErr)
+		}
+
+	default:
+		health, healthInfo = "ok", ""
+		if dbErr := s.deps.Offchain.UpsertSuccess(ctx, endpoint, string(body), sourceType, eventType, contractType); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write success: %w", dbErr)
+		}
+	}
+
+	return &dto.ServiceOverview{
+		Name:       svc.Name,
+		Endpoint:   svc.Endpoint,
+		Version:    svc.Version,
+		Skills:     svc.Skills,
+		Domains:    svc.Domains,
+		Health:     health,
+		HealthInfo: healthInfo,
+	}, nil
+}
+
 // ActivityHeatmap returns one bucket per UTC day (§3.7).
 func (s *Agent) ActivityHeatmap(ctx context.Context, chainID int64, agentID string, days int) ([]feedbackrepo.HeatmapDay, error) {
 	return s.deps.Feedback.ActivityHeatmap(ctx, chainID, agentID, days)
