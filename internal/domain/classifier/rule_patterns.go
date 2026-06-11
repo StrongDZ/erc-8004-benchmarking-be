@@ -113,8 +113,7 @@ var serviceTag1Set = map[string]bool{
 	"reliabel": true, "excelent": true,
 	// Manual/community quality scores
 	"score": true,
-	// Operation quality ratings — moved from appTag1Set.
-	// Corpus: 97–100% of these records use pct100/star scale → service_feedback.
+
 	"personality": true, "knowledge": true, "timeline": true,
 	"relationship": true, "stance": true, "style": true,
 	"token": true, "swap_token": true, "swap": true,
