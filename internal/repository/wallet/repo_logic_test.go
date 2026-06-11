@@ -58,6 +58,20 @@ func TestComputeColdStartT0_EmptyOwnedAgents_ReturnsDefault(t *testing.T) {
 	}
 }
 
+func TestPickProfileWalletDoc_PrefersRatedHighestScore(t *testing.T) {
+	ratedLow := WalletDocument{Address: "0xabc", TrustRated: true, TrustScore: 40, FeedbackTotalCount: 1}
+	ratedHigh := WalletDocument{Address: "0xabc", TrustRated: true, TrustScore: 90, FeedbackTotalCount: 5}
+	unrated := WalletDocument{Address: "0xabc", TrustRated: false, TrustScore: 99, FeedbackTotalCount: 9}
+
+	got := pickProfileWalletDoc([]WalletDocument{unrated, ratedLow, ratedHigh})
+	if got == nil || got.TrustScore != 90 || !got.TrustRated {
+		t.Fatalf("expected rated 90, got %+v", got)
+	}
+	if got.FeedbackTotalCount != 5 {
+		t.Fatalf("feedbackTotalCount=%d want 5", got.FeedbackTotalCount)
+	}
+}
+
 func TestWalletDocumentID_ProducesExpectedFormat(t *testing.T) {
 	got := WalletDocumentID(8453, "0xABC123")
 	want := "8453:0xabc123"

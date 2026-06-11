@@ -97,3 +97,37 @@ func (h *WalletHandler) FeedbackGiven(w http.ResponseWriter, r *http.Request) {
 	}
 	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
 }
+
+// FeedbackAgents handles GET /wallet/{address}/feedback-agents.
+// Returns paginated distinct agents that received feedback from the wallet.
+// @Summary Distinct agents that received feedback from a wallet
+// @Tags wallet
+// @Produce json
+// @Param address path string true "Wallet address (hex)"
+// @Param page query int false "Page number (default 1)"
+// @Param limit query int false "Page size (max 100, default 20)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /wallet/{address}/feedback-agents [get]
+func (h *WalletHandler) FeedbackAgents(w http.ResponseWriter, r *http.Request) {
+	address := strings.TrimSpace(r.PathValue("address"))
+	if address == "" {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "address is required")
+		return
+	}
+
+	page, limit, skip := dto.ParsePagination(r, 20, 100)
+
+	out, err := h.svc.FeedbackAgents(r.Context(), service.WalletFeedbackAgentsParams{
+		Address: address,
+		Page:    page,
+		Limit:   limit,
+		Skip:    skip,
+	})
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
+}

@@ -117,7 +117,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// Services
 	lbSvc := service.NewLeaderboard(service.LeaderboardDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.ScoreStats,
-		Crawlers: repos.Crawlers, Formula: formula,
+		Crawlers: repos.Crawlers, Wallets: repos.Wallets, Formula: formula,
 	})
 	// URI resolver for on-demand service-endpoint reconnects.
 	httpCl := httpclient.NewClientWithOptions(httpclient.ClientOptions{
@@ -129,7 +129,8 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	agentSvc := service.NewAgent(service.AgentDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, ScoreStats: repos.ScoreStats,
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
-		Contracts: repos.Contracts, Resolver: resolver, Formula: formula, Composite: composite,
+		Contracts: repos.Contracts, Wallet: repos.Wallets, Resolver: resolver,
+		Formula: formula, Composite: composite,
 	})
 	oasfSvc := service.NewOASF(service.OASFDeps{
 		Agents:            repos.Agents,
@@ -174,12 +175,14 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/leaderboard/search", lbH.Search)
 	mux.Handle("GET /api/v1/leaderboard/stats", c30s(http.HandlerFunc(lbH.Stats)))
 	mux.Handle("GET /api/v1/leaderboard/rising-stars", c60s(http.HandlerFunc(lbH.RisingStars)))
+	mux.Handle("GET /api/v1/leaderboard/wallet-ranking", c2m(http.HandlerFunc(lbH.WalletRanking)))
 	mux.Handle("GET /api/v1/leaderboard/tags", c2m(http.HandlerFunc(lbH.Tags)))
 
 	// /api/v1/agents/...
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}", c30s(http.HandlerFunc(agH.Profile)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/overview", c30s(http.HandlerFunc(agH.Overview)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
+	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedback-clients", agH.FeedbackClients)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
 	mux.HandleFunc("GET /api/v1/offchain-by-uri", agH.OffchainByURI)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
@@ -207,6 +210,7 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// /api/v1/wallet/:address/*
 	mux.Handle("GET /api/v1/wallet/{address}", c30s(http.HandlerFunc(walletH.Profile)))
 	mux.HandleFunc("GET /api/v1/wallet/{address}/feedbacks", walletH.FeedbackGiven)
+	mux.HandleFunc("GET /api/v1/wallet/{address}/feedback-agents", walletH.FeedbackAgents)
 
 	// /api/v1/admin/* (gated)
 	adminAuth := middleware.AdminAuth(cfg.AdminAPIKey)

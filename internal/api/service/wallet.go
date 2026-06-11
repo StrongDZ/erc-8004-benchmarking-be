@@ -21,6 +21,8 @@ type walletAgentRepo interface {
 
 type walletFeedbackRepo interface {
 	ListByClientAddress(ctx context.Context, address string, skip, limit int64) ([]feedbackrepo.FeedbackRecord, int64, error)
+	CountDistinctAgentsByClient(ctx context.Context, address string) (int64, error)
+	ListDistinctAgentsByClient(ctx context.Context, address string, skip, limit int64) ([]feedbackrepo.DistinctAgentRow, error)
 }
 
 type walletWalletRepo interface {
@@ -103,6 +105,75 @@ func (s *Wallet) FeedbackGiven(ctx context.Context, p WalletFeedbacksParams) (*W
 	}
 
 	return &WalletFeedbacksResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
+}
+
+// WalletFeedbackAgentsParams carries inputs for /wallet/:address/feedback-agents.
+type WalletFeedbackAgentsParams struct {
+	Address string
+	Page    int
+	Limit   int
+	Skip    int64
+}
+
+// WalletFeedbackAgentsResult carries distinct agents that received feedback from a wallet.
+type WalletFeedbackAgentsResult struct {
+	Rows  []dto.FeedbackAgentRow
+	Total int64
+	Page  int
+	Limit int
+}
+
+// FeedbackAgents returns paginated distinct agents that received feedback from a wallet.
+func (s *Wallet) FeedbackAgents(ctx context.Context, p WalletFeedbackAgentsParams) (*WalletFeedbackAgentsResult, error) {
+	address := strings.TrimSpace(p.Address)
+	if address == "" {
+		return nil, fmt.Errorf("wallet: address is required")
+	}
+
+	total, err := s.deps.Feedback.CountDistinctAgentsByClient(ctx, address)
+	if err != nil {
+		return nil, fmt.Errorf("wallet feedback agents: %w", err)
+	}
+
+	docs, err := s.deps.Feedback.ListDistinctAgentsByClient(ctx, address, p.Skip, int64(p.Limit))
+	if err != nil {
+		return nil, fmt.Errorf("wallet feedback agents: %w", err)
+	}
+	if len(docs) == 0 {
+		return &WalletFeedbackAgentsResult{Rows: []dto.FeedbackAgentRow{}, Total: total, Page: p.Page, Limit: p.Limit}, nil
+	}
+
+	chainAgents := make(map[int64][]string)
+	for _, d := range docs {
+		chainAgents[d.ChainID] = append(chainAgents[d.ChainID], d.AgentID)
+	}
+
+	nameMap := make(map[string]string, len(docs))
+	scoreMap := make(map[string]float64, len(docs))
+	for chainID, agentIDs := range chainAgents {
+		agents, err := s.deps.Agents.FindByIDs(ctx, chainID, dedupStrings(agentIDs))
+		if err != nil {
+			continue
+		}
+		for _, a := range agents {
+			key := statsKey(chainID, a.AgentID)
+			nameMap[key] = a.Name
+			scoreMap[key] = a.CompositeScore
+		}
+	}
+
+	rows := make([]dto.FeedbackAgentRow, 0, len(docs))
+	for _, d := range docs {
+		rows = append(rows, dto.FeedbackAgentRow{
+			AgentID:       d.AgentID,
+			ChainID:       d.ChainID,
+			AgentName:     nameMap[statsKey(d.ChainID, d.AgentID)],
+			FeedbackCount: d.FeedbackCount,
+			TrustScore:    round2(scoreMap[statsKey(d.ChainID, d.AgentID)]),
+		})
+	}
+
+	return &WalletFeedbackAgentsResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
 }
 
 // WalletProfileResult is the response shape for GET /wallet/{address}.

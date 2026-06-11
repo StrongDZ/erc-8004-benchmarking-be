@@ -87,12 +87,7 @@ func buildLeaderboardQuery(f LeaderboardFilter) bson.M {
 	} else if f.ChainID > 0 {
 		q["chainId"] = f.ChainID
 	}
-	if len(f.Skills) > 0 {
-		q["oasfSkills"] = bson.M{"$all": f.Skills}
-	}
-	if len(f.Domains) > 0 {
-		q["oasfDomains"] = bson.M{"$all": f.Domains}
-	}
+	applyOASFPathFilters(q, f.Skills, f.Domains)
 	if len(f.Services) > 0 {
 		lowered := make([]string, 0, len(f.Services))
 		for _, s := range f.Services {

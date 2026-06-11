@@ -75,6 +75,14 @@ type TagCount struct {
 	Count int64  `json:"count"`
 }
 
+// WalletRankingRow is one row of /leaderboard/wallet-ranking.
+type WalletRankingRow struct {
+	Address            string     `json:"address"`
+	Agents             []AgentRow `json:"agents"`
+	TrustScore         *float64   `json:"trustScore"`
+	FeedbackTotalCount int64      `json:"feedbackTotalCount"`
+}
+
 // RisingStarRow is the shape for /leaderboard/rising-stars (§2.3).
 type RisingStarRow struct {
 	ChainID     int64   `json:"chainId"`
@@ -152,6 +160,46 @@ type AgentProfile struct {
 	CreatedAt        string                          `json:"createdAt,omitempty"`
 }
 
+// ServiceX402Enrichment surfaces x402 payment metadata extracted from manifests.
+type ServiceX402Enrichment struct {
+	Enabled  bool   `json:"enabled"`
+	Chain    string `json:"chain,omitempty"`
+	Currency string `json:"currency,omitempty"`
+	Fee      string `json:"fee,omitempty"`
+	PayTo    string `json:"payTo,omitempty"`
+}
+
+// ServiceProbeMeta summarizes the cached offchain probe for a service endpoint.
+type ServiceProbeMeta struct {
+	Status       int    `json:"status"`
+	ContentSize  int    `json:"contentSize,omitempty"`
+	SourceType   string `json:"sourceType,omitempty"`
+	ErrorSummary string `json:"errorSummary,omitempty"`
+}
+
+// ServiceEnrichment is a flattened, UI-ready view derived from registration + offchain cache.
+type ServiceEnrichment struct {
+	Description     string                 `json:"description,omitempty"`
+	Method          string                 `json:"method,omitempty"`
+	PaymentRequired *bool                  `json:"paymentRequired,omitempty"`
+	Protocol        string                 `json:"protocol,omitempty"`
+	ToolCount       int                    `json:"toolCount,omitempty"`
+	Tools           []string               `json:"tools,omitempty"`
+	Prompts         []string               `json:"prompts,omitempty"`
+	SkillPaths      []string               `json:"skillPaths,omitempty"`
+	DomainPaths     []string               `json:"domainPaths,omitempty"`
+	Provider        string                 `json:"provider,omitempty"`
+	Capabilities    []string               `json:"capabilities,omitempty"`
+	InputModes      []string               `json:"inputModes,omitempty"`
+	OutputModes     []string               `json:"outputModes,omitempty"`
+	AuthSchemes     []string               `json:"authSchemes,omitempty"`
+	PageTitle       string                 `json:"pageTitle,omitempty"`
+	PageDescription string                 `json:"pageDescription,omitempty"`
+	PageImage       string                 `json:"pageImage,omitempty"`
+	X402            *ServiceX402Enrichment `json:"x402,omitempty"`
+	Probe           *ServiceProbeMeta      `json:"probe,omitempty"`
+}
+
 // ServiceOverview is one service entry on /agents/:id/overview,
 // augmented with a health status derived from the offchain_data cache.
 type ServiceOverview struct {
@@ -167,6 +215,7 @@ type ServiceOverview struct {
 	// and "unknown" when the endpoint has never been probed.
 	Health     string `json:"health"`
 	HealthInfo string `json:"healthInfo,omitempty"`
+	Enrichment *ServiceEnrichment `json:"enrichment,omitempty"`
 }
 
 // AgentOverview is the payload for GET /agents/:chainId/:agentId/overview.
@@ -299,6 +348,22 @@ type WalletFeedbackRow struct {
 	AgentID   string `json:"agentId"`
 	ChainID   int64  `json:"chainId"`
 	AgentName string `json:"agentName,omitempty"`
+}
+
+// FeedbackClientRow is one wallet in GET /agents/:chainId/:agentId/feedback-clients.
+type FeedbackClientRow struct {
+	ClientAddress string   `json:"clientAddress"`
+	FeedbackCount int64    `json:"feedbackCount"`
+	TrustScore    *float64 `json:"trustScore,omitempty"`
+}
+
+// FeedbackAgentRow is one agent in GET /wallet/:address/feedback-agents.
+type FeedbackAgentRow struct {
+	AgentID       string  `json:"agentId"`
+	ChainID       int64   `json:"chainId"`
+	AgentName     string  `json:"agentName,omitempty"`
+	FeedbackCount int64   `json:"feedbackCount"`
+	TrustScore    float64 `json:"trustScore"`
 }
 
 // ProofResponse is the /agents/:id/proof/:txHash payload (§3.10).

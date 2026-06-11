@@ -202,6 +202,121 @@ func (r *Repository) IncrementFeedbackCounters(ctx context.Context, chainID int6
 	return nil
 }
 
+// WalletRankingSummary holds wallet fields needed for the wallet ranking list.
+type WalletRankingSummary struct {
+	TrustScore         *float64
+	FeedbackTotalCount int64
+}
+
+// pickProfileWalletDoc mirrors wallet.Profile selection: prefer trustRated docs,
+// then highest trustScore across chain-specific wallet records.
+func pickProfileWalletDoc(docs []WalletDocument) *WalletDocument {
+	if len(docs) == 0 {
+		return nil
+	}
+	best := &docs[0]
+	for i := 1; i < len(docs); i++ {
+		d := &docs[i]
+		if d.TrustRated && !best.TrustRated {
+			best = d
+			continue
+		}
+		if d.TrustRated == best.TrustRated && d.TrustScore > best.TrustScore {
+			best = d
+		}
+	}
+	return best
+}
+
+// FindRankingSummariesByAddresses returns profile-style wallet summaries for many
+// addresses in one query. Missing addresses are omitted from the result map.
+func (r *Repository) FindRankingSummariesByAddresses(ctx context.Context, addresses []string) (map[string]WalletRankingSummary, error) {
+	norm := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
+	for _, addr := range addresses {
+		n := normalizeAddress(addr)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		norm = append(norm, n)
+	}
+	if len(norm) == 0 {
+		return map[string]WalletRankingSummary{}, nil
+	}
+
+	docs, err := r.Find(ctx, bson.M{"address": bson.M{"$in": norm}},
+		options.Find().SetProjection(bson.M{
+			"address": 1, "trustScore": 1, "trustRated": 1, "feedbackTotalCount": 1,
+		}))
+	if err != nil {
+		return nil, fmt.Errorf("wallet repo: find ranking summaries: %w", err)
+	}
+
+	byAddr := make(map[string][]WalletDocument, len(norm))
+	for _, doc := range docs {
+		byAddr[doc.Address] = append(byAddr[doc.Address], doc)
+	}
+
+	out := make(map[string]WalletRankingSummary, len(byAddr))
+	for addr, group := range byAddr {
+		doc := pickProfileWalletDoc(group)
+		if doc == nil {
+			continue
+		}
+		var trust *float64
+		if doc.TrustRated {
+			v := doc.TrustScore
+			trust = &v
+		}
+		out[addr] = WalletRankingSummary{
+			TrustScore:         trust,
+			FeedbackTotalCount: doc.FeedbackTotalCount,
+		}
+	}
+	return out, nil
+}
+
+// FindBestTrustByAddresses returns the highest trustScore per address across chains.
+// Only rated wallets (trustRated=true) are included.
+func (r *Repository) FindBestTrustByAddresses(ctx context.Context, addresses []string) (map[string]float64, error) {
+	norm := make([]string, 0, len(addresses))
+	seen := make(map[string]struct{}, len(addresses))
+	for _, addr := range addresses {
+		n := normalizeAddress(addr)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		norm = append(norm, n)
+	}
+	if len(norm) == 0 {
+		return map[string]float64{}, nil
+	}
+
+	docs, err := r.Find(ctx, bson.M{
+		"address":    bson.M{"$in": norm},
+		"trustRated": true,
+	}, options.Find().SetProjection(bson.M{"address": 1, "trustScore": 1}))
+	if err != nil {
+		return nil, fmt.Errorf("wallet repo: find best trust by addresses: %w", err)
+	}
+
+	best := make(map[string]float64, len(norm))
+	for _, doc := range docs {
+		if prev, ok := best[doc.Address]; !ok || doc.TrustScore > prev {
+			best[doc.Address] = doc.TrustScore
+		}
+	}
+	return best, nil
+}
+
 // FindAllByAddress returns wallet documents for a given address across all chains,
 // sorted by trustScore descending. At most 10 results.
 func (r *Repository) FindAllByAddress(ctx context.Context, address string) ([]WalletDocument, error) {
