@@ -462,3 +462,22 @@ func (r *Repository) BulkSetExternal(ctx context.Context, updates []ExternalUpda
 	_, err := r.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
 	return err
 }
+
+// FindExternalByIDs returns cached external enrichment for the given wallet
+// ids. Ids not present in the collection are simply absent from the result
+// map (not an error).
+func (r *Repository) FindExternalByIDs(ctx context.Context, ids []string) (map[string]ExternalDoc, error) {
+	if len(ids) == 0 {
+		return map[string]ExternalDoc{}, nil
+	}
+	docs, err := r.Find(ctx, bson.M{"_id": bson.M{"$in": ids}},
+		options.Find().SetProjection(bson.M{"_id": 1, "external": 1}))
+	if err != nil {
+		return nil, fmt.Errorf("wallet repo: find external by ids: %w", err)
+	}
+	out := make(map[string]ExternalDoc, len(docs))
+	for _, d := range docs {
+		out[d.ID] = d.External
+	}
+	return out, nil
+}
