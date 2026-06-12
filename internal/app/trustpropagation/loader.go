@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"erc-8004-benchmarking-be/internal/domain/extscore"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrep "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrep "erc-8004-benchmarking-be/internal/repository/feedback"
@@ -46,8 +47,9 @@ func LoadGraph(ctx context.Context, deps LoaderDeps, chainID int64) (GraphData, 
 
 	nodeMap := make(map[string]GraphNode, len(wallets)+len(components))
 	for _, w := range wallets {
+		reliability := scoring.ReviewerReliability(w.FeedbackValidCount, w.FeedbackJunkCount)
 		nodeMap[w.ID] = GraphNode{ID: w.ID, Kind: NodeKindWallet,
-			DirectRep: scoring.ReviewerReliability(w.FeedbackValidCount, w.FeedbackJunkCount)}
+			DirectRep: extscore.BlendTeleport(reliability, w.External.Score, w.External.Present, extscore.TeleportGamma)}
 	}
 	for _, c := range components {
 		id := nodeID(c.ChainID, c.AgentID)

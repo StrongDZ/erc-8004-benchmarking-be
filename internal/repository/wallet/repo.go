@@ -346,6 +346,7 @@ func (r *Repository) ScanAll(ctx context.Context, chainID int64) ([]WalletDocume
 		SetProjection(bson.M{
 			"_id": 1, "address": 1, "chainId": 1,
 			"feedbackValidCount": 1, "feedbackJunkCount": 1, "ownedAgentIds": 1,
+			"external": 1,
 		}).
 		SetBatchSize(10000),
 	)
