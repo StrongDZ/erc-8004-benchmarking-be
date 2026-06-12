@@ -7,7 +7,11 @@ package extenrich
 // partial Score_ext (Age/Counterparties absent, Complete=false).
 //
 // RunExplorer: Etherscan V2 txlist age+counterparties, gated on
-// ETHERSCAN_API_KEY — fills the remaining features and sets Complete=true.
+// ETHERSCAN_API_KEYS — fills the remaining features and sets Complete=true.
+//
+// Both passes are cache-first against erc8004.wallet_external_cache: a
+// wallet already enriched (in this or a prior analyzed_agents lifetime) is
+// never re-fetched via RPC/Etherscan (see cache.go).
 
 import (
 	"context"
@@ -48,6 +52,7 @@ const cheapBatchSize = 40
 
 type App struct {
 	wallets    *wallet.Repository
+	cache      *wallet.Repository
 	rpcByChain map[int64][]string
 	httpc      *http.Client
 	price      price.Provider
@@ -64,6 +69,7 @@ func New(ctx context.Context, cfg config.Config, client *mongo.Client, httpc *ht
 	}
 	return &App{
 		wallets:    wallet.NewRepository(client.Database(cfg.AnalyzedDatabase), cfg.WalletColl),
+		cache:      wallet.NewRepository(client.Database(cfg.MongoDatabase), cfg.WalletExternalCacheColl),
 		rpcByChain: loadRPCs(ctx, client, cfg),
 		httpc:      httpc,
 		price:      price.NewStatic(nativeUSD),
@@ -125,6 +131,31 @@ func (a *App) RunCheap(ctx context.Context) error {
 }
 
 func (a *App) cheapPassChain(ctx context.Context, chainID int64, rpcs []string, wallets []wallet.WalletDocument) error {
+	ids := make([]string, len(wallets))
+	for i, w := range wallets {
+		ids[i] = w.ID
+	}
+	cached := a.lookupCache(ctx, ids)
+
+	var hits []wallet.ExternalUpdate
+	var misses []wallet.WalletDocument
+	for _, w := range wallets {
+		if upd, ok := cacheHitUpdate(w.ID, cached); ok {
+			hits = append(hits, upd)
+			continue
+		}
+		misses = append(misses, w)
+	}
+	if len(hits) > 0 {
+		if err := a.wallets.BulkSetExternal(ctx, hits); err != nil {
+			return fmt.Errorf("extenrich: cheap chain=%d: write cache hits: %w", chainID, err)
+		}
+		log.Printf("extenrich: cheap chain=%d: %d wallet(s) from cache", chainID, len(hits))
+	}
+	if len(misses) == 0 {
+		return nil
+	}
+
 	rpcClient := rpc.NewClient(a.httpc, rpcs)
 	usdPrice, _ := a.price.NativeUSD(chainID)
 	now := time.Now().Unix()
@@ -150,12 +181,12 @@ func (a *App) cheapPassChain(ctx context.Context, chainID int64, rpcs []string, 
 			}
 		}()
 	}
-	for i := 0; i < len(wallets); i += cheapBatchSize {
+	for i := 0; i < len(misses); i += cheapBatchSize {
 		end := i + cheapBatchSize
-		if end > len(wallets) {
-			end = len(wallets)
+		if end > len(misses) {
+			end = len(misses)
 		}
-		jobs <- wallets[i:end]
+		jobs <- misses[i:end]
 	}
 	close(jobs)
 	wg.Wait()
@@ -201,7 +232,7 @@ func (a *App) cheapPassBatch(ctx context.Context, rpcClient *rpc.Client, usdPric
 	if len(updates) == 0 {
 		return nil
 	}
-	return a.wallets.BulkSetExternal(ctx, updates)
+	return a.writeThrough(ctx, updates)
 }
 
 func weiToFloat(wei *big.Int) float64 {
