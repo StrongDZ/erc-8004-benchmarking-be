@@ -13,23 +13,24 @@ import (
 
 type Config struct {
 	// MongoDB
-	MongoURI           string
-	MongoDatabase      string
-	AnalyzedDatabase   string
-	ContractsColl      string
-	CrawlersColl       string
-	EventsColl         string // decoded events collection
-	OffchainColl       string
-	ConfigColl         string
-	AgentsColl         string
-	IdentityHistColl   string
-	ScoreHistColl      string
-	FeedbackHistColl   string
-	TagStatsColl       string // tag_value_stats — per-tag tier vote counters
-	TagCorrectionsColl string // changed_tag_scales — rescale correction queue
-	RescaleDeltasColl  string // rescale_deltas — pre-computed per-agent deltas
-	ScoreStatsColl     string // agent_score_stats — periodic materialized view
-	WalletColl         string // wallets — unified wallet trust nodes
+	MongoURI                string
+	MongoDatabase           string
+	AnalyzedDatabase        string
+	ContractsColl           string
+	CrawlersColl            string
+	EventsColl              string // decoded events collection
+	OffchainColl            string
+	ConfigColl              string
+	AgentsColl              string
+	IdentityHistColl        string
+	ScoreHistColl           string
+	FeedbackHistColl        string
+	TagStatsColl            string // tag_value_stats — per-tag tier vote counters
+	TagCorrectionsColl      string // changed_tag_scales — rescale correction queue
+	RescaleDeltasColl       string // rescale_deltas — pre-computed per-agent deltas
+	ScoreStatsColl          string // agent_score_stats — periodic materialized view
+	WalletColl              string // wallets — unified wallet trust nodes
+	WalletExternalCacheColl string // wallet_external_cache — permanent RPC/Etherscan enrichment cache (erc8004 db, survives analyzed_agents resets)
 
 	// Score-refresh worker
 	ScoreRefreshCron      string // cron expression, default "*/30 * * * *"
@@ -129,9 +130,10 @@ type Config struct {
 	RateLimitRPS   float64 // requests per second per IP (default 20)
 	RateLimitBurst int     // burst depth (default 40)
 
-	// External wallet trust (Score_ext): Etherscan V2 multichain API key for
-	// the explorer enrichment pass (age + counterparties). Empty → cheap-only.
-	EtherscanAPIKey string
+	// External wallet trust (Score_ext): Etherscan V2 multichain API key(s) for
+	// the explorer enrichment pass (age + counterparties). One worker per key;
+	// empty → cheap-only.
+	EtherscanAPIKeys []string
 }
 
 // loadDotEnv loads the first .env found walking upward from the process working directory.
@@ -159,23 +161,24 @@ func Load() (Config, error) {
 	loadDotEnv()
 
 	cfg := Config{
-		MongoURI:           utils.Getenv("MONGO_URI", "mongodb://localhost:27017"),
-		MongoDatabase:      utils.Getenv("MONGO_DATABASE", "erc8004"),
-		AnalyzedDatabase:   utils.Getenv("MONGO_DATABASE_ANALYZED_AGENTS", "analyzed_agents"),
-		ContractsColl:      utils.Getenv("MONGO_COLLECTION_CONTRACTS", "contracts"),
-		CrawlersColl:       utils.Getenv("MONGO_COLLECTION_CRAWLERS", "crawlers"),
-		EventsColl:         utils.Getenv("MONGO_COLLECTION_EVENTS", "events"),
-		OffchainColl:       utils.Getenv("MONGO_COLLECTION_OFFCHAIN_DATA", "offchain_data"),
-		ConfigColl:         utils.Getenv("MONGO_COLLECTION_CONFIG", "config"),
-		AgentsColl:         utils.Getenv("MONGO_COLLECTION_AGENTS", "agents"),
-		IdentityHistColl:   utils.Getenv("MONGO_COLLECTION_IDENTITY_HISTORY", "identity_history"),
-		ScoreHistColl:      utils.Getenv("MONGO_COLLECTION_SCORE_HISTORY", "score_history"),
-		FeedbackHistColl:   utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
-		TagStatsColl:       utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
-		TagCorrectionsColl: utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
-		RescaleDeltasColl:  utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
-		ScoreStatsColl:     utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
-		WalletColl:         utils.Getenv("MONGO_COLLECTION_WALLETS", "wallets"),
+		MongoURI:                utils.Getenv("MONGO_URI", "mongodb://localhost:27017"),
+		MongoDatabase:           utils.Getenv("MONGO_DATABASE", "erc8004"),
+		AnalyzedDatabase:        utils.Getenv("MONGO_DATABASE_ANALYZED_AGENTS", "analyzed_agents"),
+		ContractsColl:           utils.Getenv("MONGO_COLLECTION_CONTRACTS", "contracts"),
+		CrawlersColl:            utils.Getenv("MONGO_COLLECTION_CRAWLERS", "crawlers"),
+		EventsColl:              utils.Getenv("MONGO_COLLECTION_EVENTS", "events"),
+		OffchainColl:            utils.Getenv("MONGO_COLLECTION_OFFCHAIN_DATA", "offchain_data"),
+		ConfigColl:              utils.Getenv("MONGO_COLLECTION_CONFIG", "config"),
+		AgentsColl:              utils.Getenv("MONGO_COLLECTION_AGENTS", "agents"),
+		IdentityHistColl:        utils.Getenv("MONGO_COLLECTION_IDENTITY_HISTORY", "identity_history"),
+		ScoreHistColl:           utils.Getenv("MONGO_COLLECTION_SCORE_HISTORY", "score_history"),
+		FeedbackHistColl:        utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
+		TagStatsColl:            utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
+		TagCorrectionsColl:      utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
+		RescaleDeltasColl:       utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
+		ScoreStatsColl:          utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
+		WalletColl:              utils.Getenv("MONGO_COLLECTION_WALLETS", "wallets"),
+		WalletExternalCacheColl: utils.Getenv("MONGO_COLLECTION_WALLET_EXTERNAL_CACHE", "wallet_external_cache"),
 
 		ScoreRefreshCron:      utils.Getenv("SCORE_REFRESH_CRON", "*/30 * * * *"),
 		OASFSchemaRefreshCron: utils.Getenv("OASF_SCHEMA_REFRESH_CRON", "0 0 * * 0"),
@@ -255,7 +258,7 @@ func Load() (Config, error) {
 		RateLimitRPS:   utils.GetenvFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst: utils.GetenvInt("RATE_LIMIT_BURST", 40),
 
-		EtherscanAPIKey: utils.Getenv("ETHERSCAN_API_KEY", ""),
+		EtherscanAPIKeys: splitCSV(utils.Getenv("ETHERSCAN_API_KEYS", "")),
 	}
 
 	if cfg.ServiceURIConsumerWorkers < 1 {
