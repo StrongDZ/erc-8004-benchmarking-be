@@ -6,6 +6,7 @@ package explorer
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,6 +15,9 @@ import (
 )
 
 const baseURL = "https://api.etherscan.io/v2/api"
+
+// maxBodyBytes caps the txlist response; offset=10000 can return several MB of JSON.
+const maxBodyBytes = 10 << 20
 
 type Client struct {
 	httpc  *http.Client
@@ -60,14 +64,9 @@ func (c *Client) FetchFeatures(chainID int64, address string, now time.Time) (Fe
 		return Features{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	buf := make([]byte, 0)
-	tmp := make([]byte, 32*1024)
-	for {
-		n, rerr := resp.Body.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if rerr != nil {
-			break
-		}
+	buf, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return Features{}, fmt.Errorf("explorer read: %w", err)
 	}
 	return parseTxlist(buf, strings.ToLower(address), now)
 }
@@ -78,6 +77,9 @@ func parseTxlist(body []byte, walletLower string, now time.Time) (Features, erro
 		return Features{}, fmt.Errorf("explorer decode: %w", err)
 	}
 	if len(r.Result) == 0 {
+		if r.Status == "0" && r.Message != "No transactions found" {
+			return Features{}, fmt.Errorf("explorer error: %s", r.Message)
+		}
 		return Features{HasHistory: false}, nil
 	}
 	firstTs, _ := strconv.ParseInt(r.Result[0].TimeStamp, 10, 64)
