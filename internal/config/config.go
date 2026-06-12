@@ -128,6 +128,10 @@ type Config struct {
 	// Rate limiting (per IP, token bucket)
 	RateLimitRPS   float64 // requests per second per IP (default 20)
 	RateLimitBurst int     // burst depth (default 40)
+
+	// External wallet trust (Score_ext): Etherscan V2 multichain API key for
+	// the explorer enrichment pass (age + counterparties). Empty → cheap-only.
+	EtherscanAPIKey string
 }
 
 // loadDotEnv loads the first .env found walking upward from the process working directory.
@@ -250,6 +254,8 @@ func Load() (Config, error) {
 
 		RateLimitRPS:   utils.GetenvFloat("RATE_LIMIT_RPS", 20),
 		RateLimitBurst: utils.GetenvInt("RATE_LIMIT_BURST", 40),
+
+		EtherscanAPIKey: utils.Getenv("ETHERSCAN_API_KEY", ""),
 	}
 
 	if cfg.ServiceURIConsumerWorkers < 1 {
