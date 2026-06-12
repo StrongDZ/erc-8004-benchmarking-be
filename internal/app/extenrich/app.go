@@ -51,31 +51,32 @@ var nativeUSD = map[int64]float64{
 const cheapBatchSize = 40
 
 type App struct {
-	wallets    *wallet.Repository
-	cache      *wallet.Repository
-	rpcByChain map[int64][]string
-	httpc      *http.Client
-	price      price.Provider
-	explorer   *explorer.Client
-	workers    int
-	rate       float64
+	wallets         *wallet.Repository
+	cache           *wallet.Repository
+	rpcByChain      map[int64][]string
+	httpc           *http.Client
+	price           price.Provider
+	explorerClients []*explorer.Client
+	workers         int
+	rate            float64
 }
 
-// New constructs the enrich orchestrator. explorerClient is nil when
-// ETHERSCAN_API_KEY is unset — RunExplorer becomes a no-op.
-func New(ctx context.Context, cfg config.Config, client *mongo.Client, httpc *http.Client, explorerClient *explorer.Client, workers int, rate float64) *App {
+// New constructs the enrich orchestrator. explorerClients is empty when
+// ETHERSCAN_API_KEYS is unset — RunExplorer becomes a no-op. One worker
+// goroutine is spawned per client during RunExplorer.
+func New(ctx context.Context, cfg config.Config, client *mongo.Client, httpc *http.Client, explorerClients []*explorer.Client, workers int, rate float64) *App {
 	if workers < 1 {
 		workers = 1
 	}
 	return &App{
-		wallets:    wallet.NewRepository(client.Database(cfg.AnalyzedDatabase), cfg.WalletColl),
-		cache:      wallet.NewRepository(client.Database(cfg.MongoDatabase), cfg.WalletExternalCacheColl),
-		rpcByChain: loadRPCs(ctx, client, cfg),
-		httpc:      httpc,
-		price:      price.NewStatic(nativeUSD),
-		explorer:   explorerClient,
-		workers:    workers,
-		rate:       rate,
+		wallets:         wallet.NewRepository(client.Database(cfg.AnalyzedDatabase), cfg.WalletColl),
+		cache:           wallet.NewRepository(client.Database(cfg.MongoDatabase), cfg.WalletExternalCacheColl),
+		rpcByChain:      loadRPCs(ctx, client, cfg),
+		httpc:           httpc,
+		price:           price.NewStatic(nativeUSD),
+		explorerClients: explorerClients,
+		workers:         workers,
+		rate:            rate,
 	}
 }
 
@@ -247,12 +248,16 @@ func weiToFloat(wei *big.Int) float64 {
 
 // RunExplorer fetches age + unique-counterparty count via Etherscan for
 // wallets that have cheap enrichment but are not yet Complete. No-op if no
-// explorer client was configured (ETHERSCAN_API_KEY unset). Wallets that
+// explorer clients were configured (ETHERSCAN_API_KEYS unset). Wallets cached
+// from a prior run (Complete=true in erc8004.wallet_external_cache) are
+// repopulated without an Etherscan call. One worker goroutine runs per
+// configured API key, each independently rate-limited at a.rate req/s, so
+// total throughput scales linearly with the number of keys. Wallets that
 // finish this pass are marked Complete and drop out of future scans —
 // re-running RunExplorer naturally resumes with the remaining wallets.
 func (a *App) RunExplorer(ctx context.Context) error {
-	if a.explorer == nil {
-		log.Print("extenrich: explorer pass skipped (no ETHERSCAN_API_KEY)")
+	if len(a.explorerClients) == 0 {
+		log.Print("extenrich: explorer pass skipped (no ETHERSCAN_API_KEYS)")
 		return nil
 	}
 	wallets, err := a.wallets.Find(ctx,
@@ -266,58 +271,122 @@ func (a *App) RunExplorer(ctx context.Context) error {
 		return nil
 	}
 
+	ids := make([]string, len(wallets))
+	for i, w := range wallets {
+		ids[i] = w.ID
+	}
+	cached := a.lookupCache(ctx, ids)
+
+	var hits []wallet.ExternalUpdate
+	var misses []wallet.WalletDocument
+	for _, w := range wallets {
+		if upd, ok := explorerCacheHit(w.ID, cached); ok {
+			hits = append(hits, upd)
+			continue
+		}
+		misses = append(misses, w)
+	}
+	if len(hits) > 0 {
+		if err := a.wallets.BulkSetExternal(ctx, hits); err != nil {
+			return fmt.Errorf("extenrich: explorer: write cache hits: %w", err)
+		}
+		log.Printf("extenrich: explorer: %d wallet(s) from cache", len(hits))
+	}
+	if len(misses) == 0 {
+		return nil
+	}
+
 	interval := time.Second
 	if a.rate > 0 {
 		interval = time.Duration(float64(time.Second) / a.rate)
 	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 
+	jobs := make(chan wallet.WalletDocument)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
 	enriched := 0
-	for _, w := range wallets {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
 
-		feat, err := a.explorer.FetchFeatures(w.ChainID, w.Address, time.Now())
-		if err != nil {
-			log.Printf("extenrich: explorer %s: %v", w.ID, err)
-			continue
-		}
-		f := extscore.Features{
-			BalanceUSD:            w.External.BalanceUSD,
-			Nonce:                 w.External.Nonce,
-			AgeDays:               feat.AgeDays,
-			UniqueCounterparties:  feat.UniqueCounterparties,
-			HasENS:                w.External.HasENS,
-			BalancePresent:        true,
-			NoncePresent:          true,
-			AgePresent:            true,
-			CounterpartiesPresent: true,
-			ENSApplicable:         w.ChainID == 1,
-		}
-		update := wallet.ExternalUpdate{
-			ID: w.ID,
-			Doc: wallet.ExternalDoc{
-				Score:          extscore.Score(f),
-				Complete:       extscore.Complete(f),
-				Present:        true,
-				BalanceUSD:     w.External.BalanceUSD,
-				Nonce:          w.External.Nonce,
-				AgeDays:        feat.AgeDays,
-				Counterparties: feat.UniqueCounterparties,
-				HasENS:         w.External.HasENS,
-				CheapAt:        w.External.CheapAt,
-				ExplorerAt:     time.Now().Unix(),
-			},
-		}
-		if err := a.wallets.BulkSetExternal(ctx, []wallet.ExternalUpdate{update}); err != nil {
-			return fmt.Errorf("extenrich: explorer: write %s: %w", w.ID, err)
-		}
-		enriched++
+	for _, client := range a.explorerClients {
+		wg.Add(1)
+		go func(client *explorer.Client) {
+			defer wg.Done()
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for w := range jobs {
+				select {
+				case <-ctx.Done():
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = ctx.Err()
+					}
+					mu.Unlock()
+					return
+				case <-ticker.C:
+				}
+
+				feat, err := client.FetchFeatures(w.ChainID, w.Address, time.Now())
+				if err != nil {
+					log.Printf("extenrich: explorer %s: %v", w.ID, err)
+					continue
+				}
+				f := extscore.Features{
+					BalanceUSD:            w.External.BalanceUSD,
+					Nonce:                 w.External.Nonce,
+					AgeDays:               feat.AgeDays,
+					UniqueCounterparties:  feat.UniqueCounterparties,
+					HasENS:                w.External.HasENS,
+					BalancePresent:        true,
+					NoncePresent:          true,
+					AgePresent:            true,
+					CounterpartiesPresent: true,
+					ENSApplicable:         w.ChainID == 1,
+				}
+				update := wallet.ExternalUpdate{
+					ID: w.ID,
+					Doc: wallet.ExternalDoc{
+						Score:          extscore.Score(f),
+						Complete:       extscore.Complete(f),
+						Present:        true,
+						BalanceUSD:     w.External.BalanceUSD,
+						Nonce:          w.External.Nonce,
+						AgeDays:        feat.AgeDays,
+						Counterparties: feat.UniqueCounterparties,
+						HasENS:         w.External.HasENS,
+						CheapAt:        w.External.CheapAt,
+						ExplorerAt:     time.Now().Unix(),
+					},
+				}
+				if err := a.writeThrough(ctx, []wallet.ExternalUpdate{update}); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = fmt.Errorf("extenrich: explorer: write %s: %w", w.ID, err)
+					}
+					mu.Unlock()
+					continue
+				}
+				mu.Lock()
+				enriched++
+				mu.Unlock()
+			}
+		}(client)
 	}
-	log.Printf("extenrich: explorer: enriched %d/%d wallet(s)", enriched, len(wallets))
+
+	go func() {
+		defer close(jobs)
+		for _, w := range misses {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- w:
+			}
+		}
+	}()
+
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
+	}
+	log.Printf("extenrich: explorer: enriched %d/%d wallet(s) (%d from cache)", enriched, len(wallets), len(hits))
 	return nil
 }
