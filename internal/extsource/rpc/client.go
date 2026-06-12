@@ -12,10 +12,6 @@ import (
 	"net/http"
 )
 
-type HTTPDoer interface {
-	Post(url, contentType string, body *bytes.Reader) (*http.Response, error)
-}
-
 type Client struct {
 	httpc *http.Client
 	rpcs  []string
