@@ -6,6 +6,8 @@
 *.dylib
 bin/
 out/
+# go build ./... writes a root binary per cmd/workers/* main package
+/api
 
 # Test coverage and profiling outputs
 *.out
