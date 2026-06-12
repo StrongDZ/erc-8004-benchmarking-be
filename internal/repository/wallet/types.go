@@ -43,6 +43,24 @@ type WalletDocument struct {
 
 	CreatedAt int64 `bson:"createdAt"`
 	UpdatedAt int64 `bson:"updatedAt"`
+
+	External ExternalDoc `bson:"external"`
+}
+
+// ExternalDoc is the external on-chain trust enrichment for a wallet (1:1).
+// Score is partial-renormed until Complete. Present is true once any feature
+// has been written (gates the teleport blend).
+type ExternalDoc struct {
+	Score          float64 `bson:"score"`
+	Complete       bool    `bson:"complete"`
+	Present        bool    `bson:"present"`
+	BalanceUSD     float64 `bson:"balanceUSD"`
+	Nonce          uint64  `bson:"nonce"`
+	AgeDays        float64 `bson:"ageDays"`
+	Counterparties int     `bson:"counterparties"`
+	HasENS         bool    `bson:"hasENS"`
+	CheapAt        int64   `bson:"cheapAt,omitempty"`
+	ExplorerAt     int64   `bson:"explorerAt,omitempty"`
 }
 
 // Repository wraps the wallets collection.

@@ -2,6 +2,17 @@ package wallet
 
 import "testing"
 
+func TestBuildExternalUpdate(t *testing.T) {
+	in := ExternalUpdate{ID: "1:0xabc", Doc: ExternalDoc{Score: 62.4, Present: true, Complete: false}}
+	set := buildExternalSet(in)
+	if set["external.score"] != 62.4 {
+		t.Fatalf("want score path set, got %v", set["external.score"])
+	}
+	if set["external.present"] != true {
+		t.Fatalf("want present path set, got %v", set["external.present"])
+	}
+}
+
 func TestNormalizeAddress_LowercasesAndTrims(t *testing.T) {
 	cases := []struct {
 		in, want string

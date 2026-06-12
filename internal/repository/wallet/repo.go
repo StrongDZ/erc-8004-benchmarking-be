@@ -421,3 +421,42 @@ func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64)
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	return err
 }
+
+// ExternalUpdate is one wallet's external enrichment to persist.
+type ExternalUpdate struct {
+	ID  string
+	Doc ExternalDoc
+}
+
+// buildExternalSet maps an ExternalUpdate to the $set field paths (kept pure for
+// testing). Only dotted paths are written so other wallet fields are untouched.
+func buildExternalSet(u ExternalUpdate) bson.M {
+	d := u.Doc
+	return bson.M{
+		"external.score":          d.Score,
+		"external.complete":       d.Complete,
+		"external.present":        d.Present,
+		"external.balanceUSD":     d.BalanceUSD,
+		"external.nonce":          d.Nonce,
+		"external.ageDays":        d.AgeDays,
+		"external.counterparties": d.Counterparties,
+		"external.hasENS":         d.HasENS,
+		"external.cheapAt":        d.CheapAt,
+		"external.explorerAt":     d.ExplorerAt,
+	}
+}
+
+// BulkSetExternal upserts external enrichment for many wallets by _id.
+func (r *Repository) BulkSetExternal(ctx context.Context, updates []ExternalUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	models := make([]mongodrv.WriteModel, 0, len(updates))
+	for _, u := range updates {
+		models = append(models, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": u.ID}).
+			SetUpdate(bson.M{"$set": buildExternalSet(u)}))
+	}
+	_, err := r.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	return err
+}
