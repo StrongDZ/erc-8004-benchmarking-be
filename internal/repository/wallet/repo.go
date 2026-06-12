@@ -456,7 +456,8 @@ func (r *Repository) BulkSetExternal(ctx context.Context, updates []ExternalUpda
 	for _, u := range updates {
 		models = append(models, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": u.ID}).
-			SetUpdate(bson.M{"$set": buildExternalSet(u)}))
+			SetUpdate(bson.M{"$set": buildExternalSet(u)}).
+			SetUpsert(true))
 	}
 	_, err := r.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
 	return err
