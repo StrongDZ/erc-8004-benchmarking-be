@@ -188,6 +188,8 @@ type WalletProfileResult struct {
 	FeedbackJunkCount  int64    `json:"feedbackJunkCount"`
 	JunkRatio          float64  `json:"junkRatio"`
 	OwnedAgentIDs      []string `json:"ownedAgentIds,omitempty"`
+	ExternalScore      *float64 `json:"externalScore"`
+	ExternalComplete   bool     `json:"externalComplete"`
 }
 
 // Profile returns the trust profile for a wallet address.
@@ -229,6 +231,14 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 		trust = &v
 	}
 
+	var externalScore *float64
+	var externalComplete bool
+	if doc.External.Present {
+		v := doc.External.Score
+		externalScore = &v
+		externalComplete = doc.External.Complete
+	}
+
 	return &WalletProfileResult{
 		Address:            doc.Address,
 		ChainID:            doc.ChainID,
@@ -240,6 +250,8 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 		FeedbackJunkCount:  doc.FeedbackJunkCount,
 		JunkRatio:          doc.JunkRatio,
 		OwnedAgentIDs:      doc.OwnedAgentIDs,
+		ExternalScore:      externalScore,
+		ExternalComplete:   externalComplete,
 	}, nil
 }
 
