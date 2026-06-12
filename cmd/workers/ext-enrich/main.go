@@ -3,10 +3,13 @@ package main
 // ext-enrich — external on-chain wallet trust enrichment.
 //
 // Cheap pass (always runs): batched eth_getBalance + eth_getTransactionCount
-// via the RPCs stored in erc8004.contracts. No API key required.
+// via the RPCs stored in erc8004.contracts. No API key required. Wallets
+// already in erc8004.wallet_external_cache are reused without an RPC call.
 //
-// Explorer pass (only if ETHERSCAN_API_KEY is set): Etherscan V2 txlist for
-// age + unique counterparties, rate-limited to --rate req/s.
+// Explorer pass (only if ETHERSCAN_API_KEYS is set): Etherscan V2 txlist for
+// age + unique counterparties, rate-limited to --rate req/s PER key (one
+// worker per key). Wallets already cached with Complete=true are reused
+// without an Etherscan call.
 //
 // Run: go run ./cmd/workers/ext-enrich [--cheap-only] [--workers=10] [--rate=5]
 
@@ -44,12 +47,12 @@ func main() {
 
 	httpc := &http.Client{Timeout: 15 * time.Second}
 
-	var explorerClient *explorer.Client
-	if cfg.EtherscanAPIKey != "" {
-		explorerClient = explorer.NewClient(httpc, cfg.EtherscanAPIKey)
+	explorerClients := make([]*explorer.Client, 0, len(cfg.EtherscanAPIKeys))
+	for _, key := range cfg.EtherscanAPIKeys {
+		explorerClients = append(explorerClients, explorer.NewClient(httpc, key))
 	}
 
-	app := extenrich.New(ctx, cfg, client, httpc, explorerClient, *workers, *rate)
+	app := extenrich.New(ctx, cfg, client, httpc, explorerClients, *workers, *rate)
 
 	if err := app.RunCheap(ctx); err != nil {
 		log.Fatalf("ext-enrich: cheap pass: %v", err)
