@@ -1,13 +1,29 @@
 package pipeline
 
-// cluster_d.go — Cụm D: TrustRank Power Iteration.
-// Parameters: Alpha (damping), Epsilon (convergence), MaxIter, SeedThreshold.
+// cluster_d.go — Cụm D: EigenTrust Power Iteration + Teleport Prior.
+//
+// Mirrors the production propagation pass (trustpropagation.EigenTrustPass via
+// loader.go): a bipartite client-wallet → agent graph where
+//
+//	t[j] = α·inflow[j] + (1-α)·p[j]
+//	p[wallet] = BlendTeleport(reviewerReliability, externalScore, TeleportGamma)
+//	p[agent]  = AgentDirectReputation(reputation, adoption, services, compliance)
+//	inflow[owner] = weightMass-weighted mean of owned agents' t[agent]
+//
+// Parameters: Alpha (damping), Epsilon (convergence), MaxIter, and TeleportGamma —
+// the new knob blending reviewer reliability against the external on-chain score in
+// the teleport prior. SeedThreshold is gone (the old TrustRank seeding is replaced
+// by the EigenTrust teleport vector).
 
 import (
 	"erc-8004-benchmarking-be/internal/app/trustpropagation"
+	"erc-8004-benchmarking-be/internal/domain/extscore"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/sensitivity/runner"
 	"erc-8004-benchmarking-be/internal/sensitivity/snapshot"
 )
+
+const agentNodePrefix = "agent:"
 
 // ClusterDParamSpecs returns the canonical Cluster-D parameter list with sweep ranges.
 func ClusterDParamSpecs() []runner.ParamSpec {
@@ -16,7 +32,7 @@ func ClusterDParamSpecs() []runner.ParamSpec {
 		{Name: "Alpha", Default: def.Alpha, Low: 0.5, High: 0.99},
 		{Name: "Epsilon", Default: def.Epsilon, Low: 1e-6, High: 1e-2},
 		{Name: "MaxIter", Default: float64(def.MaxIter), Low: 10, High: 100},
-		{Name: "SeedThreshold", Default: def.SeedThreshold, Low: 50, High: 95},
+		{Name: "TeleportGamma", Default: extscore.TeleportGamma, Low: 0.0, High: 1.0},
 	}
 }
 
@@ -29,97 +45,135 @@ func DefaultClusterDConfig() map[string]float64 {
 	return cfg
 }
 
-// ClusterDRecompute returns per-agent trust scores AFTER running TrustRankPass.
-// It builds the trust graph once (nodes = agent owners + client wallets, edges =
-// graph_edges) and re-runs power iteration for each parameter configuration.
-//
-// The propagation graph is owner/wallet-keyed (that is how production TrustRank
-// works), so the post-iteration score is looked up by agent owner. When one owner
-// holds several agents they share the owner node's score — an inherent property of
-// wallet-level propagation, acceptable for parameter-sensitivity measurement.
-func ClusterDRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
-	gd := buildGraphData(data)
+// graphTemplate holds the gamma-independent parts of the trust graph so each
+// recompute only re-derives the wallet teleport priors for the swept TeleportGamma.
+type graphTemplate struct {
+	agentNodes    []trustpropagation.GraphNode // DirectRep/Weight/OwnerID fixed
+	walletPriors  map[string]walletPrior       // wallet node ID -> (reliability, external)
+	edges         []trustpropagation.GraphEdge
+	ownerByAgent  map[string]string // agentID -> owner wallet node ID
+}
 
-	ownerToAgents := make(map[string][]string, len(data.Agents))
-	for _, a := range data.Agents {
-		ownerToAgents[a.Owner] = append(ownerToAgents[a.Owner], a.ID)
-	}
+type walletPrior struct {
+	reliability float64
+	external    float64
+}
+
+// ClusterDRecompute returns per-agent trust scores AFTER running EigenTrustPass. The
+// per-agent score is its owner wallet's propagated [0,100] (p99-normalized) score —
+// agents sharing an owner share that wallet's score, exactly as wallet-level
+// propagation works in production.
+func ClusterDRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
+	tpl := buildGraphTemplate(data)
 
 	return func(cfg map[string]float64) map[string]float64 {
-		scores, _ := trustpropagation.TrustRankPass(gd, trustpropagation.PropagationIterConfig{
-			Alpha:         cfg["Alpha"],
-			Epsilon:       cfg["Epsilon"],
-			MaxIter:       int(cfg["MaxIter"]),
-			SeedThreshold: cfg["SeedThreshold"],
+		gamma := cfg["TeleportGamma"]
+		gd := tpl.materialize(gamma)
+		scores, _ := trustpropagation.EigenTrustPass(gd, trustpropagation.IterConfig{
+			Alpha:   cfg["Alpha"],
+			Epsilon: cfg["Epsilon"],
+			MaxIter: int(cfg["MaxIter"]),
 		})
 
 		out := make(map[string]float64, len(data.Agents))
-		for nodeID, s := range scores {
-			for _, agentID := range ownerToAgents[nodeID] {
-				out[agentID] = s
-			}
-		}
-		// Ensure every agent has a score (0 when its owner is absent from the graph).
 		for _, a := range data.Agents {
-			if _, ok := out[a.ID]; !ok {
-				out[a.ID] = 0
-			}
+			out[a.ID] = scores.Rated[tpl.ownerByAgent[a.ID]]
 		}
 		return out
 	}
 }
 
-// buildGraphData constructs a trustpropagation.GraphData from the snapshot:
-// agent owners become agent nodes (seeded by composite score), client wallets from
-// the edge set become wallet nodes, and graph_edges become weighted directed edges.
-func buildGraphData(data snapshot.SnapshotData) trustpropagation.GraphData {
+// materialize builds the full GraphData for a given TeleportGamma, blending each
+// wallet's reviewer reliability with its external on-chain score into the teleport.
+func (t graphTemplate) materialize(gamma float64) trustpropagation.GraphData {
+	nodes := make([]trustpropagation.GraphNode, 0, len(t.agentNodes)+len(t.walletPriors))
+	nodes = append(nodes, t.agentNodes...)
+	for id, wp := range t.walletPriors {
+		nodes = append(nodes, trustpropagation.GraphNode{
+			ID:        id,
+			Kind:      trustpropagation.NodeKindWallet,
+			DirectRep: extscore.BlendTeleport(wp.reliability, wp.external, gamma),
+		})
+	}
+	return trustpropagation.GraphData{Nodes: nodes, Edges: t.edges}
+}
+
+// buildGraphTemplate constructs the gamma-independent graph from the snapshot:
+//   - agent nodes seeded by AgentDirectReputation, weighted by evidence mass, linked
+//     to their owner wallet;
+//   - wallet priors (reviewer reliability from feedback counts + owner external score);
+//   - client→agent edges weighted by valid-feedback count.
+func buildGraphTemplate(data snapshot.SnapshotData) graphTemplate {
+	cw := scoring.DefaultCompositeWeights()
+
 	baselineByID := make(map[string]snapshot.BaselineScore, len(data.Baseline))
 	for _, b := range data.Baseline {
 		baselineByID[b.AgentID] = b
 	}
 
-	nodes := make([]trustpropagation.GraphNode, 0, len(data.Agents)*2)
-	seen := make(map[string]struct{}, len(data.Agents)*2)
-	for _, a := range data.Agents {
-		if a.Owner == "" {
-			continue
+	walletPriors := make(map[string]walletPrior)
+	ensureWallet := func(id string) {
+		if id == "" {
+			return
 		}
-		if _, ok := seen[a.Owner]; ok {
-			continue
+		if _, ok := walletPriors[id]; !ok {
+			walletPriors[id] = walletPrior{reliability: 50} // neutral until evidence
 		}
-		seen[a.Owner] = struct{}{}
-		b := baselineByID[a.ID]
-		nodes = append(nodes, trustpropagation.GraphNode{
-			ID:             a.Owner,
-			Kind:           trustpropagation.NodeKindAgent,
-			TrustScore:     b.CompositeScore,
-			CompositeScore: b.CompositeScore,
-		})
 	}
-	for _, e := range data.Edges {
-		if e.FromWallet == "" {
-			continue
+
+	// Agent nodes + owner wallet teleport (external score lives on the owner wallet).
+	agentNodes := make([]trustpropagation.GraphNode, 0, len(data.Agents))
+	ownerByAgent := make(map[string]string, len(data.Agents))
+	for _, a := range data.Agents {
+		b := baselineByID[a.ID]
+		ownerByAgent[a.ID] = a.Owner
+		ensureWallet(a.Owner)
+		if a.Owner != "" {
+			wp := walletPriors[a.Owner]
+			if b.ExternalScore > wp.external {
+				wp.external = b.ExternalScore
+			}
+			walletPriors[a.Owner] = wp
 		}
-		if _, ok := seen[e.FromWallet]; ok {
-			continue
-		}
-		seen[e.FromWallet] = struct{}{}
-		nodes = append(nodes, trustpropagation.GraphNode{
-			ID:         e.FromWallet,
-			Kind:       trustpropagation.NodeKindWallet,
-			TrustScore: 50, // neutral midpoint of [0,100]
+		agentNodes = append(agentNodes, trustpropagation.GraphNode{
+			ID:        agentNodePrefix + a.ID,
+			Kind:      trustpropagation.NodeKindAgent,
+			DirectRep: scoring.AgentDirectReputation(b.ReputationScore, b.AdoptionScore, b.ServicesScore, b.ComplianceScore, b.WeightMass > 0, cw),
+			Weight:    b.WeightMass,
+			OwnerID:   a.Owner,
 		})
 	}
 
-	edges := make([]trustpropagation.GraphEdge, 0, len(data.Edges))
-	for _, e := range data.Edges {
-		edges = append(edges, trustpropagation.GraphEdge{
-			From:   e.FromWallet,
-			To:     e.ToWallet,
-			Weight: e.InitialWi,
-		})
+	// Reviewer reliability per client wallet, from its valid-feedback count in the
+	// (quality-only) snapshot. junkCount is unobservable here, so 0.
+	validCount := make(map[string]int64)
+	type edgeKey struct{ from, to string }
+	edgeCount := make(map[edgeKey]float64)
+	for _, fb := range data.Feedbacks {
+		if fb.ClientAddress == "" {
+			continue
+		}
+		validCount[fb.ClientAddress]++
+		ensureWallet(fb.ClientAddress)
+		edgeCount[edgeKey{from: fb.ClientAddress, to: agentNodePrefix + fb.AgentID}]++
 	}
-	return trustpropagation.GraphData{Nodes: nodes, Edges: edges}
+	for addr, cnt := range validCount {
+		wp := walletPriors[addr]
+		wp.reliability = scoring.ReviewerReliability(cnt, 0)
+		walletPriors[addr] = wp
+	}
+
+	edges := make([]trustpropagation.GraphEdge, 0, len(edgeCount))
+	for k, n := range edgeCount {
+		edges = append(edges, trustpropagation.GraphEdge{From: k.from, To: k.to, Weight: n})
+	}
+
+	return graphTemplate{
+		agentNodes:   agentNodes,
+		walletPriors: walletPriors,
+		edges:        edges,
+		ownerByAgent: ownerByAgent,
+	}
 }
 
 // ConvergencePoint records the iteration count power iteration took for one Alpha.
@@ -128,18 +182,18 @@ type ConvergencePoint struct {
 	Iterations int
 }
 
-// ConvergenceCurve sweeps Alpha and records how many iterations power iteration
-// took to converge, holding epsilon/maxIter/seedThreshold fixed. Points are
-// returned in the order of the supplied alphas (caller passes them ascending).
-func ConvergenceCurve(data snapshot.SnapshotData, alphas []float64, epsilon float64, maxIter int, seedThreshold float64) []ConvergencePoint {
-	gd := buildGraphData(data)
+// ConvergenceCurve sweeps Alpha and records how many iterations EigenTrust power
+// iteration took to converge, holding epsilon/maxIter and the teleport prior
+// (default TeleportGamma) fixed. Points are returned in the order of the supplied
+// alphas (caller passes them ascending).
+func ConvergenceCurve(data snapshot.SnapshotData, alphas []float64, epsilon float64, maxIter int) []ConvergencePoint {
+	gd := buildGraphTemplate(data).materialize(extscore.TeleportGamma)
 	out := make([]ConvergencePoint, 0, len(alphas))
 	for _, a := range alphas {
-		_, iters := trustpropagation.TrustRankPass(gd, trustpropagation.PropagationIterConfig{
-			Alpha:         a,
-			Epsilon:       epsilon,
-			MaxIter:       maxIter,
-			SeedThreshold: seedThreshold,
+		_, iters := trustpropagation.EigenTrustPass(gd, trustpropagation.IterConfig{
+			Alpha:   a,
+			Epsilon: epsilon,
+			MaxIter: maxIter,
 		})
 		out = append(out, ConvergencePoint{Alpha: a, Iterations: iters})
 	}

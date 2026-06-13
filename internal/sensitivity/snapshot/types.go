@@ -19,11 +19,11 @@ type SnapshotMeta struct {
 // FilterConfig records the filters applied during snapshot creation, so re-runs
 // with the same filters are reproducible.
 type FilterConfig struct {
-	Category        string `bson:"category"`        // default "service_feedback"
+	Category        string `bson:"category"`        // default "quality" (only quality feeds the trust score)
 	IncludeRevoked  bool   `bson:"includeRevoked"`  // default false
 	IncludeSelf     bool   `bson:"includeSelf"`     // default false
 	MinFeedbacks    int    `bson:"minFeedbacks"`    // default 1 — agents must have ≥ this many
-	IncludeSpam     bool   `bson:"includeSpam"`     // default false — when true, also include spam/noise
+	IncludeSpam     bool   `bson:"includeSpam"`     // default false — when true, also include junk/quantity/others
 }
 
 // SnapshotStats records counts inserted during snapshot creation.
@@ -61,7 +61,7 @@ type FeedbackSnapshot struct {
 	Timestamp            int64   `bson:"timestamp"`              // unix seconds
 	IsRevoked            bool    `bson:"isRevoked"`
 	IsSelfFeedback       bool    `bson:"isSelfFeedback"`
-	Category             string  `bson:"category"`               // classification.rule.category
+	Category             string  `bson:"category"`               // effective top-level category: junk|quality|quantity|others
 	// Quality signals (for Cụm C inputs)
 	ReasoningLen      int  `bson:"reasoningLen"`
 	AttachmentCount   int  `bson:"attachmentCount"`
@@ -83,12 +83,18 @@ type GraphEdge struct {
 
 // BaselineScore is one document in <snapshot_db>.baseline_scores.
 // Computed with default formula parameters at snapshot creation time.
+// Mirrors the v2 agent_score_stats component set so Cụm B can re-blend the
+// 5-component composite and Cụm D can seed the teleport prior.
 type BaselineScore struct {
-	AgentID         string  `bson:"_id"`           // agentId
-	ChainID         int64   `bson:"chainId"`
-	ReputationScore float64 `bson:"reputationScore"`
-	ServicesScore   float64 `bson:"servicesScore"`
-	PublisherScore  float64 `bson:"publisherScore"`
-	ComplianceScore float64 `bson:"complianceScore"`
-	CompositeScore  float64 `bson:"compositeScore"`
+	AgentID          string  `bson:"_id"`           // agentId
+	ChainID          int64   `bson:"chainId"`
+	ReputationScore  float64 `bson:"reputationScore"`
+	AdoptionScore    float64 `bson:"adoptionScore"`
+	ServicesScore    float64 `bson:"servicesScore"`
+	PublisherScore   float64 `bson:"publisherScore"`
+	PublisherPresent bool    `bson:"publisherPresent"`
+	ComplianceScore  float64 `bson:"complianceScore"`
+	CompositeScore   float64 `bson:"compositeScore"`
+	WeightMass       float64 `bson:"weightMass"`    // B = Σ wᵢ·dᵢ — evidence mass for Cụm D owner aggregation
+	ExternalScore    float64 `bson:"externalScore"` // owner wallet on-chain score [0,100], 0 when unenriched (Cụm D teleport input)
 }

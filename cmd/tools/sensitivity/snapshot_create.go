@@ -51,6 +51,7 @@ func snapshotCreate(args []string) {
 		Feedbacks:       srcDB.Collection(cfg.FeedbackHistColl),
 		Agents:          srcDB.Collection(cfg.AgentsColl),
 		AgentScoreStats: srcDB.Collection(cfg.ScoreStatsColl),
+		Wallets:         srcDB.Collection(cfg.WalletColl),
 	}
 
 	now := time.Now()

@@ -194,7 +194,7 @@ func benchDispatch(args []string) {
 		if err != nil {
 			log.Fatalf("parse conv-alphas: %v", err)
 		}
-		pts := pipeline.ConvergenceCurve(data, alphas, 1e-4, 100, 80)
+		pts := pipeline.ConvergenceCurve(data, alphas, 1e-4, 100)
 		if err := writeConvergenceCSV(filepath.Join(outDir, "convergence.csv"), pts); err != nil {
 			log.Fatalf("write convergence csv: %v", err)
 		}

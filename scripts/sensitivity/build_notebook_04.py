@@ -7,24 +7,25 @@ Safe to delete after the .ipynb is committed.
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
-SNAP_ID = "snap_20260603_014800"
+SNAP_ID = "snap_20260613_185128"
 
 cells = []
 
 cells.append(nbf.v4.new_markdown_cell(
-    "# Chương 4.4 — Sensitivity Analysis của Cụm D: TrustRank Power Iteration\n\n"
-    "4 tham số: Alpha (damping), Epsilon (ngưỡng hội tụ), MaxIter, SeedThreshold.\n\n"
+    "# Chương 4.4 — Sensitivity Analysis của Cụm D: EigenTrust Power Iteration + Teleport\n\n"
+    "4 tham số: Alpha (damping), Epsilon (ngưỡng hội tụ), MaxIter, TeleportGamma "
+    "(trộn reviewer-reliability với external on-chain score trong teleport prior).\n\n"
     "Output từ `sensitivity bench --cluster=D`. Vì power iteration là thuật toán lặp "
-    "**xác định** theo (graph, Alpha), Sobol bị thay bằng **convergence study** "
+    "**xác định** theo (graph, Alpha), Sobol được bổ sung bằng **convergence study** "
     "(số vòng lặp tới hội tụ theo Alpha).\n\n"
     "> **Phát hiện chính:**\n"
     "> - **Alpha** chi phối mạnh nhất cả độ lớn điểm lẫn thời gian hội tụ; số vòng lặp "
     "bùng nổ khi α→1 (α=0.99 không hội tụ trong 100 vòng).\n"
-    "> - **SeedThreshold** có hiệu ứng *ngưỡng* (cliff): dưới ~68 tập seed nở ra làm "
-    "đảo thứ hạng (ρ≈0.76); từ 68 trở lên ổn định (ρ=1.0). Default 80 nằm an toàn "
-    "trong vùng ổn định.\n"
-    "> - **MaxIter** ≥ ~19 và **Epsilon** nhỏ → đã hội tụ hoàn toàn, không ảnh hưởng "
-    "thứ hạng. Default (MaxIter=30, Eps=1e-4) nằm trong vùng hội tụ."
+    "> - **TeleportGamma** là tham số ảnh hưởng thứ nhì: vì ~92% ví có external "
+    "on-chain score, việc dịch trọng số từ reviewer-reliability sang external score "
+    "làm đổi thứ hạng đáng kể (Δ mean ≈ 2.5).\n"
+    "> - **MaxIter** và **Epsilon** nhỏ → đã hội tụ hoàn toàn, gần như không ảnh hưởng "
+    "thứ hạng. Default (MaxIter=50, Eps=1e-6) nằm trong vùng hội tụ."
 ))
 
 cells.append(nbf.v4.new_code_cell(
@@ -101,24 +102,24 @@ cells.append(nbf.v4.new_code_cell(
     "plt.show()"
 ))
 
-# Fig 4.4.4 — Alpha × SeedThreshold heatmap (rank stability)
+# Fig 4.4.4 — Alpha × TeleportGamma heatmap (rank stability)
 cells.append(nbf.v4.new_code_cell(
     "grid = pd.read_csv(f\"{OUTPUT_DIR}/cluster_D/grid.csv\")\n"
     "param_cols = [c for c in grid.columns if c not in {\"combo_id\", \"spearman\", \"kendall\", \"mean\", \"std\"}]\n"
     "print(\"Top-3 grid parameters:\", param_cols)\n"
-    "if \"Alpha\" in param_cols and \"SeedThreshold\" in param_cols:\n"
-    "    third = [c for c in param_cols if c not in (\"Alpha\", \"SeedThreshold\")][0]\n"
+    "if \"Alpha\" in param_cols and \"TeleportGamma\" in param_cols:\n"
+    "    third = [c for c in param_cols if c not in (\"Alpha\", \"TeleportGamma\")][0]\n"
     "    median3 = grid[third].median()\n"
     "    sub = grid[np.isclose(grid[third], median3, rtol=0.01)]\n"
-    "    pivot = sub.pivot_table(index=\"Alpha\", columns=\"SeedThreshold\", values=\"spearman\")\n"
+    "    pivot = sub.pivot_table(index=\"Alpha\", columns=\"TeleportGamma\", values=\"spearman\")\n"
     "    fig, ax = plt.subplots(figsize=(7, 5))\n"
     "    sns.heatmap(pivot, cmap=\"viridis\", ax=ax)\n"
-    "    ax.set_title(f\"Fig 4.4.4 — Spearman ρ over (Alpha, SeedThreshold) at {third}={median3:g}\")\n"
+    "    ax.set_title(f\"Fig 4.4.4 — Spearman ρ over (Alpha, TeleportGamma) at {third}={median3:g}\")\n"
     "    fig.tight_layout()\n"
-    "    save_figure(fig, \"4_4_4_alpha_seed_heatmap\")\n"
+    "    save_figure(fig, \"4_4_4_alpha_teleportgamma_heatmap\")\n"
     "    plt.show()\n"
     "else:\n"
-    "    print(f\"Alpha or SeedThreshold not in top-3 ({param_cols}); skipping heatmap\")"
+    "    print(f\"Alpha or TeleportGamma not in top-3 ({param_cols}); skipping heatmap\")"
 ))
 
 nb["cells"] = cells

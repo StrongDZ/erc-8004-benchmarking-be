@@ -8,21 +8,26 @@ hand-editing JSON. Safe to delete after the .ipynb is committed.
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
-SNAP_ID = "snap_20260603_014800"
+SNAP_ID = "snap_20260613_185128"
 
 cells = []
 
 cells.append(nbf.v4.new_markdown_cell(
-    "# Chương 4.1 — Sensitivity Analysis của Cụm A: Scoring Core\n\n"
-    "11 tham số: α, β, K, T_base, γ, θ, S_base, LowConfThreshold, "
-    "LowConfMultiplier, ServiceBonusContent, ServiceBonusProof.\n\n"
+    "# Chương 4.1 — Sensitivity Analysis của Cụm A: Scoring Core (Reputation v2)\n\n"
+    "5 tham số: Alpha, TBaseDays (decay), C (confidence prior), Gamma, Theta "
+    "(reliability).\n\n"
+    "Mô hình reputation v2 (theo `scorerefresh/replay.go`):\n"
+    "`Reputation = Quality·Confidence·Reliability·100`, với `Quality = A/B`, "
+    "`A = Σ wᵢ·dᵢ·vᵢ`, `B = Σ wᵢ·dᵢ`, `Confidence = B/(C+B)`, "
+    "`Reliability = 1/(1+γ·N^θ)`. Trọng số `wᵢ` nay là **quality-based** (`fb.Wi` "
+    "persisted, từ Cụm C) — biến thể price-based (β, K) đã bị bỏ vì thiếu dữ liệu "
+    "giá task, nên β/K KHÔNG còn trong cụm này.\n\n"
     "Output từ `sensitivity bench --cluster=A`. Đổi `SNAP_ID` ở cell dưới nếu chạy "
     "trên snapshot khác.\n\n"
-    "> **Lưu ý dữ liệu:** Snapshot này đã populate quality signals. "
-    "`ServiceBonusContent` giờ có hiệu lực (nhỏ) vì reasoningLen/breakdown đã có; "
-    "còn `ServiceBonusProof` ≈ 0 (dữ liệu không có proof-of-payment) và "
-    "`LowConfThreshold`/`LowConfMultiplier` ≈ 0 (confidence = 1.0 cho mọi "
-    "service_feedback rule-classified)."
+    "> **Phát hiện chính (theo tornado trên chain-8453):** `TBaseDays` và `Alpha` "
+    "(điều khiển decay) chi phối mạnh nhất, rồi tới `C` (confidence prior). "
+    "`Gamma`/`Theta` (reliability) ảnh hưởng nhỏ vì streak fail hiếm trong dữ liệu "
+    "quality-only."
 ))
 
 cells.append(nbf.v4.new_code_cell(

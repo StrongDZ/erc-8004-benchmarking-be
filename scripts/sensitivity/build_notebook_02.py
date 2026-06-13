@@ -8,17 +8,22 @@ hand-editing JSON. Safe to delete after the .ipynb is committed.
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
-SNAP_ID = "snap_20260603_014800"
+SNAP_ID = "snap_20260613_185128"
 
 cells = []
 
 cells.append(nbf.v4.new_markdown_cell(
-    "# Chương 4.2 — Sensitivity Analysis của Cụm B: Composite Blend\n\n"
-    "6 tham số: 4 trọng số composite (w_reputation, w_services, w_publisher, "
-    "w_compliance — ràng buộc sum=1) + Tier1Total + Tier2Total.\n\n"
+    "# Chương 4.2 — Sensitivity Analysis của Cụm B: Composite Blend (v2)\n\n"
+    "5 trọng số composite: w_reputation, w_adoption, w_services, w_publisher, "
+    "w_compliance — ràng buộc sum=1.\n\n"
     "Output từ `sensitivity bench --cluster=B`. Đổi `SNAP_ID` ở cell dưới nếu chạy "
     "trên snapshot khác.\n\n"
-    "> **Lưu ý phương pháp:** vì 4 trọng số chịu ràng buộc tổng = 1 (recompute "
+    "> **Lưu ý:** Tier1Total/Tier2Total (trọng số tier của compliance) KHÔNG được "
+    "khảo sát ở đây — chúng là input của ComputeComplianceScore (quyết định mức đóng "
+    "góp của từng trường card *khi tính* điểm), không phải hệ số nhân hậu kỳ. Snapshot "
+    "chỉ lưu ComplianceScore đã tính nên không thể tái lập trung thực; cần snapshot "
+    "lưu raw ComplianceInput mới khảo sát được tier.\n\n"
+    "> **Lưu ý phương pháp:** vì 5 trọng số chịu ràng buộc tổng = 1 (recompute "
     "chuẩn hoá lại sau mỗi lần đổi), chúng KHÔNG độc lập. Do đó chỉ số Sobol "
     "(`sobol.csv`) bị lệch — đôi khi cho ST < S1 vốn không thể xảy ra với input "
     "độc lập. Vì vậy cụm B dùng **Dirichlet simplex sampling** (lấy mẫu đều trên "
@@ -76,21 +81,20 @@ cells.append(nbf.v4.new_code_cell(
     "plt.show()"
 ))
 
-# Fig 4.2.3 — Tier total sweep (rank stability)
+# Fig 4.2.3 — Per-weight OAT rank stability (5 composite weights)
 cells.append(nbf.v4.new_code_cell(
     "oat = load_oat(OUTPUT_DIR, CLUSTER)\n"
-    "tier = oat[oat[\"param\"].isin([\"Tier1Total\", \"Tier2Total\"])]\n"
     "fig, ax = plt.subplots(figsize=(7, 4.5))\n"
-    "for p in tier[\"param\"].unique():\n"
-    "    sub = tier[tier[\"param\"] == p]\n"
+    "for p in oat[\"param\"].unique():\n"
+    "    sub = oat[oat[\"param\"] == p]\n"
     "    ax.plot(sub[\"value\"], sub[\"spearman\"], marker=\"o\", label=p)\n"
     "ax.axhline(0.95, ls=\"--\", color=\"grey\", lw=0.5)\n"
-    "ax.set_xlabel(\"Tổng điểm tier\")\n"
+    "ax.set_xlabel(\"Giá trị trọng số (trước chuẩn hoá)\")\n"
     "ax.set_ylabel(\"Spearman ρ (rank stability)\")\n"
-    "ax.set_title(\"Fig 4.2.3 — Ảnh hưởng tổng điểm tier lên độ ổn định thứ hạng\")\n"
+    "ax.set_title(\"Fig 4.2.3 — OAT: độ ổn định thứ hạng theo từng trọng số composite\")\n"
     "ax.legend()\n"
     "fig.tight_layout()\n"
-    "save_figure(fig, \"4_2_3_tier_ratio\")\n"
+    "save_figure(fig, \"4_2_3_weight_rank_stability\")\n"
     "plt.show()"
 ))
 

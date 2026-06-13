@@ -22,6 +22,7 @@ type SourceCollections struct {
 	Feedbacks       *mongodrv.Collection // feedback_history
 	Agents          *mongodrv.Collection // agents
 	AgentScoreStats *mongodrv.Collection // agent_score_stats
+	Wallets         *mongodrv.Collection // wallets — owner external on-chain score (Cụm D teleport)
 }
 
 // BuildOptions carries everything BuildFromSource needs to know.
@@ -64,7 +65,7 @@ func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptio
 
 	feedbacks := projectFeedbacks(fbs)
 	edges := buildEdges(fbs, agentDocs, opts.Defaults)
-	baseline, err := computeBaseline(ctx, src.AgentScoreStats, agents, opts)
+	baseline, err := computeBaseline(ctx, src, agents, opts)
 	if err != nil {
 		return SnapshotData{}, fmt.Errorf("compute baseline: %w", err)
 	}
@@ -81,7 +82,12 @@ func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptio
 func loadFilteredFeedbacks(ctx context.Context, coll *mongodrv.Collection, chainID int64, cfg FilterConfig) ([]feedback.FeedbackRecord, error) {
 	query := bson.M{"chainId": chainID}
 	if !cfg.IncludeSpam {
-		query["classification.rule.category"] = cfg.Category
+		// Filter on the EFFECTIVE top-level category (what actually scored), falling
+		// back to the rule category for rows persisted before the top-level field.
+		query["$or"] = []bson.M{
+			{"category": cfg.Category},
+			{"category": bson.M{"$exists": false}, "classification.rule.category": cfg.Category},
+		}
 	}
 	if !cfg.IncludeRevoked {
 		query["isRevoked"] = bson.M{"$ne": true}
@@ -218,7 +224,7 @@ func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 			Timestamp:            fb.Timestamp,
 			IsRevoked:            fb.IsRevoked,
 			IsSelfFeedback:       fb.IsSelfFeedback,
-			Category:             fb.Classification.Rule.Category,
+			Category:             effectiveCategory(fb),
 			ReasoningLen:         rl,
 			AttachmentCount:      ac,
 			HasRatingBreakdown:   bk,
@@ -226,6 +232,16 @@ func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 		})
 	}
 	return out
+}
+
+// effectiveCategory returns the runtime category that actually drove scoring — the
+// top-level field (LLM fallback overwrites it), falling back to the rule verdict for
+// rows persisted before the top-level field existed.
+func effectiveCategory(fb feedback.FeedbackRecord) string {
+	if fb.Category != "" {
+		return fb.Category
+	}
+	return fb.Classification.Rule.Category
 }
 
 // normalizeValue replays production value normalization (classifier.RawValueToReal
@@ -294,18 +310,21 @@ func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, d
 }
 
 // computeBaseline pulls existing agent_score_stats rows for the given agents and
-// projects them into BaselineScore structs. Agents without a score row get zeros.
-// Returns (nil, nil) when the collection handle is nil or there are no agents
-// to look up — that's an intentional caller signal, not a failure.
-func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []AgentSnapshot, opts BuildOptions) ([]BaselineScore, error) {
-	if coll == nil || len(agents) == 0 {
+// projects them into the v2 BaselineScore (5-component composite inputs + the
+// weightMass / owner external score that Cụm B and Cụm D need). Agents without a
+// score row get zeros. Returns (nil, nil) when the score-stats handle is nil or
+// there are no agents — an intentional caller signal, not a failure.
+func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentSnapshot, opts BuildOptions) ([]BaselineScore, error) {
+	if src.AgentScoreStats == nil || len(agents) == 0 {
 		return nil, nil
 	}
 	ids := make([]string, 0, len(agents))
+	ownerByAgent := make(map[string]string, len(agents))
 	for _, a := range agents {
 		ids = append(ids, a.ID)
+		ownerByAgent[a.ID] = a.Owner
 	}
-	cur, err := coll.Find(ctx, bson.M{
+	cur, err := src.AgentScoreStats.Find(ctx, bson.M{
 		"chainId": opts.ChainID,
 		"agentId": bson.M{"$in": ids},
 	})
@@ -314,27 +333,80 @@ func computeBaseline(ctx context.Context, coll *mongodrv.Collection, agents []Ag
 	}
 	defer cur.Close(ctx)
 	var rows []struct {
-		AgentID         string  `bson:"agentId"`
-		ReputationScore float64 `bson:"reputationScore"`
-		ServicesScore   float64 `bson:"servicesScore"`
-		PublisherScore  float64 `bson:"publisherScore"`
-		ComplianceScore float64 `bson:"complianceScore"`
-		CompositeScore  float64 `bson:"compositeScore"`
+		AgentID          string  `bson:"agentId"`
+		ReputationScore  float64 `bson:"reputationScore"`
+		AdoptionScore    float64 `bson:"adoptionScore"`
+		ServicesScore    float64 `bson:"servicesScore"`
+		PublisherScore   float64 `bson:"publisherScore"`
+		PublisherPresent bool    `bson:"publisherPresent"`
+		ComplianceScore  float64 `bson:"complianceScore"`
+		CompositeScore   float64 `bson:"compositeScore"`
+		WeightMass       float64 `bson:"weightMass"`
 	}
 	if err := cur.All(ctx, &rows); err != nil {
 		return nil, err
 	}
+
+	externalByOwner := loadOwnerExternalScores(ctx, src.Wallets, opts.ChainID, ownerByAgent)
+
 	out := make([]BaselineScore, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, BaselineScore{
-			AgentID:         r.AgentID,
-			ChainID:         opts.ChainID,
-			ReputationScore: r.ReputationScore,
-			ServicesScore:   r.ServicesScore,
-			PublisherScore:  r.PublisherScore,
-			ComplianceScore: r.ComplianceScore,
-			CompositeScore:  r.CompositeScore,
+			AgentID:          r.AgentID,
+			ChainID:          opts.ChainID,
+			ReputationScore:  r.ReputationScore,
+			AdoptionScore:    r.AdoptionScore,
+			ServicesScore:    r.ServicesScore,
+			PublisherScore:   r.PublisherScore,
+			PublisherPresent: r.PublisherPresent,
+			ComplianceScore:  r.ComplianceScore,
+			CompositeScore:   r.CompositeScore,
+			WeightMass:       r.WeightMass,
+			ExternalScore:    externalByOwner[ownerByAgent[r.AgentID]],
 		})
 	}
 	return out, nil
+}
+
+// loadOwnerExternalScores returns owner-address → external on-chain score [0,100]
+// from the wallets collection. Owners without an enrichment row (or a nil handle)
+// simply map to 0 — Cụm D's BlendTeleport treats that as "external not landed yet".
+func loadOwnerExternalScores(ctx context.Context, coll *mongodrv.Collection, chainID int64, ownerByAgent map[string]string) map[string]float64 {
+	out := map[string]float64{}
+	if coll == nil {
+		return out
+	}
+	ownerSet := map[string]struct{}{}
+	owners := make([]string, 0, len(ownerByAgent))
+	for _, owner := range ownerByAgent {
+		if owner == "" {
+			continue
+		}
+		if _, ok := ownerSet[owner]; ok {
+			continue
+		}
+		ownerSet[owner] = struct{}{}
+		owners = append(owners, owner)
+	}
+	if len(owners) == 0 {
+		return out
+	}
+	cur, err := coll.Find(ctx, bson.M{"_id": bson.M{"$in": owners}})
+	if err != nil {
+		return out
+	}
+	defer cur.Close(ctx)
+	var rows []struct {
+		ID       string `bson:"_id"`
+		External struct {
+			Score float64 `bson:"score"`
+		} `bson:"external"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return out
+	}
+	for _, r := range rows {
+		out[r.ID] = r.External.Score
+	}
+	return out
 }

@@ -8,8 +8,15 @@ import (
 
 // Keep returns true when the feedback passes all configured filters.
 // Used by the builder during snapshot construction.
+//
+// Filters on the EFFECTIVE top-level category (what actually scored — the LLM
+// fallback may overwrite the rule verdict), falling back to the rule category
+// for rows persisted before the top-level field existed.
 func Keep(cfg FilterConfig, fb feedback.FeedbackRecord) bool {
-	cat := fb.Classification.Rule.Category
+	cat := fb.Category
+	if cat == "" {
+		cat = fb.Classification.Rule.Category
+	}
 
 	if cfg.IncludeSpam {
 		// When spam included, accept any category as long as other filters pass.
@@ -28,10 +35,10 @@ func Keep(cfg FilterConfig, fb feedback.FeedbackRecord) bool {
 	return true
 }
 
-// DefaultFilter returns the SA-default filter (service_feedback only, non-revoked, non-self).
+// DefaultFilter returns the SA-default filter (quality only, non-revoked, non-self).
 func DefaultFilter() FilterConfig {
 	return FilterConfig{
-		Category:       "service_feedback",
+		Category:       "quality",
 		IncludeRevoked: false,
 		IncludeSelf:    false,
 		MinFeedbacks:   1,

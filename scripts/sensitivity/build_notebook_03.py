@@ -8,29 +8,29 @@ hand-editing JSON. Safe to delete after the .ipynb is committed.
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
-SNAP_ID = "snap_20260603_014800"  # snapshot WITH quality signals populated
+SNAP_ID = "snap_20260613_185128"  # snapshot WITH quality signals populated
 
 cells = []
 
 cells.append(nbf.v4.new_markdown_cell(
-    "# Chương 4.3 — Sensitivity Analysis của Cụm C: Quality + Edge Weight + Delta\n\n"
-    "11 tham số: 5 Q-weights (sum=1), ReasoningLenFull, AttachmentCountFull, "
-    "WiMin, WiMax, Eta, Kappa.\n\n"
+    "# Chương 4.3 — Sensitivity Analysis của Cụm C: Quality Score → Edge Weight\n\n"
+    "8 tham số: 5 Q-weights (sum=1), ReasoningLenFull, AttachmentCountFull, WiBase.\n\n"
+    "Mô hình propagation mới KHÔNG còn nhánh reward/penalty (WiMin/WiMax/Eta/Kappa "
+    "đã bị bỏ). Tín hiệu chất lượng chỉ tạo trọng số cạnh "
+    "`wᵢ = WiBase + (1 - WiBase)·Q`, với `Q = Σ QWeightₖ·signalₖ ∈ [0,1]`. Cụm C đo "
+    "**trọng số cạnh trung bình mỗi agent** — đại lượng đi vào power iteration ở Cụm D.\n\n"
     "Output từ `sensitivity bench --cluster=C`. Snapshot dùng ở đây "
     "(`{}`) đã được populate quality signals từ `feedbackParsed`.\n\n"
-    "> **Tham số LIVE vs DORMANT trên dữ liệu chain-8453:**\n"
+    "> **Tham số LIVE vs DORMANT trên dữ liệu chain-8453 (theo tornado):**\n"
     ">\n"
-    "> - **LIVE:** `Eta` (chi phối mạnh nhất — hệ số reward), `QWeightConfidence`, "
-    "`QWeightReasoning`, `QWeightBreakdown`, `ReasoningLenFull`, `WiMax` (chỉ cận dưới "
-    "khi WiMax<1.5). Hai trọng số `QWeightAttachment`/`QWeightPayment` tuy tín hiệu "
-    "bằng 0 vẫn tác động *gián tiếp* qua mẫu số chuẩn hoá Q.\n"
-    "> - **DORMANT (≈0):** `AttachmentCountFull` (dữ liệu không có attachment), "
-    "`WiMin` (sender-trust cố định = 100 → wᵢ tối thiểu = 0.6 > dải [0.1,0.5] nên "
-    "không bao giờ chạm), `Kappa` (snapshot chỉ chứa service_feedback nên nhánh phạt "
-    "không bao giờ chạy).\n"
+    "> - **LIVE:** `WiBase` (chi phối mạnh nhất — sàn + thang của wᵢ), "
+    "`QWeightConfidence`, rồi tới các Q-weight còn lại.\n"
+    "> - **DORMANT (≈0):** `ReasoningLenFull` và `AttachmentCountFull` — dữ liệu "
+    "chain-8453 hầu như không có reasoning dài/attachment nên các điểm bão hoà này "
+    "không bao giờ ràng buộc (một phát hiện thực, không phải lỗi).\n"
     ">\n"
-    "> Tín hiệu chất lượng thật trong dữ liệu: `reasoningLen` (từ `comment`, 1550/8229 "
-    "feedback, dài 6–287 ký tự) và `hasRatingBreakdown` (từ `score`, 1527/8229)."
+    "> Tín hiệu chất lượng thật trong dữ liệu: `reasoningLen` (từ `comment`) và "
+    "`hasRatingBreakdown` (từ `score`)."
     .format(SNAP_ID)
 ))
 
