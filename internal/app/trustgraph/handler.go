@@ -7,22 +7,24 @@ package trustgraph
 //  2. Skip if already processed (idempotency guard).
 //  3. Validate (gate).
 //  4. UpsertCold sender wallet.
-//  5a. Gated → penalty Δ-, wi=0.
-//  5b. Valid → extract quality, compute wi, reward Δ+.
+//  5. Compute weight (no delta; propagation owns trustScore).
 //  6. Write weighting fields to feedback_history.
-//  7. Apply trust delta to wallet.
+//  7. Increment reviewer counters (valid/junk).
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/mq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // ErrTransient signals a recoverable failure — caller nacks+requeues.
@@ -46,7 +48,13 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	// 3. Gate.
 	verdict, err := Validate(*fb)
 	if errors.Is(err, ErrPendingLLM) {
-		return ErrTransient
+		if a.deps.Classifier == nil {
+			return ErrTransient
+		}
+		if llmErr := a.resolveLLMFallback(ctx, fb); llmErr != nil {
+			return ErrTransient
+		}
+		verdict, err = Validate(*fb)
 	}
 	if err != nil {
 		return fmt.Errorf("trustgraph: validate %s: %w", feedbackID, err)
@@ -57,55 +65,70 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	sender, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0)
+	_, wasNew, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0)
 	if err != nil {
 		return ErrTransient
 	}
+	if err := mq.PublishWalletEnrich(ctx, a.deps.Publisher, wasNew, chainID, fb.ClientAddress); err != nil {
+		log.Printf("trustgraph: publish wallet enrich (chain=%d addr=%s): %v", chainID, fb.ClientAddress, err)
+	}
 
-	// 5. Compute weight + delta.
+	// 5. Compute weight (for reputation) — no trust delta; propagation owns trustScore.
 	now := time.Now().Unix()
-	var wi, qualityScore, delta float64
-
-	if verdict.IsGated() {
-		delta = propagation.ComputePenaltyDelta(a.deps.PropCfg, verdict.Confidence)
-	} else {
+	var wi, qualityScore float64
+	if !verdict.IsGated() {
 		qi := extractQualityInput(*fb, verdict.Confidence)
 		qualityScore = propagation.ComputeQualityScore(a.deps.PropCfg, qi)
-		wi = propagation.ComputeWeight(a.deps.PropCfg, sender.TrustScore, qualityScore)
-		delta = propagation.ComputeRewardDelta(a.deps.PropCfg, wi)
+		wi = propagation.ComputeWeight(a.deps.PropCfg, qualityScore)
 	}
 
 	// 6. Write feedback weighting.
 	if err := a.deps.FeedbackRepo.UpdateWeighting(ctx, feedbackID, feedbackrepo.WeightingUpdate{
-		Wi:           wi,
-		QualityScore: qualityScore,
-		Verdict:      verdict.Code,
-		Reason:       verdict.Reason,
-		ComputedAt:   now,
+		Wi: wi, QualityScore: qualityScore, Verdict: verdict.Code, Reason: verdict.Reason, ComputedAt: now,
 	}); err != nil {
 		return ErrTransient
 	}
 
-	// 7. Apply trust delta.
-	newTrust := walletClip(sender.TrustScore + delta)
-	if err := a.deps.WalletRepo.ApplyTrustDelta(ctx, walletrepo.DeltaInput{
-		ChainID:  chainID,
-		Address:  fb.ClientAddress,
-		NewTrust: newTrust,
-		IsValid:  !verdict.IsGated(),
-	}); err != nil {
+	// 7. Increment reviewer counters (valid/junk). trustScore is set by trustrank-pass.
+	if err := a.deps.WalletRepo.IncrementFeedbackCounters(ctx, chainID, fb.ClientAddress, !verdict.IsGated()); err != nil {
 		return ErrTransient
 	}
-
 	return nil
 }
 
-func walletClip(score float64) float64 {
-	if score < 0 {
-		return 0
+// resolveLLMFallback calls the HybridClassifier for a record stuck at ErrPendingLLM,
+// persists the result to MongoDB, and mutates fb.Classification.Fallback in place.
+// Returns non-nil when the LLM service was unavailable (caller should nack+requeue).
+func (a *App) resolveLLMFallback(ctx context.Context, fb *feedbackrepo.FeedbackRecord) error {
+	content := ""
+	if len(fb.FeedbackParsed) > 0 {
+		if b, err := json.Marshal(fb.FeedbackParsed); err == nil {
+			content = string(b)
+		}
 	}
-	if score > 100 {
-		return 100
+
+	res, _ := a.deps.Classifier.Classify(ctx, classifier.HybridInput{
+		Tag1:            fb.Tag1,
+		Tag2:            fb.Tag2,
+		ValueRaw:        fb.Value,
+		ValueDecimals:   int(fb.ValueDecimals),
+		OffchainContent: content,
+		Endpoint:        fb.Endpoint,
+	})
+
+	// Source=="fallback" means the LLM service is down; retry later.
+	if res.Source == "fallback" {
+		return errors.New("llm service unavailable")
 	}
-	return score
+
+	fallback := feedbackrepo.FallbackClassification{
+		Category:   string(res.Category),
+		Confidence: res.Confidence,
+	}
+	if err := a.deps.FeedbackRepo.UpdateFallback(ctx, fb.ID, fallback); err != nil {
+		return err
+	}
+	fb.Classification.Fallback = &fallback
+	fb.Category = fallback.Category
+	return nil
 }

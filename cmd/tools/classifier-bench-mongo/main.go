@@ -86,27 +86,24 @@ type modelSpec struct {
 	model  string // ollama model name, e.g. "qwen2.5:3b"
 }
 
-// modelsUnderTest is the panel of LLMs the bench sweeps in one run. Models
-// execute sequentially so Ollama only loads one set of weights into VRAM at a
-// time (no thrashing). Order matters: lighter models first so a partial run
-// still produces useful baseline rows.
+// modelsUnderTest is the panel of approaches the bench sweeps in one run.
+// Three entries cover the two thesis comparison dimensions:
+//   - qwen2_5_3b  : small LLM baseline (compact prompt, fast)
+//   - qwen2_5_7b  : recommended LLM (V5 prompt, enriched context)
+//   - knn_embed   : embedding kNN (BAAI/bge-base-en-v1.5, k=7, no Ollama needed)
 //
-// Pull commands (run once, native Ollama on the host, NOT in Docker so the
-// Metal GPU is available):
+// The knn entry routes through the same /classify endpoint on the Python
+// service; the service detects model="knn" and returns a cosine-similarity
+// prediction instead of calling Ollama.
+//
+// Pull commands (LLM models only — knn uses sentence-transformers, no pull):
 //
 //	ollama pull qwen2.5:3b
 //	ollama pull qwen2.5:7b-instruct
-//	ollama pull qwen3:8b
-//	ollama pull qwen2.5:14b-instruct
-//	ollama pull phi4
-//	ollama pull gemma3:12b
 var modelsUnderTest = []modelSpec{
 	{csvKey: "qwen2_5_3b", model: "qwen2.5:3b"},
-	{csvKey: "qwen2_5_7b", model: "qwen2.5:7b-instruct"},
-	{csvKey: "qwen3_8b", model: "qwen3:8b"},
-	{csvKey: "gemma3_12b", model: "gemma3:12b"},
-	{csvKey: "qwen2_5_14b", model: "qwen2.5:14b-instruct"},
-	{csvKey: "phi4_14b", model: "phi4"},
+	{csvKey: "knn_embed",  model: "knn"},
+	{csvKey: "ensemble",   model: "ensemble"},
 }
 
 // agentMeta is the slice of an AgentDocument we surface to the prompt builder.
@@ -264,6 +261,7 @@ func main() {
 		aiClients[i] = classifier.NewAIClient(classifier.AIClientConfig{
 			BaseURL:        *baseURL,
 			Model:          m.model,
+			PromptVersion:  "v6",
 			TimeoutSeconds: *timeout,
 		})
 	}
@@ -280,9 +278,13 @@ func main() {
 	// ── 4. Run all models, accumulating into per-feedback rows ──
 	rows := make([]*rowAcc, len(samples))
 	for i, s := range samples {
+		scale := ""
+		if real, ok := classifier.RawValueToReal(s.Value, int(s.ValueDecimals)); ok {
+			scale = classifier.AssignTier(real)
+		}
 		rows[i] = &rowAcc{
 			fb:    s,
-			rule:  classifier.Classify(s.Tag1, s.Tag2),
+			rule:  classifier.Classify(s.Tag1, s.Tag2, scale),
 			llm:   make(map[string]classifier.LLMResult, len(modelsUnderTest)),
 			llmMs: make(map[string]int64, len(modelsUnderTest)),
 		}

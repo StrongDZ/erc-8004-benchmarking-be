@@ -18,6 +18,7 @@ import (
 // LLMResult is the structured output returned by the AI service.
 type LLMResult struct {
 	Category      Category `json:"category"`
+	Feature       Feature  `json:"feature"` // infrastructure | agent_domain | both (V6 second axis)
 	Confidence    float64  `json:"confidence"`
 	Reason        string   `json:"reason"`
 	Source        string   `json:"source"` // "llm" | "fallback"
@@ -195,7 +196,7 @@ func fallbackResult(err error) LLMResult {
 
 func validLLMCategory(c Category) bool {
 	switch c {
-	case CategoryService, CategoryConfig, CategoryApp, CategoryJunk, CategoryOthers:
+	case CategoryQuality, CategoryQuantity, CategoryJunk, CategoryOthers:
 		return true
 	}
 	return false

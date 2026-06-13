@@ -31,6 +31,7 @@ func statsOrZero(s *scorestats.AgentScoreStats) scorestats.AgentScoreStats {
 func buildScoreBreakdown(s scorestats.AgentScoreStats) dto.ScoreBreakdown {
 	return dto.ScoreBreakdown{
 		Reputation: round2(s.ReputationScore),
+		Adoption:   round2(s.AdoptionScore),
 		Services:   round2(s.ServicesScore),
 		Publisher:  round2(s.PublisherScore),
 		Compliance: round2(s.ComplianceScore),
@@ -84,6 +85,7 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 		ScoreUpdateAt:    s.ScoreUpdateAt,
 		ConsecutiveFails: s.ConsecutiveFails,
 		TotalTasks:       s.TotalTasks,
+		TotalFeedbacks:   feedbackTotal(d.TotalFeedbacks, nil),
 		TotalPassed:      s.TotalPassed,
 		TotalFailed:      s.TotalFailed,
 		SuccessRate:      safeRate(s.TotalPassed, s.TotalTasks),
@@ -103,7 +105,8 @@ func toAgentRow(d agent.AgentDocument, stats *scorestats.AgentScoreStats, _ scor
 // stats may be nil — defaults apply.
 func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, dist map[string]int64, cfg scoring.FormulaConfig, _ int64) dto.AgentProfile {
 	s := statsOrZero(stats)
-	penalty := scoring.ComputePenalty(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)
+	// v2 "penalty" = reliability reduction in [0,100]: how much the current fail streak docks reputation.
+	penalty := (1.0 - scoring.ComputeReliability(s.ConsecutiveFails, cfg.Gamma, cfg.Theta)) * 100.0
 	breakdown := buildScoreBreakdown(s)
 	services := buildServicesSlice(d.Services)
 	onchain := mapOnchainMeta(d.OnchainMetadata)
@@ -130,11 +133,13 @@ func toAgentProfile(d *agent.AgentDocument, stats *scorestats.AgentScoreStats, d
 		Scoring: dto.AgentScoring{
 			TrustScore:        round2(s.CompositeScore),
 			ReputationScore:   round2(s.ReputationScore),
+			AdoptionScore:     round2(s.AdoptionScore),
 			ScoreBreakdown:    breakdown,
 			ScoreUpdateAt:     s.ScoreUpdateAt,
 			ConsecutiveFails:  s.ConsecutiveFails,
 			Penalty:           round2(penalty),
 			TotalTasks:        s.TotalTasks,
+			TotalFeedbacks:    feedbackTotal(d.TotalFeedbacks, dist),
 			TotalPassed:       s.TotalPassed,
 			TotalFailed:       s.TotalFailed,
 			SuccessRate:       safeRate(s.TotalPassed, s.TotalTasks),
@@ -173,7 +178,10 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		FeedbackHash:   r.FeedbackHash,
 		FeedbackParsed: r.FeedbackParsed,
 		Classification: dto.FeedbackClassification{
-			Rule: dto.RuleClassification{Category: r.Classification.Rule.Category},
+			Rule: dto.RuleClassification{
+				Category: r.Classification.Rule.Category,
+				Feature:  r.Classification.Rule.Feature,
+			},
 			Fallback: func() *dto.FallbackClassification {
 				if r.Classification.Fallback == nil {
 					return nil
@@ -182,6 +190,7 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 					Category:   r.Classification.Fallback.Category,
 					Reason:     r.Classification.Fallback.Reason,
 					Confidence: r.Classification.Fallback.Confidence,
+					Feature:    r.Classification.Fallback.Feature,
 				}
 			}(),
 		},
@@ -225,6 +234,19 @@ func safeRate(num, den int64) float64 {
 		return 0
 	}
 	return round4(float64(num) / float64(den))
+}
+
+// feedbackTotal prefers the denormalized agents.totalFeedbacks; falls back to summing
+// class distribution for agents not yet backfilled by score-refresh.
+func feedbackTotal(denorm int64, dist map[string]int64) int64 {
+	if denorm > 0 {
+		return denorm
+	}
+	var sum int64
+	for _, v := range dist {
+		sum += v
+	}
+	return sum
 }
 
 func round2(v float64) float64 {

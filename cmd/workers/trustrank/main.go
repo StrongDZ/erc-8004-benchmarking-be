@@ -128,23 +128,25 @@ func main() {
 	})
 	resolver := domainuri.NewResolver(&rawFetchAdapter{c: httpCl}, cfg.IPFSGateway, cfg.ArweaveGateway)
 
-	svcPool := trustrankapp.NewServiceURIConsumerPool(
+	svcConsumer := trustrankapp.NewServiceURIConsumer(
 		mqConn, offchain, resolver, cfg.URIConsumerPrefetch, cfg.ServiceURIConsumerWorkers,
 	)
-	svcPool.Start(ctx)
 
 	formulaCfg := scoring.FormulaConfig{
-		Alpha:     cfg.TrustRankAlpha,
-		Beta:      cfg.TrustRankBeta,
-		K:         cfg.TrustRankK,
-		TBaseDays: cfg.TrustRankTBase,
-		Gamma:     cfg.PenaltyGamma,
-		Theta:     cfg.PenaltyTheta,
-		SBase:     0.0,
+		Alpha:        cfg.TrustRankAlpha,
+		Beta:         cfg.TrustRankBeta,
+		K:            cfg.TrustRankK,
+		TBaseDays:    cfg.TrustRankTBase,
+		C:            cfg.ConfidenceC,
+		Gamma:        cfg.PenaltyGamma,
+		Theta:        cfg.PenaltyTheta,
+		AdoptionURef: cfg.AdoptionURef,
+		SBase:        0.0,
 	}
 
 	compositeWeights := scoring.CompositeWeights{
 		Reputation: cfg.ScoreWeightReputation,
+		Adoption:   cfg.ScoreWeightAdoption,
 		Services:   cfg.ScoreWeightServices,
 		Publisher:  cfg.ScoreWeightPublisher,
 		Compliance: cfg.ScoreWeightCompliance,
@@ -159,7 +161,7 @@ func main() {
 		cfg.TrustRankInterval,
 		cfg.TrustRankEventBatchSize,
 		proc,
-		svcPool.EnsureChainReader,
+		svcConsumer.EnsureChain,
 	)
 
 	log.Printf("trustrank started pause_between_passes=%s (first pass runs immediately)", cfg.TrustRankInterval)

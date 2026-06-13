@@ -26,6 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trust-g
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustrank-pass ./cmd/workers/trustrank-pass
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/desc-summarizer ./cmd/workers/desc-summarizer
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/oasf-schema-refresh ./cmd/workers/oasf-schema-refresh
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/wallet-enrich ./cmd/workers/wallet-enrich
 
 FROM alpine:3.20 AS base-runtime
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 65532 appuser
@@ -75,4 +76,8 @@ ENTRYPOINT ["/usr/local/bin/desc-summarizer"]
 FROM base-runtime AS oasf-schema-refresh
 COPY --from=builder /out/oasf-schema-refresh /usr/local/bin/oasf-schema-refresh
 ENTRYPOINT ["/usr/local/bin/oasf-schema-refresh"]
+
+FROM base-runtime AS wallet-enrich
+COPY --from=builder /out/wallet-enrich /usr/local/bin/wallet-enrich
+ENTRYPOINT ["/usr/local/bin/wallet-enrich"]
 

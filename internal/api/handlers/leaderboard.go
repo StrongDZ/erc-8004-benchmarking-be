@@ -170,6 +170,36 @@ func (h *LeaderboardHandler) Tags(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, rows)
 }
 
+// WalletRanking handles GET /leaderboard/wallet-ranking.
+// @Summary Wallet ranking
+// @Description Returns wallets ranked by trust score, grouped from top leaderboard agents.
+// @Tags leaderboard
+// @Produce json
+// @Param chainId query string false "Chain ID(s), comma-separated"
+// @Param agentLimit query int false "Top agents to sample before grouping (default 200, max 500)"
+// @Success 200 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /leaderboard/wallet-ranking [get]
+func (h *LeaderboardHandler) WalletRanking(w http.ResponseWriter, r *http.Request) {
+	chainIDs := dto.ParseInt64Slice(r, "chainId")
+	agentLimit := dto.ParseInt(r, "agentLimit", 200)
+	if agentLimit < 1 {
+		agentLimit = 1
+	}
+	if agentLimit > 500 {
+		agentLimit = 500
+	}
+	rows, err := h.svc.WalletRanking(r.Context(), service.WalletRankingParams{
+		ChainIDs:   chainIDs,
+		AgentLimit: agentLimit,
+	})
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.Success(w, r, rows)
+}
+
 // RisingStars handles GET /leaderboard/rising-stars (§2.3).
 // @Summary Rising stars
 // @Description Returns top agents by score increase in a period.

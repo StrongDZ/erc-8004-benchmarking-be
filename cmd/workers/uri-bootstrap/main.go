@@ -92,9 +92,7 @@ func main() {
 	// EventURIConsumer factory — started per chain by the app on first discovery.
 	consumer := bootstrapapp.NewEventURIConsumer(mqConn, offchain, resolver, cfgRepo, cfg.URIConsumerPrefetch)
 	startConsumer := func(ctx context.Context, chainID int64) {
-		if err := consumer.RunChain(ctx, chainID); err != nil && err != context.Canceled {
-			log.Printf("event_uri_consumer: chain=%d stopped: %v", chainID, err)
-		}
+		consumer.EnsureChain(ctx, chainID)
 	}
 
 	interval := time.Duration(cfg.URIResolverIntervalSec) * time.Second

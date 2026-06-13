@@ -16,6 +16,8 @@ import (
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/identity"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	"erc-8004-benchmarking-be/internal/domain/serviceenrich"
+	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
@@ -45,6 +47,10 @@ type agentRepo interface {
 	FindByOwner(ctx context.Context, owner string) ([]agentrepo.AgentDocument, error)
 }
 
+type agentWalletRepo interface {
+	FindBestTrustByAddresses(ctx context.Context, addresses []string) (map[string]float64, error)
+}
+
 type agentFeedbackRepo interface {
 	ClassDistribution(ctx context.Context, chainID int64, agentID string) (map[string]int64, error)
 	ListFiltered(ctx context.Context, f feedbackrepo.ListFilter, skip, limit int64) ([]feedbackrepo.FeedbackRecord, int64, error)
@@ -52,6 +58,8 @@ type agentFeedbackRepo interface {
 	FindByAgentAndIndex(ctx context.Context, chainID int64, agentID, clientAddress string, feedbackIndex uint64) (*feedbackrepo.FeedbackRecord, error)
 	ActivityHeatmap(ctx context.Context, chainID int64, agentID string, days int) ([]feedbackrepo.HeatmapDay, error)
 	ListForReputationHistory(ctx context.Context, chainID int64, agentID string) ([]feedbackrepo.FeedbackRecord, error)
+	CountDistinctClientsByAgent(ctx context.Context, chainID int64, agentID string) (int64, error)
+	ListDistinctClientsByAgent(ctx context.Context, chainID int64, agentID string, skip, limit int64) ([]feedbackrepo.DistinctClientRow, error)
 }
 
 type agentScoreStatsRepo interface {
@@ -70,6 +78,9 @@ type agentOffchainRepo interface {
 	HasSuccessfulFetch(ctx context.Context, uri string) (bool, error)
 	GetContent(ctx context.Context, uri string) (string, bool, error)
 	FindByURIs(ctx context.Context, uris []string) ([]offchainrepo.OffchainData, error)
+	UpsertSuccess(ctx context.Context, uri, jsonText, sourceType, eventType, contractType string) error
+	UpsertFetchedNotJSON(ctx context.Context, uri, rawBody, sourceType, eventType, contractType string) error
+	UpsertFailure(ctx context.Context, uri, sourceType, eventType, contractType, errMsg string) error
 }
 
 type agentContractRepo interface {
@@ -85,6 +96,8 @@ type AgentDeps struct {
 	Events     agentEventRepo
 	Offchain   agentOffchainRepo
 	Contracts  agentContractRepo
+	Wallet     agentWalletRepo // optional; enriches feedback-client sidebar with trust scores
+	Resolver   *domainuri.Resolver
 	Formula    scoring.FormulaConfig
 	Composite  scoring.CompositeWeights
 }
@@ -325,19 +338,7 @@ func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*d
 
 	agentWallet := extractAgentWallet(doc.OnchainMetadata)
 
-	svcs := make([]dto.ServiceOverview, 0, len(doc.Services))
-	for _, sv := range doc.Services {
-		health, info := probeEndpointHealth(ctx, s.deps.Offchain, sv.Name, sv.Endpoint)
-		svcs = append(svcs, dto.ServiceOverview{
-			Name:       sv.Name,
-			Endpoint:   sv.Endpoint,
-			Version:    sv.Version,
-			Skills:     sv.Skills,
-			Domains:    sv.Domains,
-			Health:     health,
-			HealthInfo: info,
-		})
-	}
+	svcs := buildServiceOverviews(ctx, s.deps.Offchain, doc)
 
 	return &dto.AgentOverview{
 		ChainID:          doc.ChainID,
@@ -389,6 +390,94 @@ func extractAgentWallet(meta map[string]agentrepo.OnchainMetadataValue) string {
 	return ""
 }
 
+func offchainRowByURI(rows []offchainrepo.OffchainData) map[string]*offchainrepo.OffchainData {
+	m := make(map[string]*offchainrepo.OffchainData, len(rows))
+	for i := range rows {
+		m[rows[i].URI] = &rows[i]
+	}
+	return m
+}
+
+func registrationMapFromAgentURI(rowMap map[string]*offchainrepo.OffchainData, agentURI string) map[string]serviceenrich.RegistrationMeta {
+	agentURI = strings.TrimSpace(agentURI)
+	if agentURI == "" || rowMap == nil {
+		return nil
+	}
+	row, ok := rowMap[agentURI]
+	if !ok || row == nil || row.Status != offchainrepo.StatusFetchedJSON {
+		return nil
+	}
+	return serviceenrich.ParseRegistrationServices(row.Content)
+}
+
+func buildServiceOverviews(ctx context.Context, repo agentOffchainRepo, doc *agentrepo.AgentDocument) []dto.ServiceOverview {
+	uris := make([]string, 0, len(doc.Services)+1)
+	if doc.AgentURI != "" {
+		uris = append(uris, doc.AgentURI)
+	}
+	for _, sv := range doc.Services {
+		if sv.Endpoint != "" {
+			uris = append(uris, sv.Endpoint)
+		}
+	}
+
+	var rowMap map[string]*offchainrepo.OffchainData
+	if repo != nil && len(uris) > 0 {
+		if rows, err := repo.FindByURIs(ctx, uris); err == nil {
+			rowMap = offchainRowByURI(rows)
+		}
+	}
+	regMap := registrationMapFromAgentURI(rowMap, doc.AgentURI)
+
+	svcs := make([]dto.ServiceOverview, 0, len(doc.Services))
+	for _, sv := range doc.Services {
+		var declaredRow, enrichRow *offchainrepo.OffchainData
+		if rowMap != nil {
+			declaredRow = rowMap[sv.Endpoint]
+			enrichRow = serviceenrich.ResolveServiceRow(sv.Name, sv.Endpoint, rowMap)
+		}
+		health, info := probeEndpointHealthFromRow(sv.Name, sv.Endpoint, declaredRow)
+		reg, hasReg := regMap[sv.Endpoint]
+		svcs = append(svcs, dto.ServiceOverview{
+			Name:       sv.Name,
+			Endpoint:   sv.Endpoint,
+			Version:    sv.Version,
+			Skills:     sv.Skills,
+			Domains:    sv.Domains,
+			Health:     health,
+			HealthInfo: info,
+			Enrichment: serviceenrich.BuildEnrichment(sv.Name, sv.Endpoint, reg, hasReg, enrichRow),
+		})
+	}
+	return svcs
+}
+
+func probeEndpointHealthFromRow(name, endpoint string, row *offchainrepo.OffchainData) (string, string) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "unknown", ""
+	}
+	if row == nil {
+		return "unknown", ""
+	}
+	switch row.Status {
+	case offchainrepo.StatusFetchedJSON:
+		return "ok", ""
+	case offchainrepo.StatusFetchedNotJSON:
+		if scoring.IsJSONRequired(name) {
+			return "warning", "fetched but not valid JSON; expected JSON for this endpoint type"
+		}
+		return "ok", ""
+	case offchainrepo.StatusFetchFailed:
+		if strings.TrimSpace(row.FetchError) != "" {
+			return "fail", row.FetchError
+		}
+		return "fail", ""
+	default:
+		return "unknown", ""
+	}
+}
+
 func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, name, endpoint string) (string, string) {
 	endpoint = strings.TrimSpace(endpoint)
 	if endpoint == "" || repo == nil {
@@ -432,45 +521,43 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 	cfg := s.deps.Formula
 	w := s.deps.Composite
 
-	// Constant S/P/C contribution from the current materialized stats. When no stats doc
-	// exists yet, the tail is 0 and the composite reflects the reputation component only.
-	var tail float64
+	// Constant adoption / S / P / C contribution from the current materialized stats
+	// (frozen approximation, matching the score-refresh delta logic). Only the reputation
+	// component is replayed event-by-event.
+	var adoption, services, publisher, compliance float64
+	publisherPresent := false
 	if stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID); stats != nil {
-		tail = stats.ServicesScore*w.Services + stats.PublisherScore*w.Publisher + stats.ComplianceScore*w.Compliance
+		adoption, services, publisher, compliance = stats.AdoptionScore, stats.ServicesScore, stats.PublisherScore, stats.ComplianceScore
+		publisherPresent = stats.PublisherPresent
 	}
 
-	// toComposite maps a raw reputation value to the composite trust score [0, 100].
-	toComposite := func(rawRep float64) float64 {
-		c := scoring.NormalizeReputation(rawRep)*w.Reputation + tail
-		if c < 0 {
-			c = 0
-		}
-		if c > 100 {
-			c = 100
-		}
-		return c
+	// compositeAt maps a (decayed) mass state to the composite trust score [0, 100].
+	// Quality is present only once the agent has evidence (B > 0).
+	compositeAt := func(a, b float64, nFail int64) float64 {
+		rep := scoring.ComputeReputationScore(a, b, nFail, cfg.C, cfg.Gamma, cfg.Theta)
+		return scoring.ComputeCompositeFromStats(rep, adoption, services, publisher, compliance, b > 0, publisherPresent, w)
 	}
 
 	points := make([]dto.TrustScorePoint, 0, len(feedbacks)*2+1)
-	var rep float64
+	var a, b float64 // A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ
 	var consecFails int64
 	var lastTs int64
 
 	for _, f := range feedbacks {
 		for _, midnight := range midnightsBetween(lastTs, f.Timestamp) {
+			da, db := scoring.DecayMass(a, b, lastTs, midnight, cfg)
 			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
+				Score:     round2(compositeAt(da, db, consecFails)),
 				Type:      "decay",
 			})
 		}
 
 		vi := computeVi(f)
 		wi := scoring.ComputeWi(f.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
-		rep = scoring.ApplyTaskScore(rep, lastTs, wi, vi, f.Timestamp, cfg)
+		a, b = scoring.ApplyFeedbackToMass(a, b, lastTs, wi, vi, f.Timestamp, cfg)
 		if vi < 0.40 {
 			consecFails++
-			rep -= scoring.ComputePenalty(consecFails, cfg.Gamma, cfg.Theta)
 		} else {
 			consecFails = 0
 		}
@@ -478,7 +565,7 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 
 		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(f.Timestamp),
-			Score:     round2(toComposite(rep)),
+			Score:     round2(compositeAt(a, b, consecFails)),
 			Type:      "event",
 			TxHash:    f.TxHash,
 		})
@@ -487,15 +574,17 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 	if lastTs > 0 {
 		now := time.Now().Unix()
 		for _, midnight := range midnightsBetween(lastTs, now) {
+			da, db := scoring.DecayMass(a, b, lastTs, midnight, cfg)
 			points = append(points, dto.TrustScorePoint{
 				Timestamp: unixToRFC3339(midnight),
-				Score:     round2(toComposite(decayForward(rep, lastTs, midnight, cfg))),
+				Score:     round2(compositeAt(da, db, consecFails)),
 				Type:      "decay",
 			})
 		}
+		da, db := scoring.DecayMass(a, b, lastTs, now, cfg)
 		points = append(points, dto.TrustScorePoint{
 			Timestamp: unixToRFC3339(now),
-			Score:     round2(toComposite(scoring.ComputeCurrentScore(rep, lastTs, now, cfg))),
+			Score:     round2(compositeAt(da, db, consecFails)),
 			Type:      "decay",
 		})
 	}
@@ -514,15 +603,6 @@ func midnightsBetween(from, to int64) []int64 {
 		out = append(out, ts)
 	}
 	return out
-}
-
-func decayForward(rep float64, lastTs, atTs int64, cfg scoring.FormulaConfig) float64 {
-	if lastTs <= 0 || atTs <= lastTs {
-		return rep
-	}
-	lambda := scoring.ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
-	deltaDays := float64(atTs-lastTs) / 86400.0
-	return rep * scoring.ComputeDecayFactor(lambda, deltaDays)
 }
 
 // ── Feedbacks ───────────────────────────────────────────────────────────────
@@ -569,6 +649,60 @@ func (s *Agent) Feedbacks(ctx context.Context, p FeedbacksParams) (*FeedbacksRes
 		rows = append(rows, toFeedbackRow(d))
 	}
 	return &FeedbacksResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
+}
+
+// FeedbackClientsParams are inputs for /agents/:id/feedback-clients.
+type FeedbackClientsParams struct {
+	ChainID int64
+	AgentID string
+	Page    int
+	Limit   int
+	Skip    int64
+}
+
+// FeedbackClientsResult carries distinct feedback submitters for an agent.
+type FeedbackClientsResult struct {
+	Rows  []dto.FeedbackClientRow
+	Total int64
+	Page  int
+	Limit int
+}
+
+// FeedbackClients returns paginated distinct wallets that submitted feedback to an agent.
+func (s *Agent) FeedbackClients(ctx context.Context, p FeedbackClientsParams) (*FeedbackClientsResult, error) {
+	total, err := s.deps.Feedback.CountDistinctClientsByAgent(ctx, p.ChainID, p.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	docs, err := s.deps.Feedback.ListDistinctClientsByAgent(ctx, p.ChainID, p.AgentID, p.Skip, int64(p.Limit))
+	if err != nil {
+		return nil, err
+	}
+	trustByAddr := map[string]float64{}
+	if s.deps.Wallet != nil && len(docs) > 0 {
+		addrs := make([]string, 0, len(docs))
+		for _, d := range docs {
+			addrs = append(addrs, d.ClientAddress)
+		}
+		if m, err := s.deps.Wallet.FindBestTrustByAddresses(ctx, addrs); err == nil {
+			trustByAddr = m
+		}
+	}
+
+	rows := make([]dto.FeedbackClientRow, 0, len(docs))
+	for _, d := range docs {
+		row := dto.FeedbackClientRow{
+			ClientAddress: d.ClientAddress,
+			FeedbackCount: d.FeedbackCount,
+		}
+		lookup := strings.ToLower(strings.TrimSpace(d.ClientAddress))
+		if score, ok := trustByAddr[lookup]; ok {
+			v := round2(score)
+			row.TrustScore = &v
+		}
+		rows = append(rows, row)
+	}
+	return &FeedbackClientsResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
 }
 
 // FeedbackDetail returns one feedback + offchain content (§3.4).
@@ -648,6 +782,116 @@ func (s *Agent) OffchainDataByURI(ctx context.Context, uri string) (*dto.Offchai
 		}
 	}
 	return out, nil
+}
+
+// ReconnectServiceEndpoint re-probes one of the agent's registered service endpoints right now,
+// writes the result to offchain_data (success, non-JSON, or failure — same as the background
+// ServiceURIConsumer), and returns the updated ServiceOverview for that service.
+func (s *Agent) ReconnectServiceEndpoint(ctx context.Context, chainID int64, agentID, endpoint string) (*dto.ServiceOverview, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil, fmt.Errorf("%w: endpoint is required", ErrInvalidInput)
+	}
+
+	doc, err := s.deps.Agents.FindByAgentID(ctx, chainID, agentID)
+	if err != nil {
+		if errors.Is(err, mongodrv.ErrNoDocuments) {
+			return nil, ErrAgentNotFound
+		}
+		return nil, fmt.Errorf("reconnect service: find agent: %w", err)
+	}
+
+	var svc *agentrepo.RegistrationService
+	for i := range doc.Services {
+		if doc.Services[i].Endpoint == endpoint {
+			svc = &doc.Services[i]
+			break
+		}
+	}
+	if svc == nil {
+		return nil, fmt.Errorf("%w: endpoint is not a registered service for this agent", ErrInvalidInput)
+	}
+
+	sourceType := domainuri.DetectURIType(endpoint).String()
+	const eventType = "service_endpoint"
+	const contractType = "identity"
+
+	body, isJSON, fetchErr := s.deps.Resolver.FetchRaw(ctx, endpoint)
+
+	var health, healthInfo string
+	switch {
+	case fetchErr != nil:
+		health, healthInfo = "fail", fetchErr.Error()
+		if dbErr := s.deps.Offchain.UpsertFailure(ctx, endpoint, sourceType, eventType, contractType, fetchErr.Error()); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write fetch-failure: %w", dbErr)
+		}
+
+	case !isJSON:
+		if scoring.IsJSONRequired(svc.Name) {
+			health, healthInfo = "warning", "fetched but not valid JSON; expected JSON for this endpoint type"
+		} else {
+			health, healthInfo = "ok", ""
+		}
+		if dbErr := s.deps.Offchain.UpsertFetchedNotJSON(ctx, endpoint, string(body), sourceType, eventType, contractType); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write not-json: %w", dbErr)
+		}
+
+	default:
+		health, healthInfo = "ok", ""
+		if dbErr := s.deps.Offchain.UpsertSuccess(ctx, endpoint, string(body), sourceType, eventType, contractType); dbErr != nil {
+			return nil, fmt.Errorf("reconnect service: write success: %w", dbErr)
+		}
+	}
+
+	var row offchainrepo.OffchainData
+	row.URI = endpoint
+	row.SourceType = sourceType
+	switch {
+	case fetchErr != nil:
+		row.Status = offchainrepo.StatusFetchFailed
+		row.FetchError = fetchErr.Error()
+	case !isJSON:
+		row.Status = offchainrepo.StatusFetchedNotJSON
+		row.Content = string(body)
+		row.ContentSize = len(body)
+	default:
+		row.Status = offchainrepo.StatusFetchedJSON
+		row.Content = string(body)
+		row.ContentSize = len(body)
+	}
+
+	enrichment := enrichmentForService(ctx, s.deps.Offchain, doc, svc, &row)
+
+	return &dto.ServiceOverview{
+		Name:       svc.Name,
+		Endpoint:   svc.Endpoint,
+		Version:    svc.Version,
+		Skills:     svc.Skills,
+		Domains:    svc.Domains,
+		Health:     health,
+		HealthInfo: healthInfo,
+		Enrichment: enrichment,
+	}, nil
+}
+
+func enrichmentForService(
+	ctx context.Context,
+	repo agentOffchainRepo,
+	doc *agentrepo.AgentDocument,
+	svc *agentrepo.RegistrationService,
+	row *offchainrepo.OffchainData,
+) *dto.ServiceEnrichment {
+	var regMap map[string]serviceenrich.RegistrationMeta
+	if repo != nil && strings.TrimSpace(doc.AgentURI) != "" {
+		if rows, err := repo.FindByURIs(ctx, []string{doc.AgentURI}); err == nil && len(rows) > 0 {
+			r := rows[0]
+			if r.Status == offchainrepo.StatusFetchedJSON {
+				regMap = serviceenrich.ParseRegistrationServices(r.Content)
+			}
+		}
+	}
+	reg, hasReg := regMap[svc.Endpoint]
+	return serviceenrich.BuildEnrichment(svc.Name, svc.Endpoint, reg, hasReg, row)
 }
 
 // ActivityHeatmap returns one bucket per UTC day (§3.7).

@@ -1,6 +1,7 @@
 package trustpropagation
 
-// writer.go — WritePropagedScores bulk-writes trustScorePropagated to wallets + agents.
+// writer.go — persists propagation results into wallets.trustScore (single
+// canonical wallet trust score). Agents are conduits; not persisted.
 
 import (
 	"context"
@@ -11,40 +12,22 @@ import (
 	walletrep "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
-// WriterDeps holds repo dependencies for WritePropagedScores.
 type WriterDeps struct {
 	WalletRepo *walletrep.Repository
-	AgentRepo  *agentrep.Repository
 }
 
-// BuildNodeKindMap returns nodeID → NodeKind from GraphData.
-func BuildNodeKindMap(gd GraphData) map[string]NodeKind {
-	m := make(map[string]NodeKind, len(gd.Nodes))
-	for _, nd := range gd.Nodes {
-		m[nd.ID] = nd.Kind
-	}
-	return m
-}
-
-// WritePropagedScores routes propagated scores to the correct collection.
-func WritePropagedScores(ctx context.Context, deps WriterDeps, scores map[string]float64, nodeKinds map[string]NodeKind) error {
+// WriteWalletScores bulk-writes rated wallet trust scores and clears unrated wallets.
+func WriteWalletScores(ctx context.Context, deps WriterDeps, ws WalletScores) error {
 	now := time.Now().Unix()
-
-	var walletUpdates, agentUpdates []agentrep.PropagatedScore
-	for id, score := range scores {
-		ps := agentrep.PropagatedScore{ID: id, Score: score, At: now}
-		if nodeKinds[id] == NodeKindAgent {
-			agentUpdates = append(agentUpdates, ps)
-		} else {
-			walletUpdates = append(walletUpdates, ps)
-		}
+	rated := make([]agentrep.WalletScore, 0, len(ws.Rated))
+	for id, score := range ws.Rated {
+		rated = append(rated, agentrep.WalletScore{ID: id, Score: score, At: now})
 	}
-
-	if err := deps.WalletRepo.BulkSetPropagated(ctx, walletUpdates); err != nil {
-		return fmt.Errorf("write propagated: wallets: %w", err)
+	if err := deps.WalletRepo.BulkSetTrustScore(ctx, rated); err != nil {
+		return fmt.Errorf("write rated scores: %w", err)
 	}
-	if err := deps.AgentRepo.BulkSetPropagated(ctx, agentUpdates); err != nil {
-		return fmt.Errorf("write propagated: agents: %w", err)
+	if err := deps.WalletRepo.BulkSetUnrated(ctx, ws.Unrated, now); err != nil {
+		return fmt.Errorf("write unrated scores: %w", err)
 	}
 	return nil
 }

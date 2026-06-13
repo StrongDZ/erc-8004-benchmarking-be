@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -42,15 +43,7 @@ func (r *Repository) FindByOASFCapabilities(ctx context.Context, filter OASFFilt
 		query["chainId"] = filter.ChainID
 	}
 
-	// Skills filter (AND logic)
-	if len(filter.Skills) > 0 {
-		query["oasfSkills"] = bson.M{"$all": filter.Skills}
-	}
-
-	// Domains filter (AND logic)
-	if len(filter.Domains) > 0 {
-		query["oasfDomains"] = bson.M{"$all": filter.Domains}
-	}
+	applyOASFPathFilters(query, filter.Skills, filter.Domains)
 
 	opts := options.Find().
 		SetSort(bson.D{{Key: "reputationScore", Value: -1}}).
@@ -71,12 +64,7 @@ func (r *Repository) CountByOASFCapabilities(ctx context.Context, filter OASFFil
 		query["chainId"] = filter.ChainID
 	}
 
-	if len(filter.Skills) > 0 {
-		query["oasfSkills"] = bson.M{"$all": filter.Skills}
-	}
-	if len(filter.Domains) > 0 {
-		query["oasfDomains"] = bson.M{"$all": filter.Domains}
-	}
+	applyOASFPathFilters(query, filter.Skills, filter.Domains)
 
 	count, err := r.Count(ctx, query)
 	if err != nil {
@@ -138,15 +126,11 @@ func (r *Repository) buildOASFFacetNodes(ctx context.Context, chainID int64, fie
 		matchStage["chainId"] = chainID
 	}
 
-	// Apply context filter from other dimension
-	var otherFieldName string
+	// Apply context filter from the opposite dimension (prefix match).
 	if fieldName == "oasfSkills" {
-		otherFieldName = "oasfDomains"
+		applyOASFPathFilters(matchStage, nil, otherFieldFilter)
 	} else {
-		otherFieldName = "oasfSkills"
-	}
-	if len(otherFieldFilter) > 0 {
-		matchStage[otherFieldName] = bson.M{"$all": otherFieldFilter}
+		applyOASFPathFilters(matchStage, otherFieldFilter, nil)
 	}
 
 	pipeline := mongodrv.Pipeline{
@@ -217,6 +201,40 @@ func (r *Repository) buildOASFFacetNodes(ctx context.Context, chainID int64, fie
 	}
 
 	return nodes, nil
+}
+
+// applyOASFPathFilters constrains a Mongo query so each selected skill/domain key
+// matches via path prefix (parent category includes child leaf paths). Facet
+// counts use the same prefix semantics.
+func applyOASFPathFilters(q bson.M, skills, domains []string) {
+	clauses := oasfPathPrefixClauses("oasfSkills", skills)
+	clauses = append(clauses, oasfPathPrefixClauses("oasfDomains", domains)...)
+	mergeQueryAnd(q, clauses)
+}
+
+func oasfPathPrefixClauses(field string, values []string) bson.A {
+	clauses := bson.A{}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		clauses = append(clauses, bson.M{
+			field: bson.M{"$elemMatch": bson.M{"$regex": "^" + regexp.QuoteMeta(v) + "(/|$)"}},
+		})
+	}
+	return clauses
+}
+
+func mergeQueryAnd(q bson.M, clauses bson.A) {
+	if len(clauses) == 0 {
+		return
+	}
+	if existing, ok := q["$and"].(bson.A); ok {
+		q["$and"] = append(existing, clauses...)
+		return
+	}
+	q["$and"] = clauses
 }
 
 // enrichFacetNodes adds name and parentKey to each node.

@@ -27,9 +27,12 @@ type WalletDocument struct {
 	// Base score (write-time, incrementally updated by trust-graph-updater).
 	TrustScore float64 `bson:"trustScore"` // [0, 100]
 
-	// Post-propagation score (batch pass writes this).
-	TrustScorePropagated float64 `bson:"trustScorePropagated"`
-	PropagationUpdatedAt int64   `bson:"propagationUpdatedAt,omitempty"`
+	// Post-propagation score timestamp (batch pass writes this).
+	PropagationUpdatedAt int64 `bson:"propagationUpdatedAt,omitempty"`
+
+	// TrustRated is true when this wallet received trust inflow (owns ≥1 agent with weightMass>0).
+	// False means no trust evidence; trustScore is nil/unset for unrated wallets.
+	TrustRated bool `bson:"trustRated"`
 
 	// Aggregates.
 	OwnedAgentIDs       []string `bson:"ownedAgentIds,omitempty"`
@@ -40,6 +43,30 @@ type WalletDocument struct {
 
 	CreatedAt int64 `bson:"createdAt"`
 	UpdatedAt int64 `bson:"updatedAt"`
+
+	External ExternalDoc `bson:"external"`
+}
+
+// ExternalDoc is the external on-chain trust enrichment for a wallet (1:1).
+// Score is partial-renormed until Complete. Present is true once any feature
+// has been written (gates the teleport blend).
+type ExternalDoc struct {
+	Score          float64 `bson:"score"`
+	Complete       bool    `bson:"complete"`
+	Present        bool    `bson:"present"`
+	BalanceUSD     float64 `bson:"balanceUSD"`
+	Nonce          uint64  `bson:"nonce"`
+	AgeDays        float64 `bson:"ageDays"`
+	Counterparties int     `bson:"counterparties"`
+	ENS            string  `bson:"ens,omitempty"`
+	ENSAvatar      string  `bson:"ensAvatar,omitempty"`
+	CheapAt        int64   `bson:"cheapAt,omitempty"`
+	ExplorerAt     int64   `bson:"explorerAt,omitempty"`
+	ExplorerSkipped bool   `bson:"explorerSkipped,omitempty"` // true when explorer API permanently unavailable for this chain
+	ENSAt          int64   `bson:"ensAt,omitempty"`
+	CheapFetched   bool    `bson:"cheapFetched"`
+	RichFetched    bool    `bson:"richFetched"`
+	ENSFetched     bool    `bson:"ensFetched"`
 }
 
 // Repository wraps the wallets collection.

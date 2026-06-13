@@ -12,8 +12,8 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
-	"erc-8004-benchmarking-be/internal/repository/feedback"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
+	"erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/utils"
@@ -55,8 +55,6 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		log.Printf("processor: self-feedback excluded from scoring: chain=%d agent=%s client=%s", bs.chainID, agentID, clientAddress)
 	}
 
-	cls := classifier.Classify(tag1, tag2)
-
 	isAnomalous := classifier.IsAnomalousValue(value, int(valueDecimals))
 	if isAnomalous {
 		log.Printf("processor: anomalous value detected (persisting, no scoring): chain=%d agent=%s value=%q", bs.chainID, agentID, value)
@@ -70,6 +68,9 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if scale == "" && realOK {
 		scale = classifier.AssignTier(real)
 	}
+
+	cls := classifier.Classify(tag1, tag2, scale)
+
 	var vi float64
 	if !realOK || isAnomalous {
 		vi = 0.0
@@ -77,8 +78,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		vi = classifier.NormalizeValueWithScale(real, scale)
 	}
 
-	// Record a tier vote for Phase 3 stats flush (only for service_feedback category).
-	if cls.Category == classifier.CategoryService {
+	// Record a tier vote for Phase 3 stats flush (only for the quality category).
+	if cls.Category == classifier.CategoryQuality {
 		tu := tagstats.TierUpdate{Tag1: tag1, Tag2: tag2, IsEmpty: !realOK}
 		if realOK {
 			tu.Tier = classifier.AssignTier(real)
@@ -93,7 +94,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if adj, ok := scoring.LowConfidenceAdjustment(cls.Confidence); ok {
 		adjustments = append(adjustments, adj)
 	}
-	if cls.Category == classifier.CategoryService {
+	if cls.Category == classifier.CategoryQuality {
 		adjustments = append(adjustments, scoring.ServiceFeedbackBonus(feedbackURI, bs.uriMap[feedbackURI]))
 	}
 	wi = scoring.ApplyAdjustments(wi, adjustments)
@@ -120,16 +121,21 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		TxHash:         ev.TxHash,
 		LogIndex:       ev.LogIndex,
 		Timestamp:      ev.Timestamp,
+		Category:       string(cls.Category),
+		Feature:        string(cls.Feature),
 		Classification: feedback.FeedbackClassification{
-			Rule: feedback.RuleClassification{Category: string(cls.Category)},
+			Rule: feedback.RuleClassification{Category: string(cls.Category), Feature: string(cls.Feature)},
 		},
 	}
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
+	agentDoc.TotalFeedbacks++
+	bs.dirtyAgents[agentID] = true
 
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	bs.fbMap[fbID] = &fbRecord
 
-	// Skip scoring for self-feedback, junk (spam/noise merged), anomalous values, or non-service categories.
+	// Skip scoring for self-feedback, junk, anomalous values, or non-quality categories.
+	// Only `quality` feeds the trust score (quantity/others do not).
 	if isSelf {
 		return
 	}
@@ -139,7 +145,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if isAnomalous {
 		return
 	}
-	if cls.Category != classifier.CategoryService {
+	if cls.Category != classifier.CategoryQuality {
 		return
 	}
 
@@ -150,7 +156,9 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		prev = &scorestats.AgentScoreStats{ChainID: bs.chainID, AgentID: agentID, PublisherScore: 50.0}
 	}
 
-	newRep := scoring.ApplyTaskScore(prev.ReputationScore, prev.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
+	// v2 weighted-mean state: decay the two mass accumulators forward and add this
+	// feedback's contribution. A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ.
+	newA, newB := scoring.ApplyFeedbackToMass(prev.WeightedScoreSum, prev.WeightMass, prev.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
 	newTotalTasks := prev.TotalTasks + 1
 
 	var newPassed, newFailed, newConsecFails int64
@@ -162,29 +170,31 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		newPassed = prev.TotalPassed
 		newFailed = prev.TotalFailed + 1
 		newConsecFails = prev.ConsecutiveFails + 1
-		// Bake the progressive penalty directly into reputationScore (unified write path).
-		newRep -= scoring.ComputePenalty(newConsecFails, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
 	}
 
 	bs.dirtyAgents[agentID] = true
 
-	// Recompute composite using new rep + cached S/P/C from last refresh cycle.
-	repNorm := scoring.NormalizeReputation(newRep)
+	// Reputation = Quality·Confidence·Reliability·100 from the freshly updated mass.
+	// The consecutive-fail penalty is the Reliability factor (no separate subtraction).
+	newRep := scoring.ComputeReputationScore(newA, newB, newConsecFails, bs.formulaCfg.C, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
+
+	// Adoption / S / P / C are carried forward from the last refresh cycle; the
+	// score-refresh worker recomputes them authoritatively (incl. distinct clients).
+	adoption := prev.AdoptionScore
+	monthUniqueUsers := prev.MonthUniqueUsers
 	services := prev.ServicesScore
 	publisher := prev.PublisherScore
+	publisherPresent := prev.PublisherPresent
 	compliance := prev.ComplianceScore
-	if publisher == 0 {
-		// Neutral default until first refresh cycle populates publisher reputation.
-		publisher = 50.0
-	}
-	composite := scoring.ComputeCompositeScore(repNorm, services, publisher, compliance, p.compositeWeights)
+	// qualityPresent is true: we just recorded a scored service feedback (B > 0).
+	composite := scoring.ComputeCompositeFromStats(newRep, adoption, services, publisher, compliance, true, publisherPresent, p.compositeWeights)
 
 	if err := p.statsRepo.UpsertFromWritePath(
 		context.Background(),
 		bs.chainID, agentID,
-		newRep, ev.Timestamp,
-		newConsecFails, newTotalTasks, newPassed, newFailed,
-		composite, repNorm, services, publisher, compliance,
+		newRep, newA, newB, ev.Timestamp,
+		newConsecFails, newTotalTasks, newPassed, newFailed, monthUniqueUsers,
+		composite, newRep, adoption, services, publisher, publisherPresent, compliance,
 		prev.ServiceWarnings,
 	); err != nil {
 		log.Printf("trustrank: upsert write-path stats chain=%d agent=%s: %v", bs.chainID, agentID, err)

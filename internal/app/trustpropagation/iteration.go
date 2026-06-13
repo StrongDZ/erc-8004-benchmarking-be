@@ -1,35 +1,40 @@
 package trustpropagation
 
-// iteration.go — TrustRankPass: weighted TrustRank power iteration.
-// Formula: t^{k+1} = (1-α)·d + α·M·t^k
-// Cycle handling: damping factor (1-α) leaks mass to seed each step.
+// iteration.go — EigenTrust-style scalar propagation.
+//   t[j] = α·inflow[j] + (1-α)·p[j]
+//   inflow[agent] = Σ_clients M[agent][client]·t[client]   (source-normalized)
+//   inflow[owner] = weightMass-weighted mean of owned agents' t[agent]  (anti-gaming)
+//   p             = direct reputation normalized to sum 1   (teleport)
+// Output: WalletScores — rated wallets (inflow>0) p99-normalized to [0,100];
+// wallets with no trust evidence listed as Unrated.
 
-import "math"
+import (
+	"math"
+	"sort"
+)
 
-// PropagationIterConfig holds hyperparameters for one pass.
-type PropagationIterConfig struct {
-	Alpha         float64
-	Epsilon       float64
-	MaxIter       int
-	SeedThreshold float64
+type IterConfig struct {
+	Alpha   float64
+	Epsilon float64 // L1 convergence threshold
+	MaxIter int
 }
 
-// DefaultIterConfig returns design-doc defaults.
-func DefaultIterConfig() PropagationIterConfig {
-	return PropagationIterConfig{Alpha: 0.85, Epsilon: 1e-4, MaxIter: 30, SeedThreshold: 80}
-}
+func DefaultIterConfig() IterConfig { return IterConfig{Alpha: 0.85, Epsilon: 1e-6, MaxIter: 50} }
 
-// TrustRankPass runs one full propagation pass.
-// Returns map[nodeID]score ∈ [0,100] and the actual iteration count.
-func TrustRankPass(gd GraphData, cfg PropagationIterConfig) (map[string]float64, int) {
+// EigenTrustPass returns rated wallet scores ∈ [0,100] (p99-normalized) and unrated wallet IDs + iters.
+func EigenTrustPass(gd GraphData, cfg IterConfig) (WalletScores, int) {
 	n := len(gd.Nodes)
 	if n == 0 {
-		return map[string]float64{}, 0
+		return WalletScores{Rated: map[string]float64{}, Unrated: nil}, 0
 	}
-
 	idx := make(map[string]int, n)
 	for i, nd := range gd.Nodes {
 		idx[nd.ID] = i
+	}
+
+	weight := make([]float64, n)
+	for i, nd := range gd.Nodes {
+		weight[i] = nd.Weight
 	}
 
 	edges := make([]csrEdge, 0, len(gd.Edges))
@@ -43,107 +48,129 @@ func TrustRankPass(gd GraphData, cfg PropagationIterConfig) (map[string]float64,
 	}
 	M := BuildCSR(n, edges)
 
-	// Seed vector d: normalized compositeScore for qualifying agents.
-	d := make([]float64, n)
-	var seedSum float64
+	ownedAgents := make(map[int][]int)
 	for i, nd := range gd.Nodes {
-		if nd.Kind == NodeKindAgent && nd.CompositeScore > cfg.SeedThreshold {
-			d[i] = nd.CompositeScore
-			seedSum += nd.CompositeScore
-		}
-	}
-	if seedSum > 0 {
-		for i := range d {
-			d[i] /= seedSum
-		}
-	} else {
-		for i := range d {
-			d[i] = 1.0 / float64(n)
+		if nd.Kind == NodeKindAgent && nd.OwnerID != "" {
+			if oi, ok := idx[nd.OwnerID]; ok {
+				ownedAgents[oi] = append(ownedAgents[oi], i)
+			}
 		}
 	}
 
-	// Initial t: normalized current trust.
+	ratedWallet := make(map[int]bool, len(ownedAgents))
+	for oi, owned := range ownedAgents {
+		var wsum float64
+		for _, ai := range owned {
+			wsum += weight[ai]
+		}
+		if wsum > 0 {
+			ratedWallet[oi] = true
+		}
+	}
+
+	p := make([]float64, n)
+	var pSum float64
+	for i, nd := range gd.Nodes {
+		p[i] = nd.DirectRep
+		pSum += nd.DirectRep
+	}
+	if pSum > 0 {
+		for i := range p {
+			p[i] /= pSum
+		}
+	} else {
+		for i := range p {
+			p[i] = 1.0 / float64(n)
+		}
+	}
+
 	t := make([]float64, n)
-	var tSum float64
-	for i, nd := range gd.Nodes {
-		t[i] = nd.TrustScore
-		tSum += nd.TrustScore
-	}
-	if tSum > 0 {
-		for i := range t {
-			t[i] /= tSum
-		}
-	} else {
-		for i := range t {
-			t[i] = 1.0 / float64(n)
-		}
-	}
-
-	alpha := cfg.Alpha
-	oMinusAlpha := 1.0 - alpha
+	copy(t, p)
+	alpha, oneMinus := cfg.Alpha, 1.0-cfg.Alpha
 
 	iters := 0
 	for iters = 0; iters < cfg.MaxIter; iters++ {
 		mv := M.SpMV(t)
-
-		// Dangling mass → distribute via d.
-		var dangMass float64
-		for j := 0; j < n; j++ {
-			if M.IsDangling(j) {
-				dangMass += t[j]
-			}
-		}
-
 		next := make([]float64, n)
-		for i := range next {
-			next[i] = oMinusAlpha*d[i] + alpha*(mv[i]+dangMass*d[i])
-		}
-
-		maxDiff := 0.0
-		for i := range next {
-			if diff := math.Abs(next[i] - t[i]); diff > maxDiff {
-				maxDiff = diff
+		for j := 0; j < n; j++ {
+			inflow := mv[j]
+			if owned := ownedAgents[j]; len(owned) > 0 {
+				var wsum, num float64
+				for _, ai := range owned {
+					wsum += weight[ai]
+					num += weight[ai] * t[ai]
+				}
+				if wsum > 0 {
+					inflow += num / wsum
+				}
 			}
+			next[j] = alpha*inflow + oneMinus*p[j]
+		}
+		var l1 float64
+		for j := range next {
+			l1 += math.Abs(next[j] - t[j])
 		}
 		t = next
-		if maxDiff < cfg.Epsilon {
+		if l1 < cfg.Epsilon {
 			break
 		}
 	}
-	iters++ // Count this as one iteration completed
+	iters++
 
-	raw := make(map[string]float64, n)
+	ratedRaw := make(map[string]float64)
+	unrated := make([]string, 0)
 	for i, nd := range gd.Nodes {
-		raw[nd.ID] = t[i]
+		if nd.Kind != NodeKindWallet {
+			continue
+		}
+		if ratedWallet[i] {
+			ratedRaw[nd.ID] = t[i]
+		} else {
+			unrated = append(unrated, nd.ID)
+		}
 	}
-	return minMaxScale(raw, 0, 100), iters
+	return WalletScores{Rated: p99Scale(ratedRaw), Unrated: unrated}, iters
 }
 
-// minMaxScale maps values to [lo, hi]. Returns mid when all values are equal.
-func minMaxScale(in map[string]float64, lo, hi float64) map[string]float64 {
+// p99Scale winsorizes at the 99th percentile: out = clamp(100·(v-min)/(p99-min), 0, 100).
+// Capping at p99 (not max) prevents a single hub from anchoring the whole scale.
+func p99Scale(in map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(in))
 	if len(in) == 0 {
-		return in
+		return out
 	}
-	minV, maxV := math.MaxFloat64, -math.MaxFloat64
+	vals := make([]float64, 0, len(in))
+	minV := math.MaxFloat64
 	for _, v := range in {
+		vals = append(vals, v)
 		if v < minV {
 			minV = v
 		}
-		if v > maxV {
-			maxV = v
-		}
 	}
-	out := make(map[string]float64, len(in))
-	span := maxV - minV
+	sort.Float64s(vals)
+	idx := int(math.Ceil(0.99*float64(len(vals)))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(vals) {
+		idx = len(vals) - 1
+	}
+	p99 := vals[idx]
+	span := p99 - minV
 	if span < 1e-12 {
-		mid := (lo + hi) / 2
 		for k := range in {
-			out[k] = mid
+			out[k] = 50
 		}
 		return out
 	}
 	for k, v := range in {
-		out[k] = lo + (v-minV)/span*(hi-lo)
+		s := (v - minV) / span * 100
+		if s < 0 {
+			s = 0
+		} else if s > 100 {
+			s = 100
+		}
+		out[k] = s
 	}
 	return out
 }

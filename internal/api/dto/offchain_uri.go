@@ -14,3 +14,8 @@ type OffchainURIDataView struct {
 	// RawPreview is a truncated raw body when fetch succeeded but content was not valid JSON.
 	RawPreview string `json:"rawPreview,omitempty"`
 }
+
+// ReconnectServiceRequest is the body for POST /agents/:chainId/:agentId/services/reconnect.
+type ReconnectServiceRequest struct {
+	Endpoint string `json:"endpoint"`
+}

@@ -12,8 +12,10 @@ import (
 	"log"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+
 	evmdecoder "erc-8004-benchmarking-be/internal/decoder/evm"
-	"erc-8004-benchmarking-be/internal/infra/rabbitmq"
+	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
 	"erc-8004-benchmarking-be/internal/mq"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
@@ -22,58 +24,85 @@ import (
 )
 
 // App orchestrates raw-log consuming, decoding, and event persistence.
+// It implements rabbitmq.MessageHandler[mq.RawLogMessage] directly.
 type App struct {
-	consumer      *rabbitmq.Consumer
+	rmqinfra.BaseHandler[mq.RawLogMessage]
+	pool          *rmqinfra.ConsumerPool[mq.RawLogMessage]
 	eventsRepo    *eventrepo.Repository
-	redis         *redisinfra.Client // optional; nil disables realtime broadcast
+	redis         *redisinfra.Client
 	eventsChannel string
+	queueName     string
+	prefetch      int
 }
 
 // NewApp returns a ready App. Pass redis=nil to skip realtime publishing.
-func NewApp(consumer *rabbitmq.Consumer, eventsRepo *eventrepo.Repository, redis *redisinfra.Client, eventsChannel string) *App {
+func NewApp(
+	conn *amqp.Connection,
+	queueName string,
+	prefetch int,
+	eventsRepo *eventrepo.Repository,
+	redis *redisinfra.Client,
+	eventsChannel string,
+) *App {
 	if eventsChannel == "" {
 		eventsChannel = wsock.ChannelRealtimeEvents
 	}
-	return &App{
-		consumer:      consumer,
+	a := &App{
 		eventsRepo:    eventsRepo,
 		redis:         redis,
 		eventsChannel: eventsChannel,
+		queueName:     queueName,
+		prefetch:      prefetch,
 	}
+	a.pool = rmqinfra.New[mq.RawLogMessage](conn, a)
+	return a
 }
 
-// Run blocks until ctx is cancelled, processing messages from the raw-logs queue.
+func (a *App) Init(_ string) rmqinfra.ReaderConfig {
+	return rmqinfra.ReaderConfig{Prefetch: a.prefetch, Workers: 4}
+}
+
+func (a *App) QueueName(_ string) string { return a.queueName }
+
+// Handle decodes and persists one raw log message.
+// Decode errors are acked (dropped) — they are unrecoverable.
+// Mongo write errors are returned so the pool nacks+requeues.
+func (a *App) Handle(ctx context.Context, msg mq.RawLogMessage) error {
+	eventName, args, err := evmdecoder.DecodeLog(msg)
+	if err != nil {
+		return nil // unrecognized log → ack+drop
+	}
+
+	now := time.Now().Unix()
+	ev := eventrepo.DecodedEvent{
+		ChainID:         msg.ChainID,
+		ContractAddress: msg.ContractAddress,
+		ContractType:    msg.ContractType,
+		EventName:       eventName,
+		BlockNumber:     msg.BlockNumber,
+		BlockHash:       msg.BlockHash,
+		TxHash:          msg.TxHash,
+		LogIndex:        msg.LogIndex,
+		Args:            args,
+		Removed:         msg.Removed,
+		Timestamp:       msg.Timestamp,
+		IngestedAt:      msg.IngestedAt,
+		DecodedAt:       now,
+	}
+
+	if err := a.eventsRepo.BulkUpsert(ctx, []eventrepo.DecodedEvent{ev}); err != nil {
+		return fmt.Errorf("events bulk upsert: %w", err)
+	}
+
+	a.publishRealtime(ctx, ev)
+	return nil
+}
+
+// Run blocks until ctx is cancelled.
 func (a *App) Run(ctx context.Context) error {
-	return a.consumer.Consume(ctx, func(ctx context.Context, msg mq.RawLogMessage) error {
-		eventName, args, err := evmdecoder.DecodeLog(msg)
-		if err != nil {
-			return nil
-		}
-
-		now := time.Now().Unix()
-		ev := eventrepo.DecodedEvent{
-			ChainID:         msg.ChainID,
-			ContractAddress: msg.ContractAddress,
-			ContractType:    msg.ContractType,
-			EventName:       eventName,
-			BlockNumber:     msg.BlockNumber,
-			BlockHash:       msg.BlockHash,
-			TxHash:          msg.TxHash,
-			LogIndex:        msg.LogIndex,
-			Args:            args,
-			Removed:         msg.Removed,
-			Timestamp:       msg.Timestamp,
-			IngestedAt:      msg.IngestedAt,
-			DecodedAt:       now,
-		}
-
-		if err := a.eventsRepo.BulkUpsert(ctx, []eventrepo.DecodedEvent{ev}); err != nil {
-			return fmt.Errorf("events bulk upsert: %w", err)
-		}
-
-		a.publishRealtime(ctx, ev)
-		return nil
-	})
+	a.pool.EnsureReader(ctx, "")
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 // publishRealtime best-effort publishes the decoded event to Redis. Failures are

@@ -6,15 +6,17 @@ package descsummarizer
 // identity processor whenever an agent's description becomes non-empty or
 // changes. The worker:
 //
-//   1. Skips if agents.summarizedDescriptionHash already matches msg.DescHash
-//      (idempotency — protects against duplicate deliveries / replays).
-//   2. POSTs the description to the AI service /summarize endpoint.
-//   3. Upserts agents.summarizedDescription{,Hash,At}.
+//  1. Skips if agents.summarizedDescriptionHash already matches msg.DescHash
+//     (idempotency — protects against duplicate deliveries / replays).
+//  2. POSTs the description to the AI service /summarize endpoint.
+//  3. Upserts agents.summarizedDescription{,Hash,At}.
 //
 // Retry policy:
 //   - Mongo / transient AI service error → nack + requeue (up to maxAttempts).
 //   - Past maxAttempts → ack-drop with log (poison-pill protection).
 //   - Agent doc missing → ack-drop; the next identity event will re-trigger.
+//
+// Attempt tracking uses msg.Attempt (incremented on each republish).
 
 import (
 	"bytes"
@@ -24,7 +26,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,8 @@ import (
 )
 
 const (
-	defaultMaxAttempts        = 3
-	attemptHeaderKey          = "x-attempt"
-	defaultAIRequestTimeoutS  = 30
+	defaultMaxAttempts         = 3
+	defaultAIRequestTimeoutS   = 30
 	defaultConsumerConcurrency = 4
 )
 
@@ -52,12 +52,14 @@ type Config struct {
 	Model              string // optional model override for /summarize
 }
 
-// App is the consumer worker.
+// App is the consumer worker. It implements rabbitmq.MessageHandler[mq.AgentDescSummaryMessage].
 type App struct {
-	cfg      Config
-	conn     *amqp.Connection
-	agents   *agentrepo.Repository
-	httpCl   *http.Client
+	rmqinfra.BaseHandler[mq.AgentDescSummaryMessage]
+	pool   *rmqinfra.ConsumerPool[mq.AgentDescSummaryMessage]
+	cfg    Config
+	conn   *amqp.Connection
+	agents *agentrepo.Repository
+	httpCl *http.Client
 }
 
 // NewApp builds a consumer App.
@@ -74,92 +76,86 @@ func NewApp(conn *amqp.Connection, agents *agentrepo.Repository, cfg Config) *Ap
 	if cfg.MaxAttempts < 1 {
 		cfg.MaxAttempts = defaultMaxAttempts
 	}
-	return &App{
+	a := &App{
 		cfg:    cfg,
 		conn:   conn,
 		agents: agents,
 		httpCl: &http.Client{Timeout: time.Duration(cfg.RequestTimeoutSecs+2) * time.Second},
 	}
+	a.pool = rmqinfra.New[mq.AgentDescSummaryMessage](conn, a)
+	return a
 }
 
-// Run opens the AMQP channel, declares the queue, and consumes until ctx is cancelled.
-func (a *App) Run(ctx context.Context) error {
-	ch, err := a.conn.Channel()
-	if err != nil {
-		return fmt.Errorf("desc_summarizer: open channel: %w", err)
-	}
-	defer ch.Close()
-
-	if _, err := ch.QueueDeclare(a.cfg.QueueName, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("desc_summarizer: declare queue %q: %w", a.cfg.QueueName, err)
-	}
-	if err := ch.Qos(a.cfg.Prefetch, 0, false); err != nil {
-		return fmt.Errorf("desc_summarizer: set qos: %w", err)
-	}
-
-	tag := fmt.Sprintf("desc-summarizer-%d", time.Now().UnixNano())
-	deliveries, err := ch.Consume(a.cfg.QueueName, tag, false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("desc_summarizer: start consume: %w", err)
-	}
-
-	log.Printf("desc_summarizer: started queue=%s prefetch=%d ai=%s",
-		a.cfg.QueueName, a.cfg.Prefetch, a.cfg.AIServiceURL)
-
-	return rmqinfra.GracefulConsumeLoop(ctx, ch, tag, deliveries, rmqinfra.GracefulConsumeParamsDefaults(),
-		func(hctx context.Context, d amqp.Delivery) error {
-			a.handle(hctx, d)
-			return nil
-		},
-	)
+func (a *App) Init(_ string) rmqinfra.ReaderConfig {
+	return rmqinfra.ReaderConfig{Prefetch: a.cfg.Prefetch, Workers: a.cfg.Prefetch}
 }
 
-func (a *App) handle(ctx context.Context, d amqp.Delivery) {
-	var msg mq.AgentDescSummaryMessage
-	if err := json.Unmarshal(d.Body, &msg); err != nil {
-		log.Printf("desc_summarizer: discard malformed message: %v", err)
-		_ = d.Ack(false)
-		return
-	}
+func (a *App) QueueName(_ string) string { return a.cfg.QueueName }
 
-	// Skip on idempotency: agent already summarised this exact description.
+// Handle processes one desc-summary message.
+// Returns nil to ack (success, drop, or republish-for-retry).
+// Returns non-nil only for infrastructure failures (mongo) so the pool nacks+requeues.
+func (a *App) Handle(ctx context.Context, msg mq.AgentDescSummaryMessage) error {
 	doc, err := a.agents.FindByAgentID(ctx, msg.ChainID, msg.AgentID)
 	if err == nil && doc != nil && doc.SummarizedDescriptionHash == msg.DescHash && msg.DescHash != "" {
-		_ = d.Ack(false)
-		return
+		return nil // already done, ack
 	}
 
 	summary, sumErr := a.fetchSummary(ctx, msg)
 	if sumErr != nil {
-		attempt := readAttempt(d.Headers) + 1
-		if attempt >= a.cfg.MaxAttempts {
+		nextAttempt := msg.Attempt + 1
+		if nextAttempt >= a.cfg.MaxAttempts {
 			log.Printf("desc_summarizer: drop after %d attempts chain=%d agent=%s: %v",
-				attempt, msg.ChainID, msg.AgentID, sumErr)
-			_ = d.Ack(false)
-			return
+				nextAttempt, msg.ChainID, msg.AgentID, sumErr)
+			return nil // ack+drop
 		}
-		// Republish with incremented attempt so we keep the cap visible.
-		if pubErr := a.republishWithAttempt(ctx, msg, d, attempt); pubErr != nil {
+		newMsg := msg
+		newMsg.Attempt = nextAttempt
+		if pubErr := a.republish(ctx, newMsg); pubErr != nil {
 			log.Printf("desc_summarizer: republish failed chain=%d agent=%s: %v (original: %v)",
 				msg.ChainID, msg.AgentID, pubErr, sumErr)
-			_ = d.Nack(false, true)
-			return
+			return pubErr // OnError (from BaseHandler) → nack+requeue
 		}
-		_ = d.Ack(false)
-		return
+		return nil // ack original after successful republish
 	}
 
 	matched, err := a.agents.SetSummarizedDescription(ctx, msg.ChainID, msg.AgentID, summary, msg.DescHash, time.Now().Unix())
 	if err != nil {
-		log.Printf("desc_summarizer: mongo write error chain=%d agent=%s: %v",
-			msg.ChainID, msg.AgentID, err)
-		_ = d.Nack(false, true)
-		return
+		log.Printf("desc_summarizer: mongo write error chain=%d agent=%s: %v", msg.ChainID, msg.AgentID, err)
+		return err // OnError → nack+requeue
 	}
 	if !matched {
 		log.Printf("desc_summarizer: agent missing, dropping chain=%d agent=%s", msg.ChainID, msg.AgentID)
 	}
-	_ = d.Ack(false)
+	return nil
+}
+
+// Run opens the AMQP consumer and blocks until ctx is cancelled.
+func (a *App) Run(ctx context.Context) error {
+	log.Printf("desc_summarizer: started queue=%s prefetch=%d ai=%s",
+		a.cfg.QueueName, a.cfg.Prefetch, a.cfg.AIServiceURL)
+	a.pool.EnsureReader(ctx, "")
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// republish publishes msg (with incremented Attempt) to the same queue for retry.
+func (a *App) republish(ctx context.Context, msg mq.AgentDescSummaryMessage) error {
+	ch, err := a.conn.Channel()
+	if err != nil {
+		return fmt.Errorf("open channel: %w", err)
+	}
+	defer ch.Close()
+
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	return ch.PublishWithContext(ctx, "", a.cfg.QueueName, false, false, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         body,
+		DeliveryMode: amqp.Persistent,
+	})
 }
 
 type summarizeReq struct {
@@ -216,53 +212,4 @@ func (a *App) fetchSummary(ctx context.Context, msg mq.AgentDescSummaryMessage) 
 		return "", fmt.Errorf("empty summary from ai service")
 	}
 	return summary, nil
-}
-
-func readAttempt(headers amqp.Table) int {
-	if headers == nil {
-		return 0
-	}
-	v, ok := headers[attemptHeaderKey]
-	if !ok {
-		return 0
-	}
-	switch x := v.(type) {
-	case int:
-		return x
-	case int32:
-		return int(x)
-	case int64:
-		return int(x)
-	case string:
-		n, _ := strconv.Atoi(x)
-		return n
-	}
-	return 0
-}
-
-func (a *App) republishWithAttempt(ctx context.Context, msg mq.AgentDescSummaryMessage, d amqp.Delivery, attempt int) error {
-	ch, err := a.conn.Channel()
-	if err != nil {
-		return fmt.Errorf("open channel: %w", err)
-	}
-	defer ch.Close()
-
-	body, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	headers := amqp.Table{attemptHeaderKey: attempt}
-	if d.Headers != nil {
-		for k, v := range d.Headers {
-			if k != attemptHeaderKey {
-				headers[k] = v
-			}
-		}
-	}
-	return ch.PublishWithContext(ctx, "", a.cfg.QueueName, false, false, amqp.Publishing{
-		ContentType:  "application/json",
-		Body:         body,
-		DeliveryMode: amqp.Persistent,
-		Headers:      headers,
-	})
 }

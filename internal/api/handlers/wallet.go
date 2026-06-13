@@ -21,7 +21,7 @@ func NewWalletHandler(svc *service.Wallet) *WalletHandler { return &WalletHandle
 
 // Profile handles GET /wallet/{address}.
 // Returns the trust profile for a wallet address.
-// Optional query param: chainId (int64). Without it, returns the record with highest trustScorePropagated.
+// Optional query param: chainId (int64). Without it, returns the record with highest trustScore.
 // @Summary Wallet trust profile
 // @Description Returns the trust score and stats for a wallet address.
 // @Tags wallet
@@ -62,6 +62,33 @@ func (h *WalletHandler) Profile(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, result)
 }
 
+// WalletsENS handles GET /wallets/ens.
+// Returns the resolved ENS primary name + avatar for a batch of wallet addresses.
+// Addresses with no resolved ENS name (or not found) are omitted from the response.
+// @Summary Bulk ENS lookup for wallet addresses
+// @Description Returns the resolved ENS primary name + avatar for a batch of wallet addresses. Addresses with no ENS name are omitted.
+// @Tags wallet
+// @Produce json
+// @Param addresses query []string true "Wallet addresses (repeatable or comma-separated)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /wallets/ens [get]
+func (h *WalletHandler) WalletsENS(w http.ResponseWriter, r *http.Request) {
+	addresses := dto.ParseStringSlice(r, "addresses")
+	if len(addresses) == 0 {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "addresses is required")
+		return
+	}
+
+	rows, err := h.svc.WalletsENS(r.Context(), addresses)
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.Success(w, r, rows)
+}
+
 // FeedbackGiven handles GET /wallet/{address}/feedbacks.
 // Returns paginated feedback submitted by the given wallet address, enriched with agent name.
 // Each row matches dto.FeedbackRow (classification.rule + optional classification.fallback), same as GET /agents/.../feedbacks.
@@ -86,6 +113,40 @@ func (h *WalletHandler) FeedbackGiven(w http.ResponseWriter, r *http.Request) {
 	page, limit, skip := dto.ParsePagination(r, 20, 100)
 
 	out, err := h.svc.FeedbackGiven(r.Context(), service.WalletFeedbacksParams{
+		Address: address,
+		Page:    page,
+		Limit:   limit,
+		Skip:    skip,
+	})
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
+}
+
+// FeedbackAgents handles GET /wallet/{address}/feedback-agents.
+// Returns paginated distinct agents that received feedback from the wallet.
+// @Summary Distinct agents that received feedback from a wallet
+// @Tags wallet
+// @Produce json
+// @Param address path string true "Wallet address (hex)"
+// @Param page query int false "Page number (default 1)"
+// @Param limit query int false "Page size (max 100, default 20)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /wallet/{address}/feedback-agents [get]
+func (h *WalletHandler) FeedbackAgents(w http.ResponseWriter, r *http.Request) {
+	address := strings.TrimSpace(r.PathValue("address"))
+	if address == "" {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "address is required")
+		return
+	}
+
+	page, limit, skip := dto.ParsePagination(r, 20, 100)
+
+	out, err := h.svc.FeedbackAgents(r.Context(), service.WalletFeedbackAgentsParams{
 		Address: address,
 		Page:    page,
 		Limit:   limit,

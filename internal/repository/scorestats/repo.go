@@ -53,9 +53,9 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 func (r *Repository) UpsertFromWritePath(
 	ctx context.Context,
 	chainID int64, agentID string,
-	reputationScore float64, scoreUpdateAt int64,
-	consecutiveFails, totalTasks, totalPassed, totalFailed int64,
-	composite, reputationNorm, services, publisher, compliance float64,
+	reputationScore, weightedScoreSum, weightMass float64, scoreUpdateAt int64,
+	consecutiveFails, totalTasks, totalPassed, totalFailed int64, monthUniqueUsers int,
+	composite, reputationNorm, adoption, services, publisher float64, publisherPresent bool, compliance float64,
 	serviceWarnings []string,
 ) error {
 	filter := bson.M{"chainId": chainID, "agentId": agentID}
@@ -63,31 +63,26 @@ func (r *Repository) UpsertFromWritePath(
 		"chainId":          chainID,
 		"agentId":          agentID,
 		"reputationScore":  reputationScore,
+		"weightedScoreSum": weightedScoreSum,
+		"weightMass":       weightMass,
 		"scoreUpdateAt":    scoreUpdateAt,
 		"consecutiveFails": consecutiveFails,
 		"totalTasks":       totalTasks,
 		"totalPassed":      totalPassed,
 		"totalFailed":      totalFailed,
+		"monthUniqueUsers": monthUniqueUsers,
 		"compositeScore":   composite,
 		"reputationNorm":   reputationNorm,
+		"adoptionScore":    adoption,
 		"servicesScore":    services,
 		"publisherScore":   publisher,
+		"publisherPresent": publisherPresent,
 		"complianceScore":  compliance,
 		"serviceWarnings":  serviceWarnings,
 	}}
 	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	if err != nil {
 		return fmt.Errorf("scorestats: upsert from write path chainId=%d agentId=%s: %w", chainID, agentID, err)
-	}
-	return nil
-}
-
-// IncReputation atomically adds delta to reputationScore (used by rescale worker).
-func (r *Repository) IncReputation(ctx context.Context, chainID int64, agentID string, delta float64) error {
-	filter := bson.M{"chainId": chainID, "agentId": agentID}
-	_, err := r.UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"reputationScore": delta}})
-	if err != nil {
-		return fmt.Errorf("scorestats: inc reputation chainId=%d agentId=%s: %w", chainID, agentID, err)
 	}
 	return nil
 }
@@ -189,6 +184,41 @@ func (r *Repository) ScanCompositeScores(ctx context.Context, chainID int64) ([]
 	var out []AgentCompositeScore
 	if err := cur.All(ctx, &out); err != nil {
 		return nil, fmt.Errorf("scorestats: decode composite scores: %w", err)
+	}
+	return out, nil
+}
+
+// AgentComponents is a lightweight projection of an agent's score components,
+// used by the propagation pass to compute the publisher-excluded direct prior.
+type AgentComponents struct {
+	ChainID         int64   `bson:"chainId"`
+	AgentID         string  `bson:"agentId"`
+	ReputationNorm  float64 `bson:"reputationNorm"`
+	AdoptionScore   float64 `bson:"adoptionScore"`
+	ServicesScore   float64 `bson:"servicesScore"`
+	ComplianceScore float64 `bson:"complianceScore"`
+	WeightMass      float64 `bson:"weightMass"` // B>0 ⇒ reputation present
+}
+
+// ScanComponentScores returns component breakdowns for all agents on a chain.
+// Pass chainID=0 to scan all chains.
+func (r *Repository) ScanComponentScores(ctx context.Context, chainID int64) ([]AgentComponents, error) {
+	filter := bson.M{}
+	if chainID > 0 {
+		filter["chainId"] = chainID
+	}
+	cur, err := r.Coll.Find(ctx, filter, options.Find().
+		SetProjection(bson.M{
+			"chainId": 1, "agentId": 1, "reputationNorm": 1, "adoptionScore": 1,
+			"servicesScore": 1, "complianceScore": 1, "weightMass": 1, "_id": 0,
+		}).SetBatchSize(5000))
+	if err != nil {
+		return nil, fmt.Errorf("scorestats: scan component scores: %w", err)
+	}
+	defer cur.Close(ctx)
+	var out []AgentComponents
+	if err := cur.All(ctx, &out); err != nil {
+		return nil, fmt.Errorf("scorestats: decode component scores: %w", err)
 	}
 	return out, nil
 }

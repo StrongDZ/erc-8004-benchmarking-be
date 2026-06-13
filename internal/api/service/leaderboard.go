@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -16,6 +17,7 @@ import (
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // ── Interfaces (defined at consumer site per DIP) ────────────────────────────
@@ -42,12 +44,17 @@ type leaderboardCrawlerRepo interface {
 	ListByChain(ctx context.Context, chainID int64) ([]crawlerrepo.CrawlerState, error)
 }
 
+type leaderboardWalletRepo interface {
+	FindRankingSummariesByAddresses(ctx context.Context, addresses []string) (map[string]walletrepo.WalletRankingSummary, error)
+}
+
 // LeaderboardDeps bundles the repos used by the leaderboard service.
 type LeaderboardDeps struct {
 	Agents   leaderboardAgentRepo
 	Feedback leaderboardFeedbackRepo
 	Scores   leaderboardScoreRepo
 	Crawlers leaderboardCrawlerRepo
+	Wallets  leaderboardWalletRepo
 	Formula  scoring.FormulaConfig
 }
 
@@ -128,6 +135,92 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 	}
 
 	return &ListResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
+}
+
+// WalletRankingParams are inputs for /leaderboard/wallet-ranking.
+type WalletRankingParams struct {
+	ChainIDs   []int64
+	AgentLimit int // top agents sampled before grouping by owner (default 200, max 500)
+}
+
+// WalletRanking builds wallet rows from top agents grouped by owner, with wallet
+// trust scores and feedback counts loaded in one batch query.
+func (s *Leaderboard) WalletRanking(ctx context.Context, p WalletRankingParams) ([]dto.WalletRankingRow, error) {
+	agentLimit := p.AgentLimit
+	if agentLimit <= 0 {
+		agentLimit = 200
+	}
+	if agentLimit > 500 {
+		agentLimit = 500
+	}
+
+	listRes, err := s.List(ctx, ListParams{
+		ChainIDs: p.ChainIDs,
+		Sort:     agentrepo.SortScoreDesc,
+		Page:     1,
+		Limit:    agentLimit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("wallet ranking: %w", err)
+	}
+
+	ownerAgents := make(map[string][]dto.AgentRow)
+	addresses := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, row := range listRes.Rows {
+		owner := strings.TrimSpace(row.Owner)
+		if owner == "" {
+			continue
+		}
+		addr := strings.ToLower(owner)
+		ownerAgents[addr] = append(ownerAgents[addr], row)
+		if _, ok := seen[addr]; !ok {
+			seen[addr] = struct{}{}
+			addresses = append(addresses, addr)
+		}
+	}
+
+	summaries := map[string]walletrepo.WalletRankingSummary{}
+	if s.deps.Wallets != nil && len(addresses) > 0 {
+		summaries, err = s.deps.Wallets.FindRankingSummariesByAddresses(ctx, addresses)
+		if err != nil {
+			return nil, fmt.Errorf("wallet ranking summaries: %w", err)
+		}
+	}
+
+	rows := make([]dto.WalletRankingRow, 0, len(addresses))
+	for _, addr := range addresses {
+		agents := ownerAgents[addr]
+		sort.Slice(agents, func(i, j int) bool {
+			return agents[i].TrustScore > agents[j].TrustScore
+		})
+		summary := summaries[addr]
+		rows = append(rows, dto.WalletRankingRow{
+			Address:            addr,
+			Agents:             agents,
+			TrustScore:         summary.TrustScore,
+			FeedbackTotalCount: summary.FeedbackTotalCount,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		switch {
+		case a.TrustScore == nil && b.TrustScore == nil:
+			return len(a.Agents) > len(b.Agents)
+		case a.TrustScore == nil:
+			return false
+		case b.TrustScore == nil:
+			return true
+		default:
+			if *a.TrustScore != *b.TrustScore {
+				return *a.TrustScore > *b.TrustScore
+			}
+			return len(a.Agents) > len(b.Agents)
+		}
+	})
+
+	return rows, nil
 }
 
 // Search implements /leaderboard/search (§2.2). Returns at most `limit` rows.

@@ -12,10 +12,9 @@ package uribootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"time"
+	"strconv"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
@@ -27,9 +26,11 @@ import (
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 )
 
-// EventURIConsumer fetches URIs from the event_uri queue and writes results to offchain_data.
+// EventURIConsumer fetches URIs from per-chain event_uri queues and writes results to offchain_data.
+// It manages a shared ConsumerPool; call EnsureChain to register a reader per chain.
 type EventURIConsumer struct {
-	conn       *amqp.Connection
+	rmqinfra.BaseHandler[mq.AgentURIMessage]
+	pool       *rmqinfra.ConsumerPool[mq.AgentURIMessage]
 	offchain   *offchainrepo.Repository
 	resolver   *domainuri.Resolver
 	configRepo *configrepo.ConfigRepository
@@ -48,66 +49,43 @@ func NewEventURIConsumer(
 	if prefetch < 1 {
 		prefetch = 1
 	}
-	return &EventURIConsumer{
-		conn:       conn,
+	c := &EventURIConsumer{
 		offchain:   offchain,
 		resolver:   resolver,
 		configRepo: configRepo,
 		prefetch:   prefetch,
 	}
+	c.pool = rmqinfra.New[mq.AgentURIMessage](conn, c)
+	return c
 }
 
-// RunChain opens a channel, declares the queue, and consumes until ctx is cancelled.
-// Intended to run as a goroutine; one instance per chain.
-func (c *EventURIConsumer) RunChain(ctx context.Context, chainID int64) error {
-	queueName := mq.EventURIQueueName(chainID)
+// EnsureChain starts a reader for chainID (idempotent, non-blocking).
+func (c *EventURIConsumer) EnsureChain(ctx context.Context, chainID int64) {
+	c.pool.EnsureReader(ctx, strconv.FormatInt(chainID, 10))
+}
 
-	ch, err := c.conn.Channel()
-	if err != nil {
-		return fmt.Errorf("event_uri_consumer chain=%d: open channel: %w", chainID, err)
+func (c *EventURIConsumer) Init(_ string) rmqinfra.ReaderConfig {
+	return rmqinfra.ReaderConfig{Prefetch: c.prefetch, Workers: max(c.prefetch, 4)}
+}
+
+func (c *EventURIConsumer) QueueName(key string) string {
+	chainID, _ := strconv.ParseInt(key, 10, 64)
+	return mq.EventURIQueueName(chainID)
+}
+
+// Handle fetches the URI, records the result, and advances the fetched cursor on success.
+// Returns non-nil only for infrastructure failures (DB writes) so the pool nacks+requeues.
+func (c *EventURIConsumer) Handle(ctx context.Context, msg mq.AgentURIMessage) error {
+	if err := c.handleMessage(ctx, msg); err != nil {
+		log.Printf("event_uri_consumer: nack+requeue uri=%s: %v", msg.URI, err)
+		return err
 	}
-	defer ch.Close()
-
-	if _, err := ch.QueueDeclare(queueName, true, false, false, false, nil); err != nil {
-		return fmt.Errorf("event_uri_consumer chain=%d: declare queue: %w", chainID, err)
-	}
-
-	if err := ch.Qos(c.prefetch, 0, false); err != nil {
-		return fmt.Errorf("event_uri_consumer chain=%d: set qos: %w", chainID, err)
-	}
-
-	tag := fmt.Sprintf("event-uri-chain%d-%d", chainID, time.Now().UnixNano())
-	deliveries, err := ch.Consume(queueName, tag, false, false, false, false, nil)
-	if err != nil {
-		return fmt.Errorf("event_uri_consumer chain=%d: start consume: %w", chainID, err)
-	}
-
-	log.Printf("event_uri_consumer: chain=%d started queue=%s", chainID, queueName)
-
-	return rmqinfra.GracefulConsumeLoop(ctx, ch, tag, deliveries, rmqinfra.GracefulConsumeParamsDefaults(), func(hctx context.Context, d amqp.Delivery) error {
-		var msg mq.AgentURIMessage
-		if err := json.Unmarshal(d.Body, &msg); err != nil {
-			// Malformed message — discard permanently (ack).
-			log.Printf("event_uri_consumer chain=%d: discard malformed message: %v", chainID, err)
-			_ = d.Ack(false)
-			return nil
-		}
-
-		if err := c.handleMessage(hctx, msg); err != nil {
-			// Infrastructure error (DB write, context) — requeue for retry.
-			log.Printf("event_uri_consumer chain=%d: nack+requeue uri=%s: %v", chainID, msg.URI, err)
-			_ = d.Nack(false, true)
-			return nil
-		}
-		c.advanceFetchedCursor(hctx, msg.ChainID, msg.BlockNumber, msg.LogIndex)
-		_ = d.Ack(false)
-		return nil
-	})
+	c.advanceFetchedCursor(ctx, msg.ChainID, msg.BlockNumber, msg.LogIndex)
+	return nil
 }
 
 // handleMessage fetches the URI and writes the result to offchain_data.
 // Returns non-nil error only for infrastructure failures (triggers nack+requeue).
-// Fetch errors and non-JSON content are recorded and return nil (triggers ack).
 func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMessage) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -121,7 +99,6 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 
 	switch {
 	case fetchErr != nil:
-		// Network/HTTP error — record failure, ack (no retry).
 		if dbErr := c.offchain.UpsertFailure(ctx, msg.URI, sourceType, eventType, contractType, fetchErr.Error()); dbErr != nil {
 			return fmt.Errorf("event_uri_consumer: write fetch-failure: %w", dbErr)
 		}
@@ -129,7 +106,6 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 		return nil
 
 	case !isJSON:
-		// Fetched but not valid JSON — record, ack.
 		if dbErr := c.offchain.UpsertFetchedNotJSON(ctx, msg.URI, string(body), sourceType, eventType, contractType); dbErr != nil {
 			return fmt.Errorf("event_uri_consumer: write not-json: %w", dbErr)
 		}
@@ -137,7 +113,6 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 		return nil
 
 	default:
-		// Valid JSON — record success.
 		if dbErr := c.offchain.UpsertSuccess(ctx, msg.URI, string(body), sourceType, eventType, contractType); dbErr != nil {
 			return fmt.Errorf("event_uri_consumer: write success: %w", dbErr)
 		}
@@ -145,8 +120,7 @@ func (c *EventURIConsumer) handleMessage(ctx context.Context, msg mq.AgentURIMes
 	}
 }
 
-// advanceFetchedCursor moves uri_fetched_{chainID} forward to at least (blockNumber, logIndex)
-// after a terminal offchain upsert. Skips legacy queue payloads with no position.
+// advanceFetchedCursor moves uri_fetched_{chainID} forward to at least (blockNumber, logIndex).
 func (c *EventURIConsumer) advanceFetchedCursor(ctx context.Context, chainID int64, blockNumber uint64, logIndex uint) {
 	if c.configRepo == nil {
 		return
@@ -221,4 +195,11 @@ func parseBlockLogFromMetadata(md map[string]any) (blockNumber uint64, logIndex 
 	}
 
 	return blockNumber, logIndex, true
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

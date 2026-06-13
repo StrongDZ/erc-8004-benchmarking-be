@@ -2,6 +2,17 @@ package wallet
 
 import "testing"
 
+func TestBuildExternalUpdate(t *testing.T) {
+	in := ExternalUpdate{ID: "1:0xabc", Doc: ExternalDoc{Score: 62.4, Present: true, Complete: false}}
+	set := buildExternalSet(in)
+	if set["external.score"] != 62.4 {
+		t.Fatalf("want score path set, got %v", set["external.score"])
+	}
+	if set["external.present"] != true {
+		t.Fatalf("want present path set, got %v", set["external.present"])
+	}
+}
+
 func TestNormalizeAddress_LowercasesAndTrims(t *testing.T) {
 	cases := []struct {
 		in, want string
@@ -55,6 +66,20 @@ func TestComputeColdStartT0_EmptyOwnedAgents_ReturnsDefault(t *testing.T) {
 	got := computeColdStartT0([]float64{}, 15.0)
 	if got != 15.0 {
 		t.Errorf("got=%v want=15.0", got)
+	}
+}
+
+func TestPickProfileWalletDoc_PrefersRatedHighestScore(t *testing.T) {
+	ratedLow := WalletDocument{Address: "0xabc", TrustRated: true, TrustScore: 40, FeedbackTotalCount: 1}
+	ratedHigh := WalletDocument{Address: "0xabc", TrustRated: true, TrustScore: 90, FeedbackTotalCount: 5}
+	unrated := WalletDocument{Address: "0xabc", TrustRated: false, TrustScore: 99, FeedbackTotalCount: 9}
+
+	got := pickProfileWalletDoc([]WalletDocument{unrated, ratedLow, ratedHigh})
+	if got == nil || got.TrustScore != 90 || !got.TrustRated {
+		t.Fatalf("expected rated 90, got %+v", got)
+	}
+	if got.FeedbackTotalCount != 5 {
+		t.Fatalf("feedbackTotalCount=%d want 5", got.FeedbackTotalCount)
 	}
 }
 

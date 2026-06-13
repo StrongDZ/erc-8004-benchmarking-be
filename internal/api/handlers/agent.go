@@ -3,6 +3,7 @@ package handlers
 // agent.go âÿÿ HTTP handlers for /agents/:chainId/:agentId/* endpoints.
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -113,6 +114,38 @@ func (h *AgentHandler) Feedbacks(w http.ResponseWriter, r *http.Request) {
 		Page:     page,
 		Limit:    limit,
 		Skip:     skip,
+	})
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.SuccessMeta(w, r, out.Rows, &dto.Meta{Page: out.Page, Limit: out.Limit, Total: out.Total})
+}
+
+// FeedbackClients handles GET /agents/:chainId/:agentId/feedback-clients.
+// @Summary Distinct wallets that submitted feedback to an agent
+// @Tags agents
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Param page query int false "Page number"
+// @Param limit query int false "Page size"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/feedback-clients [get]
+func (h *AgentHandler) FeedbackClients(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+	page, limit, skip := dto.ParsePagination(r, 20, 100)
+	out, err := h.svc.FeedbackClients(r.Context(), service.FeedbackClientsParams{
+		ChainID: chainID,
+		AgentID: agentID,
+		Page:    page,
+		Limit:   limit,
+		Skip:    skip,
 	})
 	if err != nil {
 		writeServiceErr(w, r, err)
@@ -413,6 +446,41 @@ func (h *AgentHandler) Registrations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.Registrations(r.Context(), chainID, agentID)
+	if err != nil {
+		writeServiceErr(w, r, err)
+		return
+	}
+	dto.Success(w, r, out)
+}
+
+// ReconnectServiceEndpoint handles POST /agents/:chainId/:agentId/services/reconnect.
+// Re-probes one of the agent's registered service endpoints immediately, persists the
+// result to offchain_data, and returns the updated service health.
+// @Summary Reconnect to a registered service endpoint
+// @Tags agents
+// @Accept json
+// @Produce json
+// @Param chainId path int true "Chain ID"
+// @Param agentId path string true "Agent ID"
+// @Param body body dto.ReconnectServiceRequest true "Endpoint to reconnect"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 404 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /agents/{chainId}/{agentId}/services/reconnect [post]
+func (h *AgentHandler) ReconnectServiceEndpoint(w http.ResponseWriter, r *http.Request) {
+	chainID, agentID, ok := h.parseAgentPath(w, r)
+	if !ok {
+		return
+	}
+
+	var req dto.ReconnectServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "invalid JSON body")
+		return
+	}
+
+	out, err := h.svc.ReconnectServiceEndpoint(r.Context(), chainID, agentID, req.Endpoint)
 	if err != nil {
 		writeServiceErr(w, r, err)
 		return

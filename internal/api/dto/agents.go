@@ -3,10 +3,11 @@ package dto
 // agents.go — Public DTOs for agent-facing endpoints.
 // These mirror the JSON shapes in docs/API_SPEC_v1.md §2.1, §3.1–§3.11.
 
-// ScoreBreakdown surfaces the 4 component scores that compose the trust score.
-// Reputation is the raw accumulator value (unbounded). Services/Publisher/Compliance are normalized to [0, 100].
+// ScoreBreakdown surfaces the 5 component scores that compose the trust score.
+// All components are in [0, 100]. Reputation = Quality·Confidence·Reliability·100.
 type ScoreBreakdown struct {
 	Reputation float64 `json:"reputation"`
+	Adoption   float64 `json:"adoption"`
 	Services   float64 `json:"services"`
 	Publisher  float64 `json:"publisher"`
 	Compliance float64 `json:"compliance"`
@@ -15,20 +16,21 @@ type ScoreBreakdown struct {
 // AgentRow is one row of /leaderboard (§2.1) and /leaderboard/search (§2.2, trimmed via JSON tags).
 // TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentRow struct {
-	Rank             int            `json:"rank,omitempty"`
-	ChainID          int64          `json:"chainId"`
-	AgentID          string         `json:"agentId"`
-	Name             string         `json:"name,omitempty"`
-	Image            string         `json:"image,omitempty"`
-	Owner            string         `json:"owner,omitempty"`
+	Rank    int    `json:"rank,omitempty"`
+	ChainID int64  `json:"chainId"`
+	AgentID string `json:"agentId"`
+	Name    string `json:"name,omitempty"`
+	Image   string `json:"image,omitempty"`
+	Owner   string `json:"owner,omitempty"`
 	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
-	TrustScore       float64        `json:"trustScore"`
-	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
-	ReputationScore float64        `json:"reputationScore"`
-	ScoreBreakdown  ScoreBreakdown `json:"scoreBreakdown"`
+	TrustScore float64 `json:"trustScore"`
+	// ReputationScore is the v2 reputation in [0, 100] = Quality·Confidence·Reliability·100.
+	ReputationScore  float64        `json:"reputationScore"`
+	ScoreBreakdown   ScoreBreakdown `json:"scoreBreakdown"`
 	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
 	ConsecutiveFails int64          `json:"consecutiveFails"`
 	TotalTasks       int64          `json:"totalTasks"`
+	TotalFeedbacks   int64          `json:"totalFeedbacks"`
 	TotalPassed      int64          `json:"totalPassed"`
 	TotalFailed      int64          `json:"totalFailed"`
 	SuccessRate      float64        `json:"successRate"`
@@ -73,6 +75,14 @@ type TagCount struct {
 	Count int64  `json:"count"`
 }
 
+// WalletRankingRow is one row of /leaderboard/wallet-ranking.
+type WalletRankingRow struct {
+	Address            string     `json:"address"`
+	Agents             []AgentRow `json:"agents"`
+	TrustScore         *float64   `json:"trustScore"`
+	FeedbackTotalCount int64      `json:"feedbackTotalCount"`
+}
+
 // RisingStarRow is the shape for /leaderboard/rising-stars (§2.3).
 type RisingStarRow struct {
 	ChainID     int64   `json:"chainId"`
@@ -90,15 +100,20 @@ type RisingStarRow struct {
 // TrustScore carries the pre-computed compositeScore in range [0, 100].
 type AgentScoring struct {
 	// TrustScore is the composite trust score in [0, 100], pre-computed by the score-refresh worker.
-	TrustScore        float64          `json:"trustScore"`
-	// ReputationScore is the raw accumulated reputation value (unbounded, pre-normalization).
-	// Distinct from ScoreBreakdown.Reputation which is the normalized [0, 100] reputation component.
-	ReputationScore   float64          `json:"reputationScore"`
-	ScoreBreakdown    ScoreBreakdown   `json:"scoreBreakdown"`
-	ScoreUpdateAt     int64            `json:"scoreUpdateAt"`
-	ConsecutiveFails  int64            `json:"consecutiveFails"`
+	TrustScore float64 `json:"trustScore"`
+	// ReputationScore is the v2 reputation in [0, 100] = Quality·Confidence·Reliability·100
+	// (same value as ScoreBreakdown.Reputation).
+	ReputationScore float64 `json:"reputationScore"`
+	// AdoptionScore is the log-scaled distinct-client breadth component in [0, 100].
+	AdoptionScore    float64        `json:"adoptionScore"`
+	ScoreBreakdown   ScoreBreakdown `json:"scoreBreakdown"`
+	ScoreUpdateAt    int64          `json:"scoreUpdateAt"`
+	ConsecutiveFails int64          `json:"consecutiveFails"`
+	// Penalty is the current reliability reduction in [0, 100]: (1 − Reliability)·100,
+	// i.e. the percentage the reputation is currently docked by the consecutive-fail streak.
 	Penalty           float64          `json:"penalty"`
 	TotalTasks        int64            `json:"totalTasks"`
+	TotalFeedbacks    int64            `json:"totalFeedbacks"`
 	TotalPassed       int64            `json:"totalPassed"`
 	TotalFailed       int64            `json:"totalFailed"`
 	SuccessRate       float64          `json:"successRate"`
@@ -145,6 +160,46 @@ type AgentProfile struct {
 	CreatedAt        string                          `json:"createdAt,omitempty"`
 }
 
+// ServiceX402Enrichment surfaces x402 payment metadata extracted from manifests.
+type ServiceX402Enrichment struct {
+	Enabled  bool   `json:"enabled"`
+	Chain    string `json:"chain,omitempty"`
+	Currency string `json:"currency,omitempty"`
+	Fee      string `json:"fee,omitempty"`
+	PayTo    string `json:"payTo,omitempty"`
+}
+
+// ServiceProbeMeta summarizes the cached offchain probe for a service endpoint.
+type ServiceProbeMeta struct {
+	Status       int    `json:"status"`
+	ContentSize  int    `json:"contentSize,omitempty"`
+	SourceType   string `json:"sourceType,omitempty"`
+	ErrorSummary string `json:"errorSummary,omitempty"`
+}
+
+// ServiceEnrichment is a flattened, UI-ready view derived from registration + offchain cache.
+type ServiceEnrichment struct {
+	Description     string                 `json:"description,omitempty"`
+	Method          string                 `json:"method,omitempty"`
+	PaymentRequired *bool                  `json:"paymentRequired,omitempty"`
+	Protocol        string                 `json:"protocol,omitempty"`
+	ToolCount       int                    `json:"toolCount,omitempty"`
+	Tools           []string               `json:"tools,omitempty"`
+	Prompts         []string               `json:"prompts,omitempty"`
+	SkillPaths      []string               `json:"skillPaths,omitempty"`
+	DomainPaths     []string               `json:"domainPaths,omitempty"`
+	Provider        string                 `json:"provider,omitempty"`
+	Capabilities    []string               `json:"capabilities,omitempty"`
+	InputModes      []string               `json:"inputModes,omitempty"`
+	OutputModes     []string               `json:"outputModes,omitempty"`
+	AuthSchemes     []string               `json:"authSchemes,omitempty"`
+	PageTitle       string                 `json:"pageTitle,omitempty"`
+	PageDescription string                 `json:"pageDescription,omitempty"`
+	PageImage       string                 `json:"pageImage,omitempty"`
+	X402            *ServiceX402Enrichment `json:"x402,omitempty"`
+	Probe           *ServiceProbeMeta      `json:"probe,omitempty"`
+}
+
 // ServiceOverview is one service entry on /agents/:id/overview,
 // augmented with a health status derived from the offchain_data cache.
 type ServiceOverview struct {
@@ -160,6 +215,7 @@ type ServiceOverview struct {
 	// and "unknown" when the endpoint has never been probed.
 	Health     string `json:"health"`
 	HealthInfo string `json:"healthInfo,omitempty"`
+	Enrichment *ServiceEnrichment `json:"enrichment,omitempty"`
 }
 
 // AgentOverview is the payload for GET /agents/:chainId/:agentId/overview.
@@ -229,6 +285,7 @@ type FeedbackRow struct {
 // RuleClassification mirrors the rule-engine verdict for API consumers.
 type RuleClassification struct {
 	Category string `json:"category"`
+	Feature  string `json:"feature,omitempty"`
 }
 
 // FallbackClassification mirrors the LLM fallback verdict — present only when
@@ -237,6 +294,7 @@ type FallbackClassification struct {
 	Category   string  `json:"category"`
 	Reason     string  `json:"reason,omitempty"`
 	Confidence float64 `json:"confidence"`
+	Feature    string  `json:"feature,omitempty"`
 }
 
 // FeedbackClassification is the JSON-facing view of classifier output.
@@ -292,6 +350,30 @@ type WalletFeedbackRow struct {
 	AgentID   string `json:"agentId"`
 	ChainID   int64  `json:"chainId"`
 	AgentName string `json:"agentName,omitempty"`
+}
+
+// FeedbackClientRow is one wallet in GET /agents/:chainId/:agentId/feedback-clients.
+type FeedbackClientRow struct {
+	ClientAddress string   `json:"clientAddress"`
+	FeedbackCount int64    `json:"feedbackCount"`
+	TrustScore    *float64 `json:"trustScore,omitempty"`
+}
+
+// FeedbackAgentRow is one agent in GET /wallet/:address/feedback-agents.
+type FeedbackAgentRow struct {
+	AgentID       string  `json:"agentId"`
+	ChainID       int64   `json:"chainId"`
+	AgentName     string  `json:"agentName,omitempty"`
+	FeedbackCount int64   `json:"feedbackCount"`
+	TrustScore    float64 `json:"trustScore"`
+}
+
+// WalletENSRow is one address in GET /wallets/ens. Addresses with no
+// resolved ENS primary name are omitted from the response entirely.
+type WalletENSRow struct {
+	Address   string `json:"address"`
+	ENS       string `json:"ens"`
+	ENSAvatar string `json:"ensAvatar,omitempty"`
 }
 
 // ProofResponse is the /agents/:id/proof/:txHash payload (§3.10).

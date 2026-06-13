@@ -18,6 +18,8 @@ import (
 	"erc-8004-benchmarking-be/internal/api/service"
 	"erc-8004-benchmarking-be/internal/config"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
+	httpclient "erc-8004-benchmarking-be/internal/infra/https"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
@@ -25,24 +27,34 @@ import (
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
+	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
-	oasfschema "erc-8004-benchmarking-be/internal/repository/oasfschema"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 	wsock "erc-8004-benchmarking-be/internal/websocket"
 
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
+// rawFetchAdapter adapts internal/infra/https.Client to domainuri.RawFetcher.
+type rawFetchAdapter struct {
+	c *httpclient.Client
+}
+
+func (a *rawFetchAdapter) Fetch(ctx context.Context, url string) ([]byte, error) {
+	body, _, _, err := a.c.FetchBody(ctx, url)
+	return body, err
+}
+
 // Repositories groups all read-side repos the API depends on.
 type Repositories struct {
-	Agents     *agentrepo.Repository
-	Feedback   *feedbackrepo.Repository
-	ScoreStats *scorestatsrepo.Repository
-	Identity   *identityrepo.Repository
-	Events     *eventrepo.Repository
-	Offchain   *offchainrepo.Repository
-	Crawlers   *crawlerrepo.Repository
+	Agents      *agentrepo.Repository
+	Feedback    *feedbackrepo.Repository
+	ScoreStats  *scorestatsrepo.Repository
+	Identity    *identityrepo.Repository
+	Events      *eventrepo.Repository
+	Offchain    *offchainrepo.Repository
+	Crawlers    *crawlerrepo.Repository
 	Contracts   *contractsrepo.ContractsRepository
 	Wallets     *walletrepo.Repository
 	OASFSkills  *oasfschema.Repository
@@ -57,13 +69,13 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 	primary := client.Database(cfg.MongoDatabase)
 	analyzed := client.Database(cfg.AnalyzedDatabase)
 	return &Repositories{
-		Agents:     agentrepo.NewRepository(analyzed, cfg.AgentsColl, cfg.ScoreStatsColl),
-		Feedback:   feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
-		ScoreStats: scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
-		Identity:   identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
-		Events:     eventrepo.NewRepository(primary, cfg.EventsColl),
-		Offchain:   offchainrepo.NewRepository(primary, cfg.OffchainColl),
-		Crawlers:   crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
+		Agents:      agentrepo.NewRepository(analyzed, cfg.AgentsColl, cfg.ScoreStatsColl),
+		Feedback:    feedbackrepo.NewRepository(analyzed, cfg.FeedbackHistColl),
+		ScoreStats:  scorestatsrepo.NewRepository(analyzed, cfg.ScoreStatsColl),
+		Identity:    identityrepo.NewRepository(analyzed, cfg.IdentityHistColl),
+		Events:      eventrepo.NewRepository(primary, cfg.EventsColl),
+		Offchain:    offchainrepo.NewRepository(primary, cfg.OffchainColl),
+		Crawlers:    crawlerrepo.NewRepository(primary, cfg.CrawlersColl),
 		Contracts:   contractsrepo.NewContractsRepository(primary, cfg.ContractsColl),
 		Wallets:     walletrepo.NewRepository(analyzed, cfg.WalletColl),
 		OASFSkills:  oasfschema.NewRepository(primary, "oasf_skills"),
@@ -89,11 +101,14 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	formula.Beta = cfg.TrustRankBeta
 	formula.K = cfg.TrustRankK
 	formula.TBaseDays = cfg.TrustRankTBase
+	formula.C = cfg.ConfidenceC
 	formula.Gamma = cfg.PenaltyGamma
 	formula.Theta = cfg.PenaltyTheta
+	formula.AdoptionURef = cfg.AdoptionURef
 
 	composite := scoring.CompositeWeights{
 		Reputation: cfg.ScoreWeightReputation,
+		Adoption:   cfg.ScoreWeightAdoption,
 		Services:   cfg.ScoreWeightServices,
 		Publisher:  cfg.ScoreWeightPublisher,
 		Compliance: cfg.ScoreWeightCompliance,
@@ -102,12 +117,20 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// Services
 	lbSvc := service.NewLeaderboard(service.LeaderboardDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, Scores: repos.ScoreStats,
-		Crawlers: repos.Crawlers, Formula: formula,
+		Crawlers: repos.Crawlers, Wallets: repos.Wallets, Formula: formula,
 	})
+	// URI resolver for on-demand service-endpoint reconnects.
+	httpCl := httpclient.NewClientWithOptions(httpclient.ClientOptions{
+		Timeout:   cfg.HTTPSFetchTimeout,
+		UserAgent: cfg.HTTPSUserAgent,
+	})
+	resolver := domainuri.NewResolver(&rawFetchAdapter{c: httpCl}, cfg.IPFSGateway, cfg.ArweaveGateway)
+
 	agentSvc := service.NewAgent(service.AgentDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, ScoreStats: repos.ScoreStats,
 		Identity: repos.Identity, Events: repos.Events, Offchain: repos.Offchain,
-		Contracts: repos.Contracts, Formula: formula, Composite: composite,
+		Contracts: repos.Contracts, Wallet: repos.Wallets, Resolver: resolver,
+		Formula: formula, Composite: composite,
 	})
 	oasfSvc := service.NewOASF(service.OASFDeps{
 		Agents:            repos.Agents,
@@ -152,12 +175,14 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/leaderboard/search", lbH.Search)
 	mux.Handle("GET /api/v1/leaderboard/stats", c30s(http.HandlerFunc(lbH.Stats)))
 	mux.Handle("GET /api/v1/leaderboard/rising-stars", c60s(http.HandlerFunc(lbH.RisingStars)))
+	mux.Handle("GET /api/v1/leaderboard/wallet-ranking", c2m(http.HandlerFunc(lbH.WalletRanking)))
 	mux.Handle("GET /api/v1/leaderboard/tags", c2m(http.HandlerFunc(lbH.Tags)))
 
 	// /api/v1/agents/...
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}", c30s(http.HandlerFunc(agH.Profile)))
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/overview", c30s(http.HandlerFunc(agH.Overview)))
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks", agH.Feedbacks)
+	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedback-clients", agH.FeedbackClients)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/feedbacks/{feedbackId}", agH.FeedbackDetail)
 	mux.HandleFunc("GET /api/v1/offchain-by-uri", agH.OffchainByURI)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/identity-history", c2m(http.HandlerFunc(agH.IdentityHistory)))
@@ -169,12 +194,13 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/proof/{txHash}", agH.Proof)
 	mux.HandleFunc("GET /api/v1/agents/{chainId}/{agentId}/anti-spam", agH.AntiSpam)
 	mux.Handle("GET /api/v1/agents/{chainId}/{agentId}/registrations", c30s(http.HandlerFunc(agH.Registrations)))
+	mux.HandleFunc("POST /api/v1/agents/{chainId}/{agentId}/services/reconnect", agH.ReconnectServiceEndpoint)
 
 	// /api/v1/oasf/*
 	mux.Handle("GET /api/v1/oasf/facets", c5m(http.HandlerFunc(oasfH.Facets)))
 	mux.Handle("GET /api/v1/oasf/skills", c2m(http.HandlerFunc(oasfH.Skills)))
 	mux.Handle("GET /api/v1/oasf/domains", c2m(http.HandlerFunc(oasfH.Domains)))
-	mux.Handle("GET /api/v1/oasf/schema/skills",  c1h(http.HandlerFunc(oasfH.SchemaSkills)))
+	mux.Handle("GET /api/v1/oasf/schema/skills", c1h(http.HandlerFunc(oasfH.SchemaSkills)))
 	mux.Handle("GET /api/v1/oasf/schema/domains", c1h(http.HandlerFunc(oasfH.SchemaDomains)))
 
 	// /api/v1/chains/*
@@ -184,6 +210,10 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// /api/v1/wallet/:address/*
 	mux.Handle("GET /api/v1/wallet/{address}", c30s(http.HandlerFunc(walletH.Profile)))
 	mux.HandleFunc("GET /api/v1/wallet/{address}/feedbacks", walletH.FeedbackGiven)
+	mux.HandleFunc("GET /api/v1/wallet/{address}/feedback-agents", walletH.FeedbackAgents)
+
+	// /api/v1/wallets/*
+	mux.Handle("GET /api/v1/wallets/ens", c30s(http.HandlerFunc(walletH.WalletsENS)))
 
 	// /api/v1/admin/* (gated)
 	adminAuth := middleware.AdminAuth(cfg.AdminAPIKey)

@@ -55,7 +55,6 @@ func buildUpsertColdUpdate(chainID int64, address string, t0 float64, nowUnix in
 			"chainId":              chainID,
 			"kind":                 string(WalletKindUser),
 			"trustScore":           clipTrustScore(t0),
-			"trustScorePropagated": 0.0,
 			"feedbackTotalCount":   int64(0),
 			"feedbackValidCount":   int64(0),
 			"feedbackJunkCount":    int64(0),

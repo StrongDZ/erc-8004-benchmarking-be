@@ -6,6 +6,9 @@
 *.dylib
 bin/
 out/
+# go build ./... writes a root binary per cmd/workers/* main package
+/api
+/wallet-external-backfill
 
 # Test coverage and profiling outputs
 *.out
@@ -47,3 +50,6 @@ scripts/sensitivity/**/__pycache__/
 #docs
 docs/*
 .superpowers/*
+
+# Local agent tooling cache
+.claude/

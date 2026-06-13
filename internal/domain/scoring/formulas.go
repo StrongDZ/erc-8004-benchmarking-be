@@ -14,27 +14,31 @@ import (
 	"strings"
 )
 
-// FormulaConfig holds the tunable TrustRank parameters, read from environment at startup.
+// FormulaConfig holds the tunable scoring parameters, read from environment at startup.
 type FormulaConfig struct {
-	Alpha     float64 // §3.2 minimum difficulty weight (default 1.0)
-	Beta      float64 // §3.2 difficulty amplifier (default 1.5)
-	K         float64 // §3.2 micro-unit amplifier for USDC price (default 100.0)
-	TBaseDays float64 // §3.3 half-life base in days (default 15.0)
-	Gamma     float64 // §3.4 penalty base coefficient (default 5.0)
-	Theta     float64 // §3.4 penalty exponent (default 2.0)
-	SBase     float64 // §3.1 base score assigned at agent registration (default 0.0)
+	Alpha        float64 // §3.2 minimum difficulty weight (default 1.0)
+	Beta         float64 // §3.2 difficulty amplifier (default 1.5)
+	K            float64 // §3.2 micro-unit amplifier for USDC price (default 100.0)
+	TBaseDays    float64 // §3.3 half-life base in days (default 15.0)
+	C            float64 // confidence prior strength: evidence mass B at which confidence = 0.5 (default 3.0)
+	Gamma        float64 // reliability penalty base coefficient (default 0.1)
+	Theta        float64 // reliability penalty exponent (default 1.5)
+	AdoptionURef int     // distinct-client count that saturates Adoption to 100 (default 5)
+	SBase        float64 // legacy base score; unused in the v2 model (kept for config compatibility)
 }
 
 // DefaultFormulaConfig returns the spec-defined default parameter set.
 func DefaultFormulaConfig() FormulaConfig {
 	return FormulaConfig{
-		Alpha:     1.0,
-		Beta:      1.5,
-		K:         100.0,
-		TBaseDays: 15.0,
-		Gamma:     5.0,
-		Theta:     2.0,
-		SBase:     0.0,
+		Alpha:        1.0,
+		Beta:         1.5,
+		K:            100.0,
+		TBaseDays:    15.0,
+		C:            3.0,
+		Gamma:        0.1,
+		Theta:        1.5,
+		AdoptionURef: 5,
+		SBase:        0.0,
 	}
 }
 
@@ -65,96 +69,16 @@ func ComputeDecayFactor(lambda, deltaDays float64) float64 {
 	return math.Exp(-lambda * deltaDays)
 }
 
-// ComputePenalty computes the progressive consecutive-failure penalty.
-// §3.4: P = γ · (N_fail)^θ
-// Penalty examples: N=1→5, N=2→20, N=3→45, N=5→125, N=10→500
-func ComputePenalty(nFail int64, gamma, theta float64) float64 {
-	return gamma * math.Pow(float64(nFail), theta)
-}
-
-// ComputeScore computes the total TrustRank score for an agent.
-// §3.1: S = S_base + Σ[wᵢ·vᵢ·e^(-λᵢ·Δt)] − P
-// Result is clamped to (-∞, 1000]; negative scores are allowed to represent
-// agents with net-negative signal (heavy penalty or decreasing-metric feedbacks).
-
-// func ComputeScore(tasks []TaskInput, consecutiveFails int64, cfg FormulaConfig) float64 {
-// 	sum := 0.0
-// 	for _, t := range tasks {
-// 		wi := ComputeWi(t.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
-// 		lambda := ComputeDecayRate(wi, cfg.TBaseDays)
-// 		decay := ComputeDecayFactor(lambda, t.DeltaDays)
-// 		sum += wi * t.Vi * decay
-// 	}
-// 	penalty := ComputePenalty(consecutiveFails, cfg.Gamma, cfg.Theta)
-// 	score := cfg.SBase + sum - penalty
-// 	return math.Min(1000.0, score)
-// }
-
-// ── O(1) incremental scoring functions ─────────────────────────────────────────
-
+// secondsPerDay is the day length used by the decay helpers.
 const secondsPerDay = 86400.0
-
-// ApplyTaskScore performs an O(1) incremental score update (write path, §3.2).
-//
-// It decays the existing reputationScore forward to tNowUnix, then adds the new
-// feedback contribution wᵢ·(vᵢ − 0.40). vi = 0.40 is neutral (zero contribution);
-// vi > 0.40 increases the score; vi < 0.40 decreases it.
-//
-// NOTE: This function does NOT apply the consecutive-failure penalty. When vi < 0.40,
-// the caller must additionally subtract ComputePenalty(newConsecFails, cfg.Gamma, cfg.Theta).
-//
-// accScore:       current reputationScore stored in the agent document.
-// lastUpdateUnix: Unix seconds of the last score update.
-// wi:             difficulty weight of the new feedback (ComputeWi output).
-// vi:             validation score [0, 1] of the new feedback.
-// tNowUnix:       Unix seconds "now" (typically the event's block timestamp).
-// cfg:            formula parameters.
-func ApplyTaskScore(accScore float64, lastUpdateUnix int64, wi, vi float64, tNowUnix int64, cfg FormulaConfig) float64 {
-	avgWi := math.Max(wi, cfg.Alpha)
-	lambda := ComputeDecayRate(avgWi, cfg.TBaseDays)
-
-	deltaDays := float64(tNowUnix-lastUpdateUnix) / secondsPerDay
-	if deltaDays < 0 {
-		deltaDays = 0
-	}
-
-	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	effectiveVi := vi - 0.40
-	return decayed + wi*effectiveVi
-}
-
-// ComputeCurrentScore performs lazy decay evaluation (read path, §3.6).
-//
-// Returns the displayed score S clamped to (-∞, 1000]; negative scores are allowed.
-// This value is for display only — NEVER write it back to MongoDB as reputationScore.
-//
-// The consecutive-failure penalty is now baked into reputationScore at write time
-// (see ApplyTaskScore + ComputePenalty), so this function applies pure decay only.
-//
-// O(1) approximation: decay uses λ computed from cfg.Alpha (minimum-difficulty weight).
-//
-// accScore:       stored reputationScore (penalty already included).
-// lastUpdateUnix: Unix seconds of last score update.
-// nowUnix:        current Unix seconds.
-// cfg:            formula parameters.
-func ComputeCurrentScore(accScore float64, lastUpdateUnix int64, nowUnix int64, cfg FormulaConfig) float64 {
-	lambda := ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
-
-	deltaDays := float64(nowUnix-lastUpdateUnix) / secondsPerDay
-	if deltaDays < 0 {
-		deltaDays = 0
-	}
-
-	decayed := accScore * ComputeDecayFactor(lambda, deltaDays)
-	return math.Min(1000.0, cfg.SBase+decayed)
-}
 
 // ── Composite score blend ───────────────────────────────────────────────────────
 
-// CompositeWeights holds the blend factors for the four composite components.
-// defaults: 0.5 reputation + 0.2 services + 0.2 publisher + 0.1 compliance.
+// CompositeWeights holds the blend factors for the composite components.
+// defaults: 0.40 reputation + 0.15 adoption + 0.15 services + 0.20 publisher + 0.10 compliance.
 type CompositeWeights struct {
 	Reputation float64
+	Adoption   float64
 	Services   float64
 	Publisher  float64
 	Compliance float64
@@ -168,24 +92,12 @@ type ComplianceWeights struct {
 
 // DefaultCompositeWeights returns the spec-defined default blend weights.
 func DefaultCompositeWeights() CompositeWeights {
-	return CompositeWeights{Reputation: 0.5, Services: 0.2, Publisher: 0.2, Compliance: 0.1}
+	return CompositeWeights{Reputation: 0.40, Adoption: 0.15, Services: 0.15, Publisher: 0.20, Compliance: 0.10}
 }
 
 // DefaultComplianceWeights returns the spec-defined default compliance tier weights.
 func DefaultComplianceWeights() ComplianceWeights {
 	return ComplianceWeights{Tier1Total: 80.0, Tier2Total: 20.0}
-}
-
-// NormalizeReputation maps raw reputation [-inf, 1000] → [0, 100].
-// negative values floor at 0 (prevents decay-pumping of low scores).
-func NormalizeReputation(rawRep float64) float64 {
-	if rawRep <= 0 {
-		return 0
-	}
-	if rawRep >= 100 {
-		return 100
-	}
-	return rawRep
 }
 
 // JSONRequiredEndpoints must return successfully parsed JSON to count as healthy.
@@ -370,40 +282,18 @@ func ComputeComplianceScore(in ComplianceInput, w ComplianceWeights) float64 {
 	return tier1Earned + tier2Earned
 }
 
-// ComputeCompositeScore blends the four normalized component scores.
-// each component must already be in [0, 100]; result is clamped to [0, 100].
-func ComputeCompositeScore(reputation, services, publisher, compliance float64, w CompositeWeights) float64 {
-	if reputation < 0 {
-		reputation = 0
-	}
-	if reputation > 100 {
-		reputation = 100
-	}
-	if services < 0 {
-		services = 0
-	}
-	if services > 100 {
-		services = 100
-	}
-	if publisher < 0 {
-		publisher = 0
-	}
-	if publisher > 100 {
-		publisher = 100
-	}
-	if compliance < 0 {
-		compliance = 0
-	}
-	if compliance > 100 {
-		compliance = 100
-	}
-
-	result := reputation*w.Reputation + services*w.Services + publisher*w.Publisher + compliance*w.Compliance
-	if result < 0 {
-		result = 0
-	}
-	if result > 100 {
-		result = 100
-	}
-	return result
+// ComputeCompositeFromStats is a convenience wrapper that blends the five v2 components
+// using weight renormalization (see ComputeCompositeRenorm). qualityPresent must be true
+// only when the agent has at least one scored service feedback; publisherPresent must be
+// true when a publisher signal is available (false drops the publisher weight and
+// redistributes it to the other components). Each score is expected in [0,100]; result is
+// clamped to [0,100].
+func ComputeCompositeFromStats(reputation, adoption, services, publisher, compliance float64, qualityPresent, publisherPresent bool, w CompositeWeights) float64 {
+	return ComputeCompositeRenorm([]WeightedComponent{
+		{Score: reputation, Weight: w.Reputation, Present: qualityPresent},
+		{Score: adoption, Weight: w.Adoption, Present: true},
+		{Score: services, Weight: w.Services, Present: true},
+		{Score: publisher, Weight: w.Publisher, Present: publisherPresent},
+		{Score: compliance, Weight: w.Compliance, Present: true},
+	})
 }

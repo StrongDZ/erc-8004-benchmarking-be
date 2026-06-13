@@ -18,8 +18,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"erc-8004-benchmarking-be/internal/app/trustgraph"
+	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
+	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -44,16 +46,38 @@ func main() {
 	must(err, "rabbitmq connect")
 	defer conn.Close()
 
+	publisher, err := mqinfra.NewMultiPublisher(conn)
+	must(err, "rabbitmq multi-publisher")
+	defer publisher.Close()
+
+	var hybridClassifier *classifier.HybridClassifier
+	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
+		ai := classifier.NewAIClient(classifier.AIClientConfig{
+			BaseURL:        llmURL,
+			PromptVersion:  "v6",
+			TimeoutSeconds: envInt("LLM_TIMEOUT_SECONDS", 120),
+		})
+		hybridClassifier = classifier.NewHybridClassifier(ai)
+		log.Printf("trust-graph-updater: LLM fallback enabled at %s", llmURL)
+	} else {
+		log.Println("trust-graph-updater: LLM_BASE_URL not set; LLM fallback disabled (others → requeue)")
+	}
+
+	propCfg := propagation.DefaultPropagationConfig()
+	propCfg.WiBase = envFloat("TRUST_WI_BASE", propCfg.WiBase)
+
 	app := trustgraph.NewApp(trustgraph.Deps{
 		Conn:         conn,
 		FeedbackRepo: feedbackRepo,
 		WalletRepo:   walletRepo,
-		PropCfg:      propagation.DefaultPropagationConfig(),
+		PropCfg:      propCfg,
 		Cfg: trustgraph.AppConfig{
 			ColdStartT0: envFloat("TRUST_WEIGHT_COLD_START_T0", 10.0),
 			Workers:     envInt("TRUST_GRAPH_WORKERS", 8),
 			Prefetch:    envInt("TRUST_GRAPH_PREFETCH", 10),
 		},
+		Classifier: hybridClassifier,
+		Publisher:  publisher,
 	})
 
 	log.Println("trust-graph-updater: starting")

@@ -45,12 +45,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	consumer, err := rabbitmqclient.NewConsumer(conn, cfg.RabbitMQQueue, cfg.ConsumerPrefetch)
-	if err != nil {
-		log.Fatalf("rabbitmq consumer: %v", err)
-	}
-	defer consumer.Close()
-
 	// --- Redis (optional; used for realtime event broadcast). ---
 	var redisClient *redisinfra.Client
 	if cfg.RedisURL != "" {
@@ -66,7 +60,7 @@ func main() {
 
 	log.Printf("event-decoder started; queue=%s prefetch=%d", cfg.RabbitMQQueue, cfg.ConsumerPrefetch)
 
-	app := eventdecoderapp.NewApp(consumer, eventsRepo, redisClient, cfg.RedisEventsChannel)
+	app := eventdecoderapp.NewApp(conn, cfg.RabbitMQQueue, cfg.ConsumerPrefetch, eventsRepo, redisClient, cfg.RedisEventsChannel)
 	if err := app.Run(ctx); err != nil && err != context.Canceled {
 		log.Printf("event-decoder stopped: %v", err)
 	}

@@ -95,6 +95,10 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "totalTasks", Value: -1}},
 			Options: options.Index().SetName("idx_chain_total_tasks"),
 		},
+		{
+			Keys:    bson.D{{Key: "chainId", Value: 1}, {Key: "totalFeedbacks", Value: -1}},
+			Options: options.Index().SetName("idx_chain_total_feedbacks"),
+		},
 		// Sparse index on agentWallet to support cross-chain identity grouping
 		// (GET /agents/:chainId/:agentId/registrations). Sparse because most
 		// agents have an empty agentWallet field.
@@ -210,14 +214,13 @@ func (r *Repository) FindAll(ctx context.Context, skip, limit int64) ([]AgentDoc
 	return r.Find(ctx, bson.M{}, opts)
 }
 
-// PropagatedScore is used for bulk-writing trustScorePropagated.
-type PropagatedScore struct {
-	ID    string  // document _id ({chainId}:{agentId})
+// WalletScore carries the propagation result for one wallet node.
+type WalletScore struct {
+	ID    string  // document _id ({chainId}:{address})
 	Score float64 // [0, 100]
 	At    int64   // Unix seconds
 }
 
-// BulkSetPropagated writes trustScorePropagated + propagationUpdatedAt in bulk.
 // AgentOwnerEdge is a lightweight projection for building owner→agent graph edges.
 type AgentOwnerEdge struct {
 	ChainID int64  `bson:"chainId"`
@@ -266,32 +269,15 @@ func (r *Repository) SetSummarizedDescription(ctx context.Context, chainID int64
 	return res.MatchedCount > 0, nil
 }
 
-func (r *Repository) BulkSetPropagated(ctx context.Context, scores []PropagatedScore) error {
-	if len(scores) == 0 {
-		return nil
-	}
-	ops := make([]mongodrv.WriteModel, 0, len(scores))
-	for _, s := range scores {
-		ops = append(ops, mongodrv.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": s.ID}).
-			SetUpdate(bson.M{"$set": bson.M{
-				"trustScorePropagated": s.Score,
-				"propagationUpdatedAt": s.At,
-			}}),
-		)
-	}
-	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
-	return err
-}
-
 // ScoreUpdate carries the scoring fields synced from agent_score_stats each cycle.
 type ScoreUpdate struct {
 	ID             string
 	CompositeScore float64
 	TotalTasks     int64
+	TotalFeedbacks int64
 }
 
-// BulkUpdateScores writes compositeScore + totalTasks to agents in bulk.
+// BulkUpdateScores writes compositeScore + totalTasks + totalFeedbacks to agents in bulk.
 // Called by the score-refresh worker after it upserts agent_score_stats.
 func (r *Repository) BulkUpdateScores(ctx context.Context, updates []ScoreUpdate) error {
 	if len(updates) == 0 {
@@ -304,6 +290,7 @@ func (r *Repository) BulkUpdateScores(ctx context.Context, updates []ScoreUpdate
 			SetUpdate(bson.M{"$set": bson.M{
 				"compositeScore": u.CompositeScore,
 				"totalTasks":     u.TotalTasks,
+				"totalFeedbacks": u.TotalFeedbacks,
 			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
