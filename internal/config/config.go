@@ -134,6 +134,16 @@ type Config struct {
 	// the explorer enrichment pass (age + counterparties). One worker per key;
 	// empty → cheap-only.
 	EtherscanAPIKeys []string
+
+	// wallet-enrich daemon (cmd/workers/wallet-enrich): consumes
+	// erc8004.wallet_enrich, runs the cache-first RPC/Etherscan enrichment
+	// passes, and periodically sweeps the backlog.
+	WalletEnrichWorkers      int     // concurrent RPC workers for the cheap pass (default 10)
+	WalletEnrichPrefetch     int     // AMQP QoS prefetch for the wallet_enrich consumer (default 10)
+	WalletEnrichExplorerRate float64 // explorer requests per second per key (default 5)
+	WalletEnrichENSRate      float64 // ensdata.net requests per second (default 3)
+	WalletEnrichENSWorkers   int     // concurrent ENS lookup workers (default 1)
+	WalletEnrichSweepCron    string  // cron expression for the periodic backlog sweep (default "*/15 * * * *")
 }
 
 // loadDotEnv loads the first .env found walking upward from the process working directory.
@@ -259,6 +269,13 @@ func Load() (Config, error) {
 		RateLimitBurst: utils.GetenvInt("RATE_LIMIT_BURST", 40),
 
 		EtherscanAPIKeys: splitCSV(utils.Getenv("ETHERSCAN_API_KEYS", "")),
+
+		WalletEnrichWorkers:      utils.GetenvInt("WALLET_ENRICH_WORKERS", 10),
+		WalletEnrichPrefetch:     utils.GetenvInt("WALLET_ENRICH_PREFETCH", 10),
+		WalletEnrichExplorerRate: utils.GetenvFloat("WALLET_ENRICH_EXPLORER_RATE", 5),
+		WalletEnrichENSRate:      utils.GetenvFloat("WALLET_ENRICH_ENS_RATE", 3),
+		WalletEnrichENSWorkers:   utils.GetenvInt("WALLET_ENRICH_ENS_WORKERS", 1),
+		WalletEnrichSweepCron:    utils.Getenv("WALLET_ENRICH_SWEEP_CRON", "*/15 * * * *"),
 	}
 
 	if cfg.ServiceURIConsumerWorkers < 1 {

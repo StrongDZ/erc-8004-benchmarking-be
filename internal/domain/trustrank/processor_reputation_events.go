@@ -55,8 +55,6 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		log.Printf("processor: self-feedback excluded from scoring: chain=%d agent=%s client=%s", bs.chainID, agentID, clientAddress)
 	}
 
-	cls := classifier.Classify(tag1, tag2)
-
 	isAnomalous := classifier.IsAnomalousValue(value, int(valueDecimals))
 	if isAnomalous {
 		log.Printf("processor: anomalous value detected (persisting, no scoring): chain=%d agent=%s value=%q", bs.chainID, agentID, value)
@@ -70,6 +68,9 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if scale == "" && realOK {
 		scale = classifier.AssignTier(real)
 	}
+
+	cls := classifier.Classify(tag1, tag2, scale)
+
 	var vi float64
 	if !realOK || isAnomalous {
 		vi = 0.0
@@ -77,8 +78,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		vi = classifier.NormalizeValueWithScale(real, scale)
 	}
 
-	// Record a tier vote for Phase 3 stats flush (only for service_feedback category).
-	if cls.Category == classifier.CategoryService {
+	// Record a tier vote for Phase 3 stats flush (only for the quality category).
+	if cls.Category == classifier.CategoryQuality {
 		tu := tagstats.TierUpdate{Tag1: tag1, Tag2: tag2, IsEmpty: !realOK}
 		if realOK {
 			tu.Tier = classifier.AssignTier(real)
@@ -93,7 +94,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if adj, ok := scoring.LowConfidenceAdjustment(cls.Confidence); ok {
 		adjustments = append(adjustments, adj)
 	}
-	if cls.Category == classifier.CategoryService {
+	if cls.Category == classifier.CategoryQuality {
 		adjustments = append(adjustments, scoring.ServiceFeedbackBonus(feedbackURI, bs.uriMap[feedbackURI]))
 	}
 	wi = scoring.ApplyAdjustments(wi, adjustments)
@@ -121,8 +122,9 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		LogIndex:       ev.LogIndex,
 		Timestamp:      ev.Timestamp,
 		Category:       string(cls.Category),
+		Feature:        string(cls.Feature),
 		Classification: feedback.FeedbackClassification{
-			Rule: feedback.RuleClassification{Category: string(cls.Category)},
+			Rule: feedback.RuleClassification{Category: string(cls.Category), Feature: string(cls.Feature)},
 		},
 	}
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
@@ -132,7 +134,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	bs.fbMap[fbID] = &fbRecord
 
-	// Skip scoring for self-feedback, junk (spam/noise merged), anomalous values, or non-service categories.
+	// Skip scoring for self-feedback, junk, anomalous values, or non-quality categories.
+	// Only `quality` feeds the trust score (quantity/others do not).
 	if isSelf {
 		return
 	}
@@ -142,7 +145,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if isAnomalous {
 		return
 	}
-	if cls.Category != classifier.CategoryService {
+	if cls.Category != classifier.CategoryQuality {
 		return
 	}
 

@@ -21,6 +21,7 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
+	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -45,10 +46,15 @@ func main() {
 	must(err, "rabbitmq connect")
 	defer conn.Close()
 
+	publisher, err := mqinfra.NewMultiPublisher(conn)
+	must(err, "rabbitmq multi-publisher")
+	defer publisher.Close()
+
 	var hybridClassifier *classifier.HybridClassifier
 	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
 		ai := classifier.NewAIClient(classifier.AIClientConfig{
 			BaseURL:        llmURL,
+			PromptVersion:  "v6",
 			TimeoutSeconds: envInt("LLM_TIMEOUT_SECONDS", 120),
 		})
 		hybridClassifier = classifier.NewHybridClassifier(ai)
@@ -71,6 +77,7 @@ func main() {
 			Prefetch:    envInt("TRUST_GRAPH_PREFETCH", 10),
 		},
 		Classifier: hybridClassifier,
+		Publisher:  publisher,
 	})
 
 	log.Println("trust-graph-updater: starting")

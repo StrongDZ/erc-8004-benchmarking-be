@@ -178,7 +178,10 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		FeedbackHash:   r.FeedbackHash,
 		FeedbackParsed: r.FeedbackParsed,
 		Classification: dto.FeedbackClassification{
-			Rule: dto.RuleClassification{Category: r.Classification.Rule.Category},
+			Rule: dto.RuleClassification{
+				Category: r.Classification.Rule.Category,
+				Feature:  r.Classification.Rule.Feature,
+			},
 			Fallback: func() *dto.FallbackClassification {
 				if r.Classification.Fallback == nil {
 					return nil
@@ -187,6 +190,7 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 					Category:   r.Classification.Fallback.Category,
 					Reason:     r.Classification.Fallback.Reason,
 					Confidence: r.Classification.Fallback.Confidence,
+					Feature:    r.Classification.Fallback.Feature,
 				}
 			}(),
 		},

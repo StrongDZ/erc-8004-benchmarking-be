@@ -27,6 +27,7 @@ type walletFeedbackRepo interface {
 
 type walletWalletRepo interface {
 	FindAllByAddress(ctx context.Context, address string) ([]walletrepo.WalletDocument, error)
+	FindENSByAddresses(ctx context.Context, addresses []string) (map[string]walletrepo.ENSInfo, error)
 }
 
 // WalletDeps groups the repos used by the wallet service.
@@ -190,6 +191,8 @@ type WalletProfileResult struct {
 	OwnedAgentIDs      []string `json:"ownedAgentIds,omitempty"`
 	ExternalScore      *float64 `json:"externalScore"`
 	ExternalComplete   bool     `json:"externalComplete"`
+	ENS                string   `json:"ens,omitempty"`
+	ENSAvatar          string   `json:"ensAvatar,omitempty"`
 }
 
 // Profile returns the trust profile for a wallet address.
@@ -252,7 +255,33 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 		OwnedAgentIDs:      doc.OwnedAgentIDs,
 		ExternalScore:      externalScore,
 		ExternalComplete:   externalComplete,
+		ENS:                doc.External.ENS,
+		ENSAvatar:          doc.External.ENSAvatar,
 	}, nil
+}
+
+// WalletsENS returns the resolved ENS primary name + avatar for the given
+// addresses. Addresses with no resolved ENS name (or not found) are omitted
+// from the result.
+func (s *Wallet) WalletsENS(ctx context.Context, addresses []string) ([]dto.WalletENSRow, error) {
+	if len(addresses) == 0 || s.deps.Wallet == nil {
+		return []dto.WalletENSRow{}, nil
+	}
+
+	ensMap, err := s.deps.Wallet.FindENSByAddresses(ctx, addresses)
+	if err != nil {
+		return nil, fmt.Errorf("wallet ens: %w", err)
+	}
+
+	rows := make([]dto.WalletENSRow, 0, len(ensMap))
+	for addr, info := range ensMap {
+		rows = append(rows, dto.WalletENSRow{
+			Address:   addr,
+			ENS:       info.ENS,
+			ENSAvatar: info.ENSAvatar,
+		})
+	}
+	return rows, nil
 }
 
 // dedupStrings returns a deduplicated copy of ss preserving first-seen order.

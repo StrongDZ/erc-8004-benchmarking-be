@@ -310,7 +310,11 @@ func (s *server) toolClassify(args map[string]any) (toolResult, error) {
 	valueRaw := strArg(args, "value_raw")
 	valueDecimals := intArg(args, "value_decimals")
 
-	cls := classifier.Classify(tag1, tag2)
+	scale := ""
+	if real, ok := classifier.RawValueToReal(valueRaw, valueDecimals); ok {
+		scale = classifier.AssignTier(real)
+	}
+	cls := classifier.Classify(tag1, tag2, scale)
 	isAnomalous := classifier.IsAnomalousValue(valueRaw, valueDecimals)
 	vi := classifier.NormalizeValue(valueRaw, valueDecimals)
 

@@ -62,6 +62,33 @@ func (h *WalletHandler) Profile(w http.ResponseWriter, r *http.Request) {
 	dto.Success(w, r, result)
 }
 
+// WalletsENS handles GET /wallets/ens.
+// Returns the resolved ENS primary name + avatar for a batch of wallet addresses.
+// Addresses with no resolved ENS name (or not found) are omitted from the response.
+// @Summary Bulk ENS lookup for wallet addresses
+// @Description Returns the resolved ENS primary name + avatar for a batch of wallet addresses. Addresses with no ENS name are omitted.
+// @Tags wallet
+// @Produce json
+// @Param addresses query []string true "Wallet addresses (repeatable or comma-separated)"
+// @Success 200 {object} dto.Response
+// @Failure 400 {object} dto.Response
+// @Failure 500 {object} dto.Response
+// @Router /wallets/ens [get]
+func (h *WalletHandler) WalletsENS(w http.ResponseWriter, r *http.Request) {
+	addresses := dto.ParseStringSlice(r, "addresses")
+	if len(addresses) == 0 {
+		dto.Fail(w, r, http.StatusBadRequest, dto.CodeBadRequest, "addresses is required")
+		return
+	}
+
+	rows, err := h.svc.WalletsENS(r.Context(), addresses)
+	if err != nil {
+		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
+		return
+	}
+	dto.Success(w, r, rows)
+}
+
 // FeedbackGiven handles GET /wallet/{address}/feedbacks.
 // Returns paginated feedback submitted by the given wallet address, enriched with agent name.
 // Each row matches dto.FeedbackRow (classification.rule + optional classification.fallback), same as GET /agents/.../feedbacks.

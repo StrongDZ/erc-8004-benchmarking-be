@@ -37,6 +37,9 @@ type Deps struct {
 	// Classifier is optional; when non-nil the worker calls the LLM for
 	// feedback records where rule.category="others" and fallback is absent.
 	Classifier *classifier.HybridClassifier
+	// Publisher is optional; when non-nil, handle() publishes a
+	// WalletEnrichMessage whenever UpsertCold inserts a brand-new sender wallet.
+	Publisher mq.Publisher
 }
 
 // App is the trust-graph-updater worker.

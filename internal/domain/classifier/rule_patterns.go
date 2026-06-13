@@ -1,143 +1,92 @@
 package classifier
 
-// rule_patterns.go — Compiled regex patterns and lookup sets used by Classify().
-// Keeping these in a separate file lets classifier.go stay focused on pipeline logic.
+// rule_patterns.go — patterns + lookup sets for the two-axis cascade classifier.
+//   category: junk → quantity → quality  (unknown escalates to "others" for the LLM)
+//   feature : infrastructure | agent_domain   (assigned for quality & quantity)
+// Sets are intentionally CONSERVATIVE: the rule engine resolves only the clear
+// cases; ambiguous tags fall through to "others" so the LLM (prompt V6) decides.
 
 import "regexp"
 
 // ─── Compiled Regex Patterns ──────────────────────────────────────────────────
 
 var (
-	spamURLPattern  = regexp.MustCompile(`(?i)(t\.me/|telegram\.me|https?://|http://|t\.me)`)
+	spamURLPattern  = regexp.MustCompile(`(?i)(t\.me/|telegram\.me|https?://|http://)`)
 	spamRankPattern = regexp.MustCompile(`(?i)(get\s+top|top\s*[0-9]|-{2,}>|#1\s+rank)`)
-	workerAddrRe    = regexp.MustCompile(`^0x[0-9a-fA-F]{6,}$`)
-	dateRangeRe     = regexp.MustCompile(`\d{4}-\d{2}-\d{2}/\d{4}-\d{2}-\d{2}`)
-	camelCaseRe     = regexp.MustCompile(`^[a-z][a-zA-Z0-9]{6,}[A-Z][a-zA-Z0-9]+$`)
-	snakeCaseVerbRe = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z][a-z0-9]*){2,}$`)
-	base58TokenRe   = regexp.MustCompile(`^base:\d+$`)
+	uuidRe          = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	emojiOnlyRe     = regexp.MustCompile(`^[\x{1F000}-\x{1FFFF}\x{2600}-\x{27FF}\s]+$`)
 	allDigitsRe     = regexp.MustCompile(`^[0-9]+$`)
 )
 
-// ─── Lookup Sets ──────────────────────────────────────────────────────────────
+// ─── Layer 1: JUNK ──────────────────────────────────────────────────────────
 
-// configTag1Set: tag1 values that always mean config_feedback.
-var configTag1Set = map[string]bool{
-	// ERC-8004 spec signals
-	"reachable": true, "liveness": true, "successrate": true,
-	"responsetime": true, "blocktimefreshness": true,
-	"uptime": true,
-	// Infra probes
-	"liveness-check": true, "health-check": true, "ping": true,
-	"bulkcheck": true, "trust-oracle": true, "trust": true,
-	// Automated trust / guard systems (emit score dimensions, not app actions)
-	"sentinel8004": true, "agentguard": true,
-	// Protocol-level metrics used as tag1
-	"a2a": true, "trust-score": true,
-	// Verification and delegation protocols
-	"human-verification": true, "agent-delegation": true,
-	// SentinelNet-style trust-oracle dimensions (automated metrics, generic infra).
-	// In the live corpus these tag1 values appear paired with tag2=sentinelnet-v1.
-	// Listed here so the rule resolves to config_feedback without relying on tag2
-	// (the tag1-first ordering means tag2 fallbacks are only consulted on misses).
-	"trustscore": true, "counterparty": true, "activity": true,
-	"longevity": true, "contractrisk": true,
-	// Automated verification / safety probes (generic infra, not domain-specific)
-	"ownerverified": true, "safety-score": true,
-}
-
-// configTag2Set: tag2 values that indicate config_feedback when tag1 is unrecognized.
-// Only consulted after explicit tag1 sets (config/app/service) all miss.
-var configTag2Set = map[string]bool{
-	"oracle-screening": true, "liveness-check": true,
-	"win-rate": true, "coverage-rate": true, "exit-rate": true,
-	"automated-screening": true,
-	"a2a":                 true, "mcp": true, "web": true,
-	// SentinelNet oracle protocol and versioned trust guard protocols
-	"sentinelnet-v1": true, "trust-v2": true,
-}
-
-// appTag1Set: tag1 values that always mean app_specific.
-// Only entries confirmed app_specific by corpus (binary/unbounded scale) or with no corpus data yet.
-var appTag1Set = map[string]bool{
-	// Binary-scale vouch/faucet and unbounded-value reporters (corpus-confirmed app_specific).
-	"faucet-drip": true, "miner-vouch": true,
-	"revenues": true, "botcoin-skill": true,
-	// No corpus data — retained as app_specific by assumption.
-	"trade": true, "generateimage": true,
-	"curatenewsfeedbydigitaltwin": true, "tradingyield": true,
-}
-
-// serviceTag2Set: tag2 values that indicate service_feedback when tag1 is unrecognized.
-// Corpus: 100% of records with these tag2 values use pct100/star scale.
-var serviceTag2Set = map[string]bool{
-	"fragment": true, "mint": true, "record": true,
-	"create": true, "agent": true,
-}
-
-// appTag2Set: tag2 values that indicate app_specific when tag1 is unrecognized.
-var appTag2Set = map[string]bool{
-	// No corpus data — retained as app_specific by assumption.
-	"spawn": true, "agentaction": true,
-}
-
-// serviceTag1Set: known quality/review tag1 values → service_feedback.
-var serviceTag1Set = map[string]bool{
-	// ERC-8004 spec (rating type)
-	"starred": true,
-	// Quality adjectives
-	"quality": true, "performance": true, "service": true,
-	"helpful": true, "fast": true, "reliable": true,
-	"reliability": true, "excellence": true, "excellent": true,
-	"speed": true, "satisfaction": true, "experience": true,
-	"value": true, "rating": true, "good": true,
-	"efficient": true, "robust": true, "secure": true,
-	"audited": true, "innovative": true, "transparent": true,
-	"trustless": true, "composable": true, "interoperable": true,
-	"open": true, "standards-compliant": true, "gas-efficient": true,
-	"cost-effective": true, "low-latency": true, "scalable": true,
-	"layer-2": true, "privacy": true, "defi": true, "defai": true,
-	"accurate": true, "cool": true, "great": true,
-	"general": true, "mcp": true, "security": true, "review": true,
-	"useful": true, "smart": true, "nice": true, "overall": true,
-	"accuracy": true, "infrastructure": true, "creative": true,
-	"support": true, "intelligent": true, "analytical": true,
-	"fast helpful": true,
-	// Noun forms of adjectives already in set (scalable→scalability, etc.)
-	"scalability": true, "innovation": true,
-	// Evaluation dimensions observed in practice
-	"usability": true, "compliance": true, "integration": true,
-	"peer-review": true, "content-moderation": true,
-	// Common typos — normalized here
-	"helpfull": true, "powerfull": true, "usefull": true,
-	"reliabel": true, "excelent": true,
-	// Manual/community quality scores
-	"score": true,
-
-	"personality": true, "knowledge": true, "timeline": true,
-	"relationship": true, "stance": true, "style": true,
-	"token": true, "swap_token": true, "swap": true,
-	"open_position": true, "open_dca": true, "close_dca": true,
-	"trade_perpetuals": true, "fund_startup": true, "lido": true,
-	"mandate": true, "token_info": true,
-	"transfer_token": true, "create_onetime_signal": true, "purchase": true,
-	"tip": true, "watchorfight": true, "doppel": true,
-	"spawn": true, "tycoon": true,
-	"airtime": true, "gift_card": true, "bill_payment": true,
-	"task-completion": true, "market-intelligence": true, "research-delivery": true,
-	"custom_song_creation": true, "image_to_ugc_video_generation": true,
-	"x402-scan": true, "token_ai_analysis_trade_suggestion": true,
-	"meat-order": true, "frost-alert": true,
-}
-
-// noiseTag1Set: always noise, drop silently.
+// noiseTag1Set: meaningless placeholder / gibberish tokens → junk.
 var noiseTag1Set = map[string]bool{
-	"test": true, "asd": true,
+	"test": true, "asd": true, "custom": true, "settled": true,
+	"claudelance": true, "vibez": true,
 }
 
-// serviceKeywords: fuzzy keywords for lower-confidence service detection.
-var serviceKeywords = []string{
+// ─── Layer 2: QUANTITY (category) — tag names a measured metric ───────────────
+
+// quantityTag1Set: exact tag values that are measured metrics (rate/score/count/
+// speed/status). A SCORE counts as a metric (no quality-dimension exception).
+var quantityTag1Set = map[string]bool{
+	"reachable": true, "liveness": true, "successrate": true, "success-rate": true,
+	"responsetime": true, "response-time": true, "blocktimefreshness": true,
+	"blocktime-freshness": true, "blocktime freshness": true, "uptime": true, "creditscore": true,
+	"attendance-rate": true, "completion-rate": true, "execution-speed": true,
+	"payment-speed": true, "settlement-speed": true, "win-rate": true,
+	"coverage-rate": true, "exit-rate": true, "active": true, "safety-score": true, "contractrisk": true,
+	"counterparty": true, "longevity": true,
+}
+
+// quantityTag2Set: tag2 discriminators that mark the record as a measured metric.
+var quantityTag2Set = map[string]bool{
+	"oracle-screening": true, "liveness-check": true, "win-rate": true,
+	"coverage-rate": true, "exit-rate": true, "automated-screening": true,
+	"completion-rate": true, "scroll-stop-rate": true,
+}
+
+// ─── Layer 3: QUALITY (category) — subjective sentiment / service judgment ────
+
+// qualityTag1Set: clear quality/sentiment/service-judgment tags → quality.
+// (Metric-shaped terms like "score"/"accuracy"/"speed" are deliberately NOT here;
+// they go to quantity or escalate to the LLM.)
+var qualityTag1Set = map[string]bool{
+	"trustscore": true, "trust-score": true,
+	"starred": true, "quality": true, "performance": true, "service": true,
+	"helpful": true, "fast": true, "reliable": true, "reliability": true,
+	"excellence": true, "excellent": true, "satisfaction": true, "experience": true,
+	"value": true, "rating": true, "good": true, "robust": true, "secure": true,
+	"audited": true, "innovative": true, "transparent": true, "trustless": true,
+	"composable": true, "interoperable": true, "cool": true, "great": true,
+	"review": true, "useful": true, "smart": true, "nice": true, "overall": true,
+	"creative": true, "support": true, "intelligent": true, "analytical": true,
+	"usability": true, "compliance": true, "peer-review": true,
+	"content-moderation": true, "amazing": true, "awesome": true, "beautiful": true,
+	"professional": true, "impressive": true, "outstanding": true, "best": true,
+	// common typos
+	"helpfull": true, "powerfull": true, "usefull": true, "reliabel": true,
+	"excelent": true,
+}
+
+// qualityKeywords: fuzzy contains for lower-confidence quality detection.
+var qualityKeywords = []string{
 	"helpful", "fast", "reliable", "quality", "excellent", "good",
-	"useful", "accurate", "great", "smart", "simple", "easy",
-	"smooth", "solid", "stable", "best", "nice", "clean",
+	"useful", "great", "smart", "simple", "easy", "smooth", "solid",
+	"stable", "best", "nice", "clean", "amazing", "awesome", "love",
+}
+
+// ─── Feature axis: INFRASTRUCTURE vs AGENT_DOMAIN ─────────────────────────────
+
+// infraTagSet: generic infra/protocol signals that would apply to ANY agent
+// regardless of business → feature = infrastructure. Everything else defaults to
+// agent_domain. (Rule engine has no agent context, so "both" is only the LLM's.)
+var infraTagSet = map[string]bool{
+	"reachable": true, "liveness": true, "liveness-check": true, "uptime": true,
+	"responsetime": true, "response-time": true, "ping": true, "health-check": true,
+	"blocktimefreshness": true, "blocktime-freshness": true, "blocktime freshness": true, "a2a": true, "mcp": true,
+	"web": true, "trust-oracle": true, "oracle-screening": true, "trust-score": true,
+	"trustscore": true, "reputation": true, "sentinel8004": true, "agentguard": true,
+	"safety-score": true, "ownerverified": true, "owner verified": true,
 }

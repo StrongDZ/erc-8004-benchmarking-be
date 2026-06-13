@@ -1,7 +1,7 @@
 package main
 
 // restart-trustrank — destructive reset for TrustRank re-processing:
-//   1) Delete stale RabbitMQ queues (classified feedback, desc summary, per-chain service_uri).
+//   1) Delete stale RabbitMQ queues (classified feedback, desc summary, wallet_enrich, per-chain service_uri).
 //   2) Drop the entire analyzed agents database (agents, scores, feedbacks, …).
 //   3) Delete config documents whose _id matches trustrank_worker_<chain_id>
 //      (per-chain TrustRank cursors in the primary DB config collection).
@@ -112,6 +112,7 @@ func buildResetQueues(chainIDs []int64) []string {
 	queues := []string{
 		mq.QueueFeedbackClassified,
 		mq.QueueAgentDescSummary,
+		mq.QueueWalletEnrich,
 	}
 	for _, chainID := range chainIDs {
 		queues = append(queues, mq.ServiceURIQueueName(chainID))

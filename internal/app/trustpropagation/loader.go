@@ -49,7 +49,7 @@ func LoadGraph(ctx context.Context, deps LoaderDeps, chainID int64) (GraphData, 
 	for _, w := range wallets {
 		reliability := scoring.ReviewerReliability(w.FeedbackValidCount, w.FeedbackJunkCount)
 		nodeMap[w.ID] = GraphNode{ID: w.ID, Kind: NodeKindWallet,
-			DirectRep: extscore.BlendTeleport(reliability, w.External.Score, w.External.Present, extscore.TeleportGamma)}
+			DirectRep: extscore.BlendTeleport(reliability, w.External.Score, extscore.TeleportGamma)}
 	}
 	for _, c := range components {
 		id := nodeID(c.ChainID, c.AgentID)

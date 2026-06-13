@@ -35,21 +35,6 @@ type HybridResult struct {
 	ValueNorm     float64         // normalised value used during classification
 }
 
-// knownConfigTag2 maps tag2 values that always signal config_feedback regardless
-// of what the LLM decides. Used as a post-hoc override for LLM fallback results.
-var knownConfigTag2 = map[string]bool{
-	"oracle-screening": true, "liveness-check": true,
-	"win-rate": true, "coverage-rate": true, "exit-rate": true,
-	"automated-screening": true, "service_quality": true,
-}
-
-// knownAppTag2 maps tag2 values that always signal app_specific.
-// (sentinelnet-v1 removed: it is an automated trust oracle protocol, so it
-// belongs to config — see configTag2Set. The previous override here directly
-// contradicted configTag2Set and was effectively unreachable because the
-// rule classifier matches configTag2Set first.)
-var knownAppTag2 = map[string]bool{}
-
 // HybridClassifier combines the rule engine with an optional AI service fallback.
 // ai may be nil — in that case all fallback cases resolve to "others".
 type HybridClassifier struct {
@@ -80,7 +65,7 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 	}
 
 	// Stage 1 + 2: rule-based classifier.
-	ruleResult := Classify(in.Tag1, in.Tag2)
+	ruleResult := Classify(in.Tag1, in.Tag2, scale)
 
 	// Rule matched → propagate immediately.
 	if ruleResult.Source == "rule" {
@@ -114,30 +99,26 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 	)
 
 	// Post-hoc safety overrides: catch cases the LLM consistently miscategorises.
-	// Applied only when LLM outputs service_feedback — the category with the
-	// highest false-positive rate on 3B models.
 	t1lo := strings.ToLower(strings.TrimSpace(in.Tag1))
 	t2lo := strings.ToLower(strings.TrimSpace(in.Tag2))
-	if llmRes.Category == CategoryService {
-		switch {
-		case isSpam(t1lo, t2lo), isNoise(t1lo, t2lo):
-			llmRes.Category = CategoryJunk
-			llmRes.Confidence = 0.99
-			llmRes.Source = "override"
-		case knownConfigTag2[t2lo]:
-			llmRes.Category = CategoryConfig
-			llmRes.Confidence = 0.95
-			llmRes.Source = "override"
-		case knownAppTag2[t2lo]:
-			llmRes.Category = CategoryApp
-			llmRes.Confidence = 0.95
-			llmRes.Source = "override"
-		}
+	switch {
+	case isSpam(t1lo, t2lo), isNoise(t1lo, t2lo):
+		llmRes.Category = CategoryJunk
+		llmRes.Feature = FeatureNone
+		llmRes.Confidence = 0.99
+		llmRes.Source = "override"
+	case llmRes.Category == CategoryQuality && (isMetric(t1lo) || isMetric(t2lo)):
+		// LLM said quality but a tag clearly names a measured metric → quantity.
+		llmRes.Category = CategoryQuantity
+		llmRes.Feature = featureOf(t1lo, t2lo)
+		llmRes.Confidence = 0.95
+		llmRes.Source = "override"
 	}
 
 	result := HybridResult{
 		Result: Result{
 			Category:      llmRes.Category,
+			Feature:       llmRes.Feature,
 			Confidence:    llmRes.Confidence,
 			Source:        llmRes.Source,
 			NormalizedTag: in.Tag1,

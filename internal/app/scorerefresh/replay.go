@@ -92,7 +92,7 @@ func replayAgent(
 			distinct[strings.ToLower(fb.ClientAddress)] = struct{}{}
 		}
 
-		if feedbackrepo.EffectiveCategory(fb) != string(classifier.CategoryService) {
+		if feedbackrepo.EffectiveCategory(fb) != string(classifier.CategoryQuality) {
 			continue
 		}
 
@@ -192,10 +192,10 @@ func replayAgent(
 }
 
 // isAdoptionCategory reports whether a feedback category counts toward the Adoption
-// (distinct-client breadth) signal: service, config, and app-specific feedback.
+// (distinct-client breadth) signal: quality and quantity feedback (not junk/others).
 func isAdoptionCategory(category string) bool {
 	switch category {
-	case string(classifier.CategoryService), string(classifier.CategoryConfig), string(classifier.CategoryApp):
+	case string(classifier.CategoryQuality), string(classifier.CategoryQuantity):
 		return true
 	default:
 		return false

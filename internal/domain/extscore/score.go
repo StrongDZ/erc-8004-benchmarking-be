@@ -76,12 +76,33 @@ func Complete(f Features) bool {
 	return f.AgePresent && f.CounterpartiesPresent && f.BalancePresent && f.NoncePresent
 }
 
-// BlendTeleport combines community reviewer reliability with the external on-chain
-// score for the propagation teleport prior. gamma weights reliability; when the
-// external score is absent it returns reliability unchanged (gamma=1 fallback).
-func BlendTeleport(reliability, externalScore float64, externalPresent bool, gamma float64) float64 {
-	if !externalPresent {
-		return reliability
+// explorerUnsupportedChains — all chains are now supported.
+var explorerUnsupportedChains = map[int64]struct{}{}
+
+// ExplorerApplicable is false on chains where explorer age/counterparty data is
+// not fetched (Score_ext uses cheap RPC features only).
+func ExplorerApplicable(chainID int64) bool {
+	return true
+}
+
+// ExplorerUnsupportedChainIDs returns chain IDs excluded from explorer enrichment
+// (for Mongo $nin filters).
+func ExplorerUnsupportedChainIDs() []int64 {
+	return nil
+}
+
+// CompleteForChain reports whether external enrichment is finished for chainID.
+// On explorer-unsupported chains, balance+nonce suffice.
+func CompleteForChain(chainID int64, f Features) bool {
+	if !ExplorerApplicable(chainID) {
+		return f.BalancePresent && f.NoncePresent
 	}
+	return Complete(f)
+}
+
+// BlendTeleport combines community reviewer reliability with the external on-chain
+// score for the propagation teleport prior. gamma weights reliability; externalScore
+// is 0 when enrichment has not landed yet.
+func BlendTeleport(reliability, externalScore float64, gamma float64) float64 {
 	return gamma*reliability + (1-gamma)*externalScore
 }

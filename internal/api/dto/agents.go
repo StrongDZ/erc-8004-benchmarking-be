@@ -285,6 +285,7 @@ type FeedbackRow struct {
 // RuleClassification mirrors the rule-engine verdict for API consumers.
 type RuleClassification struct {
 	Category string `json:"category"`
+	Feature  string `json:"feature,omitempty"`
 }
 
 // FallbackClassification mirrors the LLM fallback verdict — present only when
@@ -293,6 +294,7 @@ type FallbackClassification struct {
 	Category   string  `json:"category"`
 	Reason     string  `json:"reason,omitempty"`
 	Confidence float64 `json:"confidence"`
+	Feature    string  `json:"feature,omitempty"`
 }
 
 // FeedbackClassification is the JSON-facing view of classifier output.
@@ -364,6 +366,14 @@ type FeedbackAgentRow struct {
 	AgentName     string  `json:"agentName,omitempty"`
 	FeedbackCount int64   `json:"feedbackCount"`
 	TrustScore    float64 `json:"trustScore"`
+}
+
+// WalletENSRow is one address in GET /wallets/ens. Addresses with no
+// resolved ENS primary name are omitted from the response entirely.
+type WalletENSRow struct {
+	Address   string `json:"address"`
+	ENS       string `json:"ens"`
+	ENSAvatar string `json:"ensAvatar,omitempty"`
 }
 
 // ProofResponse is the /agents/:id/proof/:txHash payload (§3.10).

@@ -16,12 +16,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/mq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
 
@@ -63,8 +65,12 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	mu.Lock()
 	defer mu.Unlock()
 
-	if _, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0); err != nil {
+	_, wasNew, err := a.deps.WalletRepo.UpsertCold(ctx, chainID, fb.ClientAddress, a.deps.Cfg.ColdStartT0)
+	if err != nil {
 		return ErrTransient
+	}
+	if err := mq.PublishWalletEnrich(ctx, a.deps.Publisher, wasNew, chainID, fb.ClientAddress); err != nil {
+		log.Printf("trustgraph: publish wallet enrich (chain=%d addr=%s): %v", chainID, fb.ClientAddress, err)
 	}
 
 	// 5. Compute weight (for reputation) — no trust delta; propagation owns trustScore.

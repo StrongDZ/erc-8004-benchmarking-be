@@ -295,9 +295,13 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 			if owner == "" {
 				continue
 			}
-			if err := p.walletRepo.ReconcileOwnership(ctx, bs.chainID, id, owner, p.coldStartT0); err != nil {
+			wasNew, err := p.walletRepo.ReconcileOwnership(ctx, bs.chainID, id, owner, p.coldStartT0)
+			if err != nil {
 				log.Printf("processor: reconcile ownership (chain=%d agent=%s owner=%s): %v",
 					bs.chainID, id, owner, err)
+			} else if pubErr := mq.PublishWalletEnrich(ctx, p.fbPublisher, wasNew, bs.chainID, owner); pubErr != nil {
+				log.Printf("processor: publish wallet enrich (chain=%d owner=%s): %v",
+					bs.chainID, owner, pubErr)
 			}
 		}
 	}

@@ -18,6 +18,7 @@ const (
 	QueueAgentURI           = "erc8004.agent_uri"
 	QueueFeedbackClassified = "erc8004.feedback.classified"
 	QueueAgentDescSummary   = "erc8004.agent.desc.summary"
+	QueueWalletEnrich       = "erc8004.wallet_enrich"
 )
 
 // EventURIQueueName returns the per-chain queue for event-sourced URI messages.
@@ -102,6 +103,27 @@ type AgentDescSummaryMessage struct {
 	DescHash    string `json:"descHash"`
 	PublishedAt int64  `json:"publishedAt"`
 	Attempt     int    `json:"attempt,omitempty"` // retry counter; 0 = first delivery
+}
+
+// WalletEnrichMessage is published to QueueWalletEnrich whenever UpsertCold
+// (directly or via ReconcileOwnership) inserts a brand-new wallet document.
+// The wallet-enrich worker consumes it and runs the cache-first external
+// trust enrichment pass (RPC balance+nonce, then Etherscan age+counterparties)
+// for this wallet.
+type WalletEnrichMessage struct {
+	ChainID int64  `json:"chainId"`
+	Address string `json:"address"` // lowercase, per utils.NormalizeAddress
+}
+
+// PublishWalletEnrich publishes a WalletEnrichMessage to QueueWalletEnrich when
+// wasNew is true and publisher is non-nil; otherwise it is a no-op. Callers pass
+// through the wasNew flag returned by UpsertCold/ReconcileOwnership so the
+// wallet-enrich worker only ever sees brand-new wallets.
+func PublishWalletEnrich(ctx context.Context, publisher Publisher, wasNew bool, chainID int64, address string) error {
+	if !wasNew || publisher == nil {
+		return nil
+	}
+	return publisher.Publish(ctx, QueueWalletEnrich, WalletEnrichMessage{ChainID: chainID, Address: address})
 }
 
 // DescHash returns the sha256[:16] hex digest used as the description idempotency key.

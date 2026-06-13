@@ -19,13 +19,15 @@ type FeedbackResponse struct {
 
 // RuleClassification holds the rule-engine verdict — always present.
 type RuleClassification struct {
-	Category string `bson:"category"` // service_feedback | config_feedback | app_specific | spam | noise | others
+	Category string `bson:"category"`          // junk | quality | quantity | others
+	Feature  string `bson:"feature,omitempty"` // infrastructure | agent_domain | both
 }
 
 // FallbackClassification holds the LLM verdict — populated only when the LLM
 // fallback actually ran (i.e. rule returned "others" AND an LLM client was wired).
 type FallbackClassification struct {
 	Category   string  `bson:"category"`
+	Feature    string  `bson:"feature,omitempty"`
 	Reason     string  `bson:"reason,omitempty"`
 	Confidence float64 `bson:"confidence"`
 }
@@ -65,7 +67,8 @@ type FeedbackRecord struct {
 	ValidationVerdict string              `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
 	ValidationReason string               `bson:"validationReason,omitempty"` // detail when verdict != valid
 	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
-	Category       string                 `bson:"category,omitempty"`       // effective category: rule at ingest, LLM fallback overwrites
+	Category       string                 `bson:"category,omitempty"`       // effective category: junk|quality|quantity, rule at ingest, LLM overwrites
+	Feature        string                 `bson:"feature,omitempty"`        // infrastructure|agent_domain|both (second axis, not scoring)
 	Classification FeedbackClassification `bson:"classification"`          // set by classifier
 	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
 	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet

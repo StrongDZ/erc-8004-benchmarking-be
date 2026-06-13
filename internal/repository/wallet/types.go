@@ -58,9 +58,15 @@ type ExternalDoc struct {
 	Nonce          uint64  `bson:"nonce"`
 	AgeDays        float64 `bson:"ageDays"`
 	Counterparties int     `bson:"counterparties"`
-	HasENS         bool    `bson:"hasENS"`
+	ENS            string  `bson:"ens,omitempty"`
+	ENSAvatar      string  `bson:"ensAvatar,omitempty"`
 	CheapAt        int64   `bson:"cheapAt,omitempty"`
 	ExplorerAt     int64   `bson:"explorerAt,omitempty"`
+	ExplorerSkipped bool   `bson:"explorerSkipped,omitempty"` // true when explorer API permanently unavailable for this chain
+	ENSAt          int64   `bson:"ensAt,omitempty"`
+	CheapFetched   bool    `bson:"cheapFetched"`
+	RichFetched    bool    `bson:"richFetched"`
+	ENSFetched     bool    `bson:"ensFetched"`
 }
 
 // Repository wraps the wallets collection.

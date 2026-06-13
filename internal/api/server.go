@@ -212,6 +212,9 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	mux.HandleFunc("GET /api/v1/wallet/{address}/feedbacks", walletH.FeedbackGiven)
 	mux.HandleFunc("GET /api/v1/wallet/{address}/feedback-agents", walletH.FeedbackAgents)
 
+	// /api/v1/wallets/*
+	mux.Handle("GET /api/v1/wallets/ens", c30s(http.HandlerFunc(walletH.WalletsENS)))
+
 	// /api/v1/admin/* (gated)
 	adminAuth := middleware.AdminAuth(cfg.AdminAPIKey)
 	// Indexer status is read-only observability and intentionally public.
