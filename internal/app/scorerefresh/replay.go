@@ -14,6 +14,7 @@ import (
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	"erc-8004-benchmarking-be/internal/domain/serviceendpoint"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
@@ -41,6 +42,7 @@ func replayAgent(
 	now int64,
 	formulaCfg scoring.FormulaConfig,
 	offchainStatusByEndpoint map[string]int,
+	trustBatch *WalletTrustBatch,
 	publisherProvider scoring.PublisherScoreProvider,
 	compositeWeights scoring.CompositeWeights,
 	complianceWeights scoring.ComplianceWeights,
@@ -64,6 +66,22 @@ func replayAgent(
 	lastEventTs := int64(0)
 	distinct := make(map[string]struct{})
 	adoptionWindowStart := now - adoptionWindowDays*86400
+	serviceIndex := serviceendpoint.BuildIndex(ag.Services)
+	type serviceAccumulator struct {
+		meta     serviceendpoint.ServiceMeta
+		a        float64
+		b        float64
+		lastTs   int64
+		updateAt int64
+		consec   int64
+		total    int64
+		passed   int64
+		failed   int64
+	}
+	serviceAcc := make(map[string]*serviceAccumulator, len(serviceIndex))
+	for key, meta := range serviceIndex {
+		serviceAcc[key] = &serviceAccumulator{meta: meta}
+	}
 
 	var snapA, snapB [3]float64
 	var snapFails [3]int64
@@ -85,8 +103,8 @@ func replayAgent(
 		}
 
 		// Adoption: count distinct client addresses in the recent window across
-		// scored-or-relevant categories (service + config + app_specific), so heavily-used
-		// agents whose feedback is all config/app still earn breadth credit. Windowed to the
+		// scored-or-relevant categories (quality + quantity), so heavily-used
+		// agents whose feedback is all quantity still earn breadth credit. Windowed to the
 		// last adoptionWindowDays so Adoption reflects current (not all-time) breadth.
 		if fb.Timestamp >= adoptionWindowStart && isAdoptionCategory(feedbackrepo.EffectiveCategory(fb)) {
 			distinct[strings.ToLower(fb.ClientAddress)] = struct{}{}
@@ -119,8 +137,9 @@ func replayAgent(
 
 		// Decay to this event's timestamp, then add the contribution.
 		decayMass(ts)
-		a += fb.Wi * vi
-		b += fb.Wi
+		wi := effectiveFeedbackWi(fb, trustBatch)
+		a += wi * vi
+		b += wi
 
 		if vi < 0.40 {
 			consecFails++
@@ -130,7 +149,28 @@ func replayAgent(
 			totalPassed++
 		}
 
-		eventScores = append(eventScores, fb.Wi*vi)
+		eventScores = append(eventScores, wi*vi)
+		if matched, ok := serviceendpoint.MatchService(ag.Services, fb.Endpoint); ok {
+			acc := serviceAcc[serviceendpoint.Normalize(matched.Endpoint)]
+			if acc == nil {
+				continue
+			}
+			if acc.lastTs < ts {
+				acc.a, acc.b = scoring.DecayMass(acc.a, acc.b, acc.lastTs, ts, formulaCfg)
+				acc.lastTs = ts
+			}
+			acc.a += wi * vi
+			acc.b += wi
+			acc.updateAt = ts
+			acc.total++
+			if vi < 0.40 {
+				acc.consec++
+				acc.failed++
+			} else {
+				acc.consec = 0
+				acc.passed++
+			}
+		}
 	}
 
 	// Advance any remaining milestones after the last event.
@@ -154,6 +194,35 @@ func replayAgent(
 		ctx, ag, offchainStatusByEndpoint, publisherProvider, complianceWeights,
 	)
 	composite := scoring.ComputeCompositeFromStats(reputation, adoption, svcResult.Score, pubScore, compScore, qualityPresent, pubPresent, compositeWeights)
+	serviceScores := make([]scorestats.ServiceReputationStats, 0, len(ag.Services))
+	seenService := make(map[string]struct{}, len(ag.Services))
+	for _, svc := range ag.Services {
+		key := serviceendpoint.Normalize(svc.Endpoint)
+		if key == "" {
+			continue
+		}
+		if _, dup := seenService[key]; dup {
+			continue
+		}
+		seenService[key] = struct{}{}
+		acc, ok := serviceAcc[key]
+		if !ok {
+			continue
+		}
+		aNow, bNow := scoring.DecayMass(acc.a, acc.b, acc.lastTs, now, formulaCfg)
+		serviceScores = append(serviceScores, scorestats.ServiceReputationStats{
+			Name:             acc.meta.Name,
+			Endpoint:         acc.meta.Endpoint,
+			ReputationScore:  scoring.ComputeReputationScore(aNow, bNow, acc.consec, formulaCfg.C, formulaCfg.Gamma, formulaCfg.Theta),
+			WeightedScoreSum: aNow,
+			WeightMass:       bNow,
+			ScoreUpdateAt:    acc.updateAt,
+			ConsecutiveFails: acc.consec,
+			TotalTasks:       acc.total,
+			TotalPassed:      acc.passed,
+			TotalFailed:      acc.failed,
+		})
+	}
 
 	// Composite-based deltas. Approximation: adoption / S / P / C are held constant at
 	// current values (no historical snapshots retained); only the reputation component
@@ -187,6 +256,7 @@ func replayAgent(
 		PublisherPresent: pubPresent,
 		ComplianceScore:  compScore,
 		ServiceWarnings:  svcResult.Warnings,
+		ServiceScores:    serviceScores,
 		ComputedAt:       now,
 	}
 }
@@ -278,4 +348,13 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+func effectiveFeedbackWi(fb feedbackrepo.FeedbackRecord, trustBatch *WalletTrustBatch) float64 {
+	base := scoring.ResolveBaseWi(fb)
+	trust := defaultWalletTrustScore
+	if trustBatch != nil {
+		trust = trustBatch.TrustScore(fb.ChainID, fb.ClientAddress)
+	}
+	return scoring.EffectiveWi(base, trust)
 }

@@ -8,7 +8,7 @@ package main
 // Two benchmarks are supported:
 //
 //   Bench 1 (--source=category): rule-as-gold over the 4 deterministic
-//     categories {service_feedback, app_specific, config_feedback, junk}.
+//     categories {junk, quality, quantity} (legacy Mongo keys folded via $in aliases).
 //     Samples N records per category from classification.rule.category,
 //     runs each LLM via the AI service, and reports F1 vs the rule label.
 //     The "others" category is intentionally excluded — those records need
@@ -194,7 +194,7 @@ func main() {
 	var goldLabels map[string]GoldLabel
 	switch srcMode {
 	case "category":
-		buckets := []string{"junk", "service_feedback", "config_feedback", "app_specific"}
+		buckets := []string{"junk", "quality", "quantity"}
 		for _, cat := range buckets {
 			docs, err := sampleByCategory(ctx, feedbacks, cat, *perBucket)
 			if err != nil {
@@ -261,7 +261,7 @@ func main() {
 		aiClients[i] = classifier.NewAIClient(classifier.AIClientConfig{
 			BaseURL:        *baseURL,
 			Model:          m.model,
-			PromptVersion:  "v6",
+			PromptVersion:  "v7",
 			TimeoutSeconds: *timeout,
 		})
 	}

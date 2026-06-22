@@ -67,6 +67,41 @@ func buildUpsertColdUpdate(chainID int64, address string, t0 float64, nowUnix in
 	}
 }
 
+const bulkTrustScoreChunkSize = 5000
+
+// dedupeNonEmptyIDs returns unique non-empty strings preserving first-seen order.
+func dedupeNonEmptyIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// chunkStrings splits s into sub-slices of at most size elements.
+func chunkStrings(s []string, size int) [][]string {
+	if len(s) == 0 || size <= 0 {
+		return nil
+	}
+	chunks := make([][]string, 0, (len(s)+size-1)/size)
+	for i := 0; i < len(s); i += size {
+		end := i + size
+		if end > len(s) {
+			end = len(s)
+		}
+		chunks = append(chunks, s[i:end])
+	}
+	return chunks
+}
+
 // computeCounterIncrements returns the $inc subdocument for ApplyTrustDelta.
 func computeCounterIncrements(isValid bool) map[string]any {
 	inc := map[string]any{

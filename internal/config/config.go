@@ -69,8 +69,6 @@ type Config struct {
 
 	// TrustRank formula params (§3.1–§3.4)
 	TrustRankAlpha float64 // §3.2 minimum difficulty weight (default 1.0)
-	TrustRankBeta  float64 // §3.2 difficulty amplifier (default 1.5)
-	TrustRankK     float64 // §3.2 micro-unit amplifier (default 100.0)
 	TrustRankTBase float64 // §3.3 half-life base in days (default 15.0)
 	ConfidenceC    float64 // confidence prior strength: evidence mass for 50% confidence (default 3.0)
 	PenaltyGamma   float64 // reliability penalty base (default 0.1)
@@ -219,8 +217,6 @@ func Load() (Config, error) {
 		TrustRankContractTypeSubBatch: utils.GetenvInt("TRUSTRANK_CONTRACT_TYPE_SUB_BATCH", 50),
 
 		TrustRankAlpha: utils.GetenvFloat("TRUSTRANK_ALPHA", 1.0),
-		TrustRankBeta:  utils.GetenvFloat("TRUSTRANK_BETA", 1.5),
-		TrustRankK:     utils.GetenvFloat("TRUSTRANK_K", 100.0),
 		TrustRankTBase: utils.GetenvFloat("TRUSTRANK_TBASE_DAYS", 15.0),
 		ConfidenceC:    utils.GetenvFloat("CONFIDENCE_C", 3.0),
 		PenaltyGamma:   utils.GetenvFloat("PENALTY_GAMMA", 0.1),

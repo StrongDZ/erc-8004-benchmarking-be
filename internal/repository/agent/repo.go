@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
@@ -323,6 +324,31 @@ func (r *Repository) FindByOwner(ctx context.Context, owner string) ([]AgentDocu
 	docs, err := r.Find(ctx, bson.M{"owner": owner})
 	if err != nil {
 		return nil, fmt.Errorf("agent repo: find by owner: %w", err)
+	}
+	return docs, nil
+}
+
+// FindByOwners returns all agents owned by any of the normalized owner addresses.
+func (r *Repository) FindByOwners(ctx context.Context, owners []string) ([]AgentDocument, error) {
+	norm := make([]string, 0, len(owners))
+	seen := make(map[string]struct{}, len(owners))
+	for _, owner := range owners {
+		o := strings.ToLower(strings.TrimSpace(owner))
+		if o == "" {
+			continue
+		}
+		if _, ok := seen[o]; ok {
+			continue
+		}
+		seen[o] = struct{}{}
+		norm = append(norm, o)
+	}
+	if len(norm) == 0 {
+		return nil, nil
+	}
+	docs, err := r.Find(ctx, bson.M{"owner": bson.M{"$in": norm}})
+	if err != nil {
+		return nil, fmt.Errorf("agent repo: find by owners: %w", err)
 	}
 	return docs, nil
 }

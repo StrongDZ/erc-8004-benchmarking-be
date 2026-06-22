@@ -39,7 +39,7 @@ func LowConfidenceAdjustment(confidence float64) (WiAdjustment, bool) {
 	return WiAdjustment{Reason: "low_classifier_confidence", Multiplier: 0.5}, true
 }
 
-// ServiceFeedbackBonus adds up to +0.4 wi for fully-structured service feedbacks.
+// ServiceFeedbackBonus adds up to +0.4 wi for fully-structured quality feedbacks.
 // Rationale: feedbacks that include a verifiable feedbackURI, rich content, and
 // proof of payment carry higher epistemic value than bare tag submissions.
 //   - +0.2 for non-empty feedback content (feedbackURI present and resolved)
@@ -47,7 +47,7 @@ func LowConfidenceAdjustment(confidence float64) (WiAdjustment, bool) {
 func ServiceFeedbackBonus(feedbackURI, content string) WiAdjustment {
 	bonus := 0.0
 	if strings.TrimSpace(feedbackURI) == "" {
-		return WiAdjustment{Reason: "service_feedback_bonus", Addend: 0}
+		return WiAdjustment{Reason: "quality_feedback_bonus", Addend: 0}
 	}
 	if strings.TrimSpace(content) != "" {
 		bonus += 0.2
@@ -55,7 +55,7 @@ func ServiceFeedbackBonus(feedbackURI, content string) WiAdjustment {
 	if hasProofOrAttachment(content) {
 		bonus += 0.2
 	}
-	return WiAdjustment{Reason: "service_feedback_bonus", Addend: bonus}
+	return WiAdjustment{Reason: "quality_feedback_bonus", Addend: bonus}
 }
 
 // hasProofOrAttachment returns true when the feedback JSON contains a non-empty

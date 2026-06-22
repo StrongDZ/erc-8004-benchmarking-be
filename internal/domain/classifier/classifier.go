@@ -17,10 +17,10 @@ import (
 type Category string
 
 const (
-	CategoryQuality  Category = "quality"   // subjective judgment / service quality — SCORES
-	CategoryQuantity Category = "quantity"  // a measured metric (rate/score/speed/count/amount)
-	CategoryJunk     Category = "junk"      // spam / noise / meaningless
-	CategoryOthers   Category = "others"    // rule could not decide → escalate to LLM
+	CategoryQuality  Category = "quality"  // subjective judgment / service quality — SCORES
+	CategoryQuantity Category = "quantity" // a measured metric (rate/score/speed/count/amount)
+	CategoryJunk     Category = "junk"     // spam / noise / meaningless
+	CategoryOthers   Category = "others"   // rule could not decide → escalate to LLM
 )
 
 // ruleConfidence is assigned to every whitelist rule hit. Tiered scores were removed
@@ -31,10 +31,11 @@ const ruleConfidence = 0.99
 type Feature string
 
 const (
-	FeatureInfra  Feature = "infrastructure" // generic signal, applies to ANY agent
-	FeatureDomain Feature = "agent_domain"   // specific to this agent's business
-	FeatureBoth   Feature = "both"           // generic metric on a domain service (LLM only)
-	FeatureNone   Feature = ""               // junk / undecided
+	FeatureInfra        Feature = "infrastructure" // generic signal, applies to ANY agent
+	FeatureDomain       Feature = "agent_domain"   // specific to this agent's business
+	FeatureBoth         Feature = "both"           // generic metric on a domain service (LLM only)
+	FeatureSelfFeedback Feature = "self_feedback"  // clientAddress == owner or agentWallet
+	FeatureNone         Feature = ""               // junk / undecided
 )
 
 // Result is the output of Classify.
@@ -47,6 +48,17 @@ type Result struct {
 }
 
 // ─── Main Classifier ─────────────────────────────────────────────────
+
+// SelfFeedbackResult is the fixed classification when clientAddress matches the
+// agent owner or registered agent wallet.
+func SelfFeedbackResult() Result {
+	return Result{
+		Category:   CategoryJunk,
+		Feature:    FeatureSelfFeedback,
+		Confidence: ruleConfidence,
+		Source:     "rule",
+	}
+}
 
 // Classify is the single entry point for rule-based feedback classification.
 // tag1, tag2 are the raw on-chain NewFeedback tag values (any casing); scale is
@@ -72,8 +84,10 @@ func Classify(tag1, tag2, scale string) Result {
 		return Result{Category: CategoryJunk, Confidence: ruleConfidence, Source: "rule"}
 	}
 	if t1 == "" && t2 == "" {
-		// no tags → let the LLM read offchain content
-		return Result{Category: CategoryOthers, Confidence: 0.0, Source: "fallback"}
+		if scale == "unbounded" {
+			return Result{Category: CategoryJunk, Feature: FeatureNone, Confidence: 0.80, Source: "rule"}
+		}
+		return Result{Category: CategoryQuality, Feature: FeatureDomain, Confidence: 0.80, Source: "rule"}
 	}
 	if emojiOnlyRe.MatchString(t1raw) && t2 == "" {
 		return Result{Category: CategoryJunk, Confidence: ruleConfidence, Source: "rule"}
@@ -86,16 +100,23 @@ func Classify(tag1, tag2, scale string) Result {
 	}
 
 	// ── Layer 3: QUALITY — subjective sentiment / service judgment ───
-	if qualityTag1Set[t1] {
-		return Result{Category: CategoryQuality, Feature: featureOf(t1, t2),
-			Confidence: ruleConfidence, Source: "rule", NormalizedTag: t1}
-	}
-	if containsQualityKeyword(t1) {
+	// HARD RULE: an unbounded scale (incl. negative values, which AssignTier maps to
+	// unbounded) is never a bounded quality score. A quality-shaped tag on an unbounded
+	// scale is a raw measured value → quantity, not quality.
+	isQualityTag := qualityTag1Set[t1] || containsQualityKeyword(t1) || containsQualityKeyword(t2)
+	if isQualityTag {
+		if scale == "unbounded" {
+			return Result{Category: CategoryQuantity, Feature: featureOf(t1, t2),
+				Confidence: ruleConfidence, Source: "rule", NormalizedTag: t1}
+		}
 		return Result{Category: CategoryQuality, Feature: featureOf(t1, t2),
 			Confidence: ruleConfidence, Source: "rule", NormalizedTag: t1}
 	}
 
 	// ── Unknown → escalate to LLM ────────────────────────────────
+	// An unknown tag on an unbounded scale is NOT force-classified as quantity:
+	// the scale alone does not reveal whether the feedback is a measured metric,
+	// so it escalates to the LLM/AI service to decide on semantics.
 	return Result{Category: CategoryOthers, Confidence: 0.0, Source: "fallback"}
 }
 
@@ -107,8 +128,8 @@ func isSpam(t1, t2 string) bool {
 }
 
 // isNoise matches explicit placeholder/gibberish tag1 values (test/asd/custom-style).
-// Records with empty tag1+tag2 are handled separately (→ others) so the LLM can
-// inspect offchain content.
+// Records with empty tag1+tag2 are handled separately above (line 86): unbounded → junk,
+// bounded → quality. They never escalate to others.
 func isNoise(t1, t2 string) bool {
 	if noiseTag1Set[t1] && (t2 == "" || noiseTag1Set[t2] || allDigitsRe.MatchString(t2)) {
 		return true
@@ -204,21 +225,30 @@ func RawValueToReal(rawValue string, valueDecimals int) (float64, bool) {
 
 // AssignTier returns the scale tier for a real value (value / 10^valueDecimals).
 //
-//	binary:    |real| ≤ 1.0
+//	binary:    real ∈ {0.0, 1.0} exactly — true pass/fail or yes/no
 //	star5:     1.0 < real ≤ 5.0
 //	star10:    5.0 < real ≤ 10.0
-//	pct100:    10.0 < |real| ≤ 100.0
-//	unbounded: |real| > 100
+//	pct100:    10.0 < real ≤ 100.0
+//	unbounded: real < 0 (negatives are accepted but have no positive bounded scale),
+//	           OR real > 100, OR 0 < real < 1 (fractional, no clear scale)
 func AssignTier(real float64) string {
-	abs := math.Abs(real)
 	switch {
-	case abs <= 1.0:
+	case real == 0.0 || real == 1.0:
 		return "binary"
+	case real < 0:
+		// Negative values are accepted but quality is only judged on a positive
+		// bounded scale; treat negatives as unbounded so they never normalize into
+		// a (positive) quality score and are never classified as quality.
+		return "unbounded"
+	case real < 1.0:
+		// Fractional values in (0,1) exclusive have no clear bounded scale.
+		// Treating as unbounded prevents spurious binary normalization (→ 0 or 1).
+		return "unbounded"
 	case real <= 5.0:
 		return "star5"
 	case real <= 10.0:
 		return "star10"
-	case abs <= 100.0:
+	case real <= 100.0:
 		return "pct100"
 	default:
 		return "unbounded"

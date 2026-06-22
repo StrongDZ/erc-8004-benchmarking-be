@@ -26,6 +26,6 @@ func DefaultPropagationConfig() PropagationConfig {
 		QWeightConfidence: 0.20,
 
 		ReasoningLenFull:    200,
-		AttachmentCountFull: 3,
+		AttachmentCountFull: 1,
 	}
 }

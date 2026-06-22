@@ -27,6 +27,7 @@ type leaderboardAgentRepo interface {
 	SearchByNamePrefix(ctx context.Context, chainID int64, query string, limit int64) ([]agentrepo.AgentDocument, error)
 	ComputeStatsMulti(ctx context.Context, chainIDs []int64) (*agentrepo.Stats, error)
 	FindByIDs(ctx context.Context, chainID int64, agentIDs []string) ([]agentrepo.AgentDocument, error)
+	FindByOwners(ctx context.Context, owners []string) ([]agentrepo.AgentDocument, error)
 	TopTags(ctx context.Context, chainIDs []int64, query string, limit int64) ([]agentrepo.TagCount, error)
 }
 
@@ -45,7 +46,7 @@ type leaderboardCrawlerRepo interface {
 }
 
 type leaderboardWalletRepo interface {
-	FindRankingSummariesByAddresses(ctx context.Context, addresses []string) (map[string]walletrepo.WalletRankingSummary, error)
+	ListRatedRanking(ctx context.Context, chainIDs []int64, skip, limit int64) ([]walletrepo.RatedRankingRow, int64, error)
 }
 
 // LeaderboardDeps bundles the repos used by the leaderboard service.
@@ -139,88 +140,95 @@ func (s *Leaderboard) List(ctx context.Context, p ListParams) (*ListResult, erro
 
 // WalletRankingParams are inputs for /leaderboard/wallet-ranking.
 type WalletRankingParams struct {
-	ChainIDs   []int64
-	AgentLimit int // top agents sampled before grouping by owner (default 200, max 500)
+	ChainIDs []int64
+	Page     int
+	Limit    int
+	Skip     int64
 }
 
-// WalletRanking builds wallet rows from top agents grouped by owner, with wallet
-// trust scores and feedback counts loaded in one batch query.
-func (s *Leaderboard) WalletRanking(ctx context.Context, p WalletRankingParams) ([]dto.WalletRankingRow, error) {
-	agentLimit := p.AgentLimit
-	if agentLimit <= 0 {
-		agentLimit = 200
-	}
-	if agentLimit > 500 {
-		agentLimit = 500
+// WalletRankingResult is the paginated response for wallet ranking.
+type WalletRankingResult struct {
+	Rows  []dto.WalletRankingRow
+	Total int64
+	Page  int
+	Limit int
+}
+
+const walletRankingAgentsCap = 20
+
+// WalletRanking returns rated wallets ordered by trustScore from the wallets collection.
+func (s *Leaderboard) WalletRanking(ctx context.Context, p WalletRankingParams) (*WalletRankingResult, error) {
+	if s.deps.Wallets == nil {
+		return &WalletRankingResult{Rows: []dto.WalletRankingRow{}, Page: p.Page, Limit: p.Limit}, nil
 	}
 
-	listRes, err := s.List(ctx, ListParams{
-		ChainIDs: p.ChainIDs,
-		Sort:     agentrepo.SortScoreDesc,
-		Page:     1,
-		Limit:    agentLimit,
-	})
+	ranked, total, err := s.deps.Wallets.ListRatedRanking(ctx, p.ChainIDs, p.Skip, int64(p.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("wallet ranking: %w", err)
 	}
 
-	ownerAgents := make(map[string][]dto.AgentRow)
-	addresses := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, row := range listRes.Rows {
-		owner := strings.TrimSpace(row.Owner)
-		if owner == "" {
-			continue
-		}
-		addr := strings.ToLower(owner)
-		ownerAgents[addr] = append(ownerAgents[addr], row)
-		if _, ok := seen[addr]; !ok {
-			seen[addr] = struct{}{}
-			addresses = append(addresses, addr)
-		}
+	addresses := make([]string, 0, len(ranked))
+	for _, row := range ranked {
+		addresses = append(addresses, row.Address)
 	}
 
-	summaries := map[string]walletrepo.WalletRankingSummary{}
-	if s.deps.Wallets != nil && len(addresses) > 0 {
-		summaries, err = s.deps.Wallets.FindRankingSummariesByAddresses(ctx, addresses)
+	ownerAgents := map[string][]dto.AgentRow{}
+	if s.deps.Agents != nil && len(addresses) > 0 {
+		docs, err := s.deps.Agents.FindByOwners(ctx, addresses)
 		if err != nil {
-			return nil, fmt.Errorf("wallet ranking summaries: %w", err)
+			return nil, fmt.Errorf("wallet ranking agents: %w", err)
 		}
-	}
-
-	rows := make([]dto.WalletRankingRow, 0, len(addresses))
-	for _, addr := range addresses {
-		agents := ownerAgents[addr]
-		sort.Slice(agents, func(i, j int) bool {
-			return agents[i].TrustScore > agents[j].TrustScore
-		})
-		summary := summaries[addr]
-		rows = append(rows, dto.WalletRankingRow{
-			Address:            addr,
-			Agents:             agents,
-			TrustScore:         summary.TrustScore,
-			FeedbackTotalCount: summary.FeedbackTotalCount,
-		})
-	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		switch {
-		case a.TrustScore == nil && b.TrustScore == nil:
-			return len(a.Agents) > len(b.Agents)
-		case a.TrustScore == nil:
-			return false
-		case b.TrustScore == nil:
-			return true
-		default:
-			if *a.TrustScore != *b.TrustScore {
-				return *a.TrustScore > *b.TrustScore
+		if len(p.ChainIDs) > 0 {
+			allowed := make(map[int64]struct{}, len(p.ChainIDs))
+			for _, id := range p.ChainIDs {
+				allowed[id] = struct{}{}
 			}
-			return len(a.Agents) > len(b.Agents)
+			filtered := make([]agentrepo.AgentDocument, 0, len(docs))
+			for _, d := range docs {
+				if _, ok := allowed[d.ChainID]; ok {
+					filtered = append(filtered, d)
+				}
+			}
+			docs = filtered
 		}
-	})
 
-	return rows, nil
+		now := time.Now().Unix()
+		statsMap := bulkFetchStats(ctx, s.deps.Scores, docs)
+		for _, d := range docs {
+			owner := strings.ToLower(strings.TrimSpace(d.Owner))
+			if owner == "" {
+				continue
+			}
+			row := toAgentRow(d, statsMap[statsKey(d.ChainID, d.AgentID)], s.deps.Formula, now)
+			ownerAgents[owner] = append(ownerAgents[owner], row)
+		}
+		for addr, agents := range ownerAgents {
+			sort.Slice(agents, func(i, j int) bool {
+				return agents[i].TrustScore > agents[j].TrustScore
+			})
+			if len(agents) > walletRankingAgentsCap {
+				agents = agents[:walletRankingAgentsCap]
+			}
+			ownerAgents[addr] = agents
+		}
+	}
+
+	rows := make([]dto.WalletRankingRow, 0, len(ranked))
+	for _, row := range ranked {
+		score := row.TrustScore
+		agents := ownerAgents[row.Address]
+		if agents == nil {
+			agents = []dto.AgentRow{}
+		}
+		rows = append(rows, dto.WalletRankingRow{
+			Address:            row.Address,
+			Agents:             agents,
+			TrustScore:         &score,
+			FeedbackTotalCount: row.FeedbackTotalCount,
+		})
+	}
+
+	return &WalletRankingResult{Rows: rows, Total: total, Page: p.Page, Limit: p.Limit}, nil
 }
 
 // Search implements /leaderboard/search (§2.2). Returns at most `limit` rows.

@@ -98,8 +98,6 @@ type Server struct {
 func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client) *Server {
 	formula := scoring.DefaultFormulaConfig()
 	formula.Alpha = cfg.TrustRankAlpha
-	formula.Beta = cfg.TrustRankBeta
-	formula.K = cfg.TrustRankK
 	formula.TBaseDays = cfg.TrustRankTBase
 	formula.C = cfg.ConfidenceC
 	formula.Gamma = cfg.PenaltyGamma

@@ -16,6 +16,7 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
+	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -32,7 +33,10 @@ type Deps struct {
 	Conn         *amqp.Connection
 	FeedbackRepo *feedbackrepo.Repository
 	WalletRepo   *walletrepo.Repository
-	PropCfg      propagation.PropagationConfig
+	// AgentRepo is optional; when non-nil resolveLLMFallback loads the agent's
+	// description/services/OASF so the classifier's domain stage has context.
+	AgentRepo *agentrepo.Repository
+	PropCfg   propagation.PropagationConfig
 	Cfg          AppConfig
 	// Classifier is optional; when non-nil the worker calls the LLM for
 	// feedback records where rule.category="others" and fallback is absent.

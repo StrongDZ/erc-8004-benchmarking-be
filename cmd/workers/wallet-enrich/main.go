@@ -1,13 +1,11 @@
 // wallet-enrich is the event-driven external wallet trust enrichment daemon.
 //
 // It consumes erc8004.wallet_enrich — published whenever UpsertCold or
-// ReconcileOwnership inserts a brand-new wallet — and runs a cache-first
-// cheap RPC pass (balance+nonce) for that wallet. If ETHERSCAN_API_KEYS is
-// set, a persistent explorer worker pool (one goroutine per key) fills in
-// age + unique-counterparty count. A persistent ENS worker pool resolves the
-// ENS primary name + avatar via the free ensdata.net API. A periodic cron
-// sweep (and one run at startup) catches any wallet that still needs
-// enrichment, independent of the queue.
+// ReconcileOwnership inserts a brand-new wallet — micro-batches a cache-first
+// cheap RPC pass (balance+nonce), then enqueues rich explorer and ENS work
+// onto rate-limited worker pools. A periodic cron sweep (and one run at
+// startup) catches any wallet that still needs enrichment, independent of
+// the queue.
 //
 // Required env vars: MONGO_URI, MONGO_DATABASE, MONGO_DATABASE_ANALYZED_AGENTS, RABBITMQ_URI
 // Optional: ETHERSCAN_API_KEYS, WALLET_ENRICH_WORKERS, WALLET_ENRICH_PREFETCH,

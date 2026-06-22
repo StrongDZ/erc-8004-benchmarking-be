@@ -4,8 +4,8 @@ package extenrich
 //
 // Three concurrent activities, started by Run():
 //  1. Queue consumer (consumer_wallet.go): consumes erc8004.wallet_enrich,
-//     published whenever UpsertCold/ReconcileOwnership inserts a brand-new
-//     wallet. Runs a cache-first cheap RPC pass (balance+nonce) for that wallet.
+//     micro-batches wallets for a cache-first cheap RPC pass, then enqueues
+//     rich/ENS work onto the rate-limited worker pools.
 //  2. Explorer workers (explorer_workers.go): one goroutine per configured
 //     Etherscan API key, draining explorerJobs at a fixed rate.
 //  3. Periodic backlog sweep (backlog.go): on a cron schedule (and once at
@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/robfig/cron/v3"
@@ -147,8 +148,24 @@ func (a *App) Run(ctx context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := a.runConsumer(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("extenrich: consumer stopped: %v", err)
+		backoff := time.Second
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := a.runConsumer(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("extenrich: consumer stopped: %v; reconnecting in %v", err, backoff)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff < 30*time.Second {
+					backoff *= 2
+				}
+				continue
+			}
+			return
 		}
 	}()
 

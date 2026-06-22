@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"erc-8004-benchmarking-be/internal/sensitivity/metrics"
-	"erc-8004-benchmarking-be/internal/sensitivity/pipeline"
 	"erc-8004-benchmarking-be/internal/sensitivity/runner"
 )
 
@@ -175,29 +174,6 @@ func writeSimplexCSV(path string, results []runner.RunResult, baseline map[strin
 			ftoa(desc.Std),
 		}
 		if err := w.Write(row); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeConvergenceCSV writes Alpha → #iterations for the Cluster-D convergence study.
-func writeConvergenceCSV(path string, points []pipeline.ConvergencePoint) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	w := csv.NewWriter(f)
-	defer w.Flush()
-	if err := w.Write([]string{"alpha", "iterations"}); err != nil {
-		return err
-	}
-	for _, p := range points {
-		if err := w.Write([]string{ftoa(p.Alpha), strconv.Itoa(p.Iterations)}); err != nil {
 			return err
 		}
 	}

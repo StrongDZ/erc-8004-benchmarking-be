@@ -432,6 +432,28 @@ type RatedTrust struct {
 	TrustScore float64 `bson:"trustScore"`
 }
 
+// BulkGetTrustScores loads trustScore for wallet documents by _id.
+// Missing ids are omitted from the result map. ids are deduped; queries are chunked at 5000.
+func (r *Repository) BulkGetTrustScores(ctx context.Context, ids []string) (map[string]float64, error) {
+	unique := dedupeNonEmptyIDs(ids)
+	if len(unique) == 0 {
+		return map[string]float64{}, nil
+	}
+
+	out := make(map[string]float64, len(unique))
+	for _, chunk := range chunkStrings(unique, bulkTrustScoreChunkSize) {
+		docs, err := r.Find(ctx, bson.M{"_id": bson.M{"$in": chunk}},
+			options.Find().SetProjection(bson.M{"_id": 1, "trustScore": 1}))
+		if err != nil {
+			return nil, fmt.Errorf("wallet repo: bulk get trust scores: %w", err)
+		}
+		for _, doc := range docs {
+			out[doc.ID] = doc.TrustScore
+		}
+	}
+	return out, nil
+}
+
 // ScanRatedTrust returns (_id, trustScore) for every RATED wallet across all chains.
 // Used to build the publisher-reputation snapshot for score-refresh.
 func (r *Repository) ScanRatedTrust(ctx context.Context) ([]RatedTrust, error) {

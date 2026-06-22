@@ -30,6 +30,9 @@ import (
 // ErrTransient signals a recoverable failure — caller nacks+requeues.
 var ErrTransient = errors.New("transient failure")
 
+// ErrLLMUnavailable is returned by resolveLLMFallback when the LLM service is down.
+var ErrLLMUnavailable = errors.New("llm service unavailable")
+
 func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) error {
 	// 1. Fetch.
 	fb, err := a.deps.FeedbackRepo.FindByID(ctx, feedbackID)
@@ -41,7 +44,7 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	}
 
 	// 2. Idempotency: skip if already graded.
-	if fb.ValidationVerdict != "" && fb.ValidationVerdict != "legacy" && fb.ValidationVerdict != "pending" {
+	if feedbackrepo.IsGraded(fb.ValidationVerdict) {
 		return nil
 	}
 
@@ -49,9 +52,18 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	verdict, err := Validate(*fb)
 	if errors.Is(err, ErrPendingLLM) {
 		if a.deps.Classifier == nil {
-			return ErrTransient
+			if err := a.persistPendingLLMUnavailable(ctx, feedbackID); err != nil {
+				return ErrTransient
+			}
+			return nil
 		}
 		if llmErr := a.resolveLLMFallback(ctx, fb); llmErr != nil {
+			if errors.Is(llmErr, ErrLLMUnavailable) {
+				if err := a.persistPendingLLMUnavailable(ctx, feedbackID); err != nil {
+					return ErrTransient
+				}
+				return nil
+			}
 			return ErrTransient
 		}
 		verdict, err = Validate(*fb)
@@ -107,22 +119,49 @@ func (a *App) resolveLLMFallback(ctx context.Context, fb *feedbackrepo.FeedbackR
 		}
 	}
 
-	res, _ := a.deps.Classifier.Classify(ctx, classifier.HybridInput{
+	in := classifier.HybridInput{
 		Tag1:            fb.Tag1,
 		Tag2:            fb.Tag2,
 		ValueRaw:        fb.Value,
 		ValueDecimals:   int(fb.ValueDecimals),
 		OffchainContent: content,
 		Endpoint:        fb.Endpoint,
-	})
+	}
 
-	// Source=="fallback" means the LLM service is down; retry later.
+	// Load agent context so the classifier's domain stage (3tier cosine / LLM
+	// agent_domain axis) can judge whether the tag is in this agent's business.
+	// Best-effort: on any miss we fall through with empty agent context.
+	if a.deps.AgentRepo != nil {
+		if ag, err := a.deps.AgentRepo.FindByAgentID(ctx, fb.ChainID, fb.AgentID); err == nil && ag != nil {
+			desc := ag.SummarizedDescription
+			if desc == "" {
+				desc = ag.Description
+			}
+			in.AgentDescription = desc
+			in.AgentOASFDomains = ag.OASFDomains
+			in.AgentOASFSkills = ag.OASFSkills
+			in.AgentTags = ag.Tags
+			svcs := make([]classifier.AgentServicePayload, 0, len(ag.Services))
+			for _, s := range ag.Services {
+				svcs = append(svcs, classifier.AgentServicePayload{
+					Name: s.Name, Endpoint: s.Endpoint, Version: s.Version,
+					Skills: s.Skills, Domains: s.Domains,
+				})
+			}
+			in.AgentServices = svcs
+		}
+	}
+
+	res, _ := a.deps.Classifier.Classify(ctx, in)
+
+	// Source=="fallback" means the LLM service is down; caller persists pending and acks.
 	if res.Source == "fallback" {
-		return errors.New("llm service unavailable")
+		return ErrLLMUnavailable
 	}
 
 	fallback := feedbackrepo.FallbackClassification{
 		Category:   string(res.Category),
+		Feature:    string(res.Feature),
 		Confidence: res.Confidence,
 	}
 	if err := a.deps.FeedbackRepo.UpdateFallback(ctx, fb.ID, fallback); err != nil {
@@ -130,5 +169,20 @@ func (a *App) resolveLLMFallback(ctx context.Context, fb *feedbackrepo.FeedbackR
 	}
 	fb.Classification.Fallback = &fallback
 	fb.Category = fallback.Category
+	if fallback.Feature != "" {
+		fb.Feature = fallback.Feature
+	}
 	return nil
+}
+
+func pendingWeightingForUnavailableLLM(now int64) feedbackrepo.WeightingUpdate {
+	return feedbackrepo.WeightingUpdate{
+		Verdict:    "pending",
+		Reason:     "llm unavailable",
+		ComputedAt: now,
+	}
+}
+
+func (a *App) persistPendingLLMUnavailable(ctx context.Context, feedbackID string) error {
+	return a.deps.FeedbackRepo.UpdateWeighting(ctx, feedbackID, pendingWeightingForUnavailableLLM(time.Now().Unix()))
 }

@@ -120,8 +120,24 @@ func (p *ConsumerPool[T]) EnsureReader(ctx context.Context, key string) {
 	p.readersWG.Add(1)
 	go func() {
 		defer p.readersWG.Done()
-		if err := p.runReader(ctx, key, cfg.Prefetch); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("consumer_pool: reader key=%q stopped: %v", key, err)
+		backoff := time.Second
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			err := p.runReader(ctx, key, cfg.Prefetch)
+			if err == nil || errors.Is(err, context.Canceled) {
+				return
+			}
+			log.Printf("consumer_pool: reader key=%q stopped: %v; reconnecting in %v", key, err, backoff)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
 		}
 	}()
 }

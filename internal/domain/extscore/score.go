@@ -11,10 +11,6 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 )
 
-// TeleportGamma weights community reviewer reliability vs the external on-chain
-// score when building the propagation teleport prior. Tunable.
-const TeleportGamma = 0.5
-
 // Feature weights; sum to 1.0 when all are present.
 var weights = struct{ Age, Counterparties, Balance, Nonce, ENS float64 }{
 	Age: 0.30, Counterparties: 0.30, Balance: 0.20, Nonce: 0.10, ENS: 0.10,
@@ -100,9 +96,3 @@ func CompleteForChain(chainID int64, f Features) bool {
 	return Complete(f)
 }
 
-// BlendTeleport combines community reviewer reliability with the external on-chain
-// score for the propagation teleport prior. gamma weights reliability; externalScore
-// is 0 when enrichment has not landed yet.
-func BlendTeleport(reliability, externalScore float64, gamma float64) float64 {
-	return gamma*reliability + (1-gamma)*externalScore
-}

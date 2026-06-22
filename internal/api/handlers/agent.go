@@ -104,16 +104,17 @@ func (h *AgentHandler) Feedbacks(w http.ResponseWriter, r *http.Request) {
 		sortDesc = false
 	}
 	out, err := h.svc.Feedbacks(r.Context(), service.FeedbacksParams{
-		ChainID:  chainID,
-		AgentID:  agentID,
-		Category: strings.TrimSpace(r.URL.Query().Get("category")),
-		Status:   strings.TrimSpace(r.URL.Query().Get("status")),
-		From:     from,
-		To:       to,
-		SortDesc: sortDesc,
-		Page:     page,
-		Limit:    limit,
-		Skip:     skip,
+		ChainID:         chainID,
+		AgentID:         agentID,
+		Category:        strings.TrimSpace(r.URL.Query().Get("category")),
+		Status:          strings.TrimSpace(r.URL.Query().Get("status")),
+		ServiceEndpoint: strings.TrimSpace(r.URL.Query().Get("service")),
+		From:            from,
+		To:              to,
+		SortDesc:        sortDesc,
+		Page:            page,
+		Limit:           limit,
+		Skip:            skip,
 	})
 	if err != nil {
 		writeServiceErr(w, r, err)

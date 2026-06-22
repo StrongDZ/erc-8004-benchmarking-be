@@ -3,7 +3,7 @@ package main
 // sample.go — Sampling strategies for the classifier benchmark.
 //
 //   sampleByCategory:        N samples per classification.rule.category — used by
-//                            Bench 1 (rule-as-gold over the 5 non-others categories).
+//                            Bench 1 (rule-as-gold over junk/quality/quantity).
 //   sampleOthersStratified:  stratified pull from classification.rule.category="others",
 //                            grouped client-side by (tag1Prefix, tag2Prefix) so the
 //                            others gold-label set covers as many tag-shape clusters
@@ -22,14 +22,28 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
 
+// categoryMongoAliases maps canonical labels to Mongo classification.rule.category
+// values. Runtime writes junk/quality/quantity/others; legacy rows may still use
+// the 5-class keys — query with $in so Bench 1 and corpus sampling stay balanced.
+var categoryMongoAliases = map[string][]string{
+	"junk":     {"junk", "spam", "noise"},
+	"quality":  {"quality", "service_feedback", "config_feedback"},
+	"quantity": {"quantity", "app_specific"},
+	"others":   {"others"},
+}
+
 // sampleByCategory uses $match + $sample to pull n random feedback records
 // for a given classification.rule.category. Used by Bench 1 (rule-as-gold).
 func sampleByCategory(ctx context.Context, repo *feedbackrepo.Repository, category string, n int) ([]feedbackrepo.FeedbackRecord, error) {
 	if n <= 0 {
 		return nil, nil
 	}
+	aliases, ok := categoryMongoAliases[category]
+	if !ok {
+		aliases = []string{category}
+	}
 	pipeline := []bson.D{
-		{{Key: "$match", Value: bson.M{"classification.rule.category": category}}},
+		{{Key: "$match", Value: bson.M{"classification.rule.category": bson.M{"$in": aliases}}}},
 		{{Key: "$sample", Value: bson.M{"size": int64(n)}}},
 	}
 	cur, err := repo.Coll.Aggregate(ctx, pipeline, options.Aggregate().SetAllowDiskUse(true))

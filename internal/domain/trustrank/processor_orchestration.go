@@ -247,6 +247,76 @@ func (p *Processor) processEvent(bs *batchState, ev eventrepo.DecodedEvent) {
 	}
 }
 
+// filterUngradedFeedbacks drops pending upserts whose Mongo row is already graded,
+// so trustrank reprocessing does not overwrite validationVerdict / wi fields.
+func filterUngradedFeedbacks(ctx context.Context, repo *feedback.Repository, pending []feedback.FeedbackRecord) ([]feedback.FeedbackRecord, int, error) {
+	if len(pending) == 0 {
+		return nil, 0, nil
+	}
+	ids := make([]string, 0, len(pending))
+	for i := range pending {
+		ids = append(ids, feedback.FeedbackDocumentID(pending[i].ChainID, pending[i].AgentID, pending[i].ClientAddress, pending[i].FeedbackIndex))
+	}
+	existing, err := repo.FindByIDs(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	graded := make(map[string]bool, len(existing))
+	for i := range existing {
+		if feedback.IsGraded(existing[i].ValidationVerdict) {
+			graded[existing[i].ID] = true
+		}
+	}
+	out := make([]feedback.FeedbackRecord, 0, len(pending))
+	skipped := 0
+	for i := range pending {
+		id := feedback.FeedbackDocumentID(pending[i].ChainID, pending[i].AgentID, pending[i].ClientAddress, pending[i].FeedbackIndex)
+		if graded[id] {
+			skipped++
+			continue
+		}
+		out = append(out, pending[i])
+	}
+	return out, skipped, nil
+}
+
+// publishClassifiedFeedback enqueues trust-graph jobs only for feedback that is not yet graded.
+func (p *Processor) publishClassifiedFeedback(ctx context.Context, toUpsert []feedback.FeedbackRecord) {
+	if p.fbPublisher == nil || len(toUpsert) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(toUpsert))
+	for i := range toUpsert {
+		toUpsert[i].ID = feedback.FeedbackDocumentID(toUpsert[i].ChainID, toUpsert[i].AgentID, toUpsert[i].ClientAddress, toUpsert[i].FeedbackIndex)
+		ids = append(ids, toUpsert[i].ID)
+	}
+	existing, err := p.feedbackRepo.FindByIDs(ctx, ids)
+	if err != nil {
+		log.Printf("processor: publish guard lookup: %v", err)
+	}
+	verdictByID := make(map[string]string, len(existing))
+	for i := range existing {
+		verdictByID[existing[i].ID] = existing[i].ValidationVerdict
+	}
+	var published, skippedPublishGraded int
+	for i := range toUpsert {
+		fb := &toUpsert[i]
+		if feedback.IsGraded(verdictByID[fb.ID]) {
+			skippedPublishGraded++
+			continue
+		}
+		pubMsg := mq.FeedbackClassifiedMessage{FeedbackID: fb.ID, ChainID: fb.ChainID}
+		if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackClassified, pubMsg); err != nil {
+			log.Printf("processor: publish feedback.classified (%s): %v", fb.ID, err)
+			continue
+		}
+		published++
+	}
+	if published > 0 || skippedPublishGraded > 0 {
+		log.Printf("processor: feedback.classified batch published=%d skipped_publish_graded=%d", published, skippedPublishGraded)
+	}
+}
+
 // ── Phase 3: Flush ─────────────────────────────────────────────────────────────
 
 func (p *Processor) flush(ctx context.Context, bs *batchState) error {
@@ -264,19 +334,17 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 		return fmt.Errorf("flush identity history: %w", err)
 	}
 
-	if err := p.feedbackRepo.BulkUpsert(ctx, bs.pendingFeedbacks); err != nil {
+	toUpsert, skippedUpsertGraded, err := filterUngradedFeedbacks(ctx, p.feedbackRepo, bs.pendingFeedbacks)
+	if err != nil {
+		return fmt.Errorf("flush feedback lookup: %w", err)
+	}
+	if skippedUpsertGraded > 0 {
+		log.Printf("processor: feedback upsert skipped_graded=%d", skippedUpsertGraded)
+	}
+	if err := p.feedbackRepo.BulkUpsert(ctx, toUpsert); err != nil {
 		return fmt.Errorf("flush feedback: %w", err)
 	}
-
-	if p.fbPublisher != nil {
-		for i := range bs.pendingFeedbacks {
-			fb := &bs.pendingFeedbacks[i]
-			pubMsg := mq.FeedbackClassifiedMessage{FeedbackID: fb.ID, ChainID: fb.ChainID}
-			if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackClassified, pubMsg); err != nil {
-				log.Printf("processor: publish feedback.classified (%s): %v", fb.ID, err)
-			}
-		}
-	}
+	p.publishClassifiedFeedback(ctx, toUpsert)
 
 	if err := p.feedbackRepo.BulkUpdate(ctx, bs.pendingFBUpdates); err != nil {
 		return fmt.Errorf("flush feedback updates: %w", err)

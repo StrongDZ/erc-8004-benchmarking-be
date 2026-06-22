@@ -58,8 +58,6 @@ func main() {
 
 	formulaCfg := scoring.FormulaConfig{
 		Alpha:     cfg.TrustRankAlpha,
-		Beta:      cfg.TrustRankBeta,
-		K:         cfg.TrustRankK,
 		TBaseDays: cfg.TrustRankTBase,
 		Gamma:     cfg.PenaltyGamma,
 		Theta:     cfg.PenaltyTheta,

@@ -27,7 +27,7 @@ func meanScalar(s map[string]float64) float64 {
 func benchDispatch(args []string) {
 	fs := flag.NewFlagSet("bench", flag.ExitOnError)
 	cluster := fs.String("cluster", "", "A | B | C | D (required)")
-	method := fs.String("method", "", "oat | tornado | sobol | grid | simplex | convergence (required)")
+	method := fs.String("method", "", "oat | tornado | sobol | grid | simplex (required)")
 	snapshotID := fs.String("snapshot", "", "snapshot ID from `snapshot list` (required)")
 	oatPoints := fs.Int("oat-points", 11, "[oat] points per param")
 	sobolN := fs.Int("sobol-n", 1024, "[sobol] base sample count")
@@ -35,7 +35,6 @@ func benchDispatch(args []string) {
 	gridLevels := fs.Int("grid-levels", 5, "[grid] levels per top-3 param")
 	simplexN := fs.Int("simplex-n", 200, "[simplex] Dirichlet sample count (cluster B only)")
 	simplexSeed := fs.Int64("simplex-seed", 42, "[simplex] RNG seed (cluster B only)")
-	convAlphas := fs.String("conv-alphas", "0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95,0.99", "[convergence] CSV list of Alpha values (cluster D only)")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
@@ -186,24 +185,8 @@ func benchDispatch(args []string) {
 			map[string]any{"simplexN": *simplexN})
 		fmt.Printf("Simplex: %d samples → %s/simplex.csv\n", len(results), outDir)
 
-	case "convergence":
-		if cl != "D" {
-			log.Fatalf("--method=convergence only valid for cluster D")
-		}
-		alphas, err := parseFloatCSV(*convAlphas)
-		if err != nil {
-			log.Fatalf("parse conv-alphas: %v", err)
-		}
-		pts := pipeline.ConvergenceCurve(data, alphas, 1e-4, 100)
-		if err := writeConvergenceCSV(filepath.Join(outDir, "convergence.csv"), pts); err != nil {
-			log.Fatalf("write convergence csv: %v", err)
-		}
-		_ = writeManifest(outDir, *snapshotID, cl, "convergence", 0,
-			map[string]any{"alphas": alphas})
-		fmt.Printf("Convergence: %d Alpha points → %s/convergence.csv\n", len(pts), outDir)
-
 	default:
-		log.Fatalf("invalid --method=%s (want oat|tornado|sobol|grid|simplex|convergence)", *method)
+		log.Fatalf("invalid --method=%s (want oat|tornado|sobol|grid|simplex)", *method)
 	}
 }
 

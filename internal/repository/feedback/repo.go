@@ -92,7 +92,7 @@ func (r *Repository) EnsureIndexes(ctx context.Context) error {
 			Options: options.Index().
 				SetName("idx_tag1_category_revoked_ts").
 				SetPartialFilterExpression(bson.M{
-					"category":  "service_feedback",
+					"category":  "quality",
 					"isRevoked": false,
 				}),
 		},
@@ -245,13 +245,13 @@ func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUp
 	return nil
 }
 
-// FindServiceFeedbacksByTagPair returns all non-revoked service feedbacks for a (tag1, tag2) pair
+// FindServiceFeedbacksByTagPair returns all non-revoked quality feedbacks for a (tag1, tag2) pair
 // whose timestamp is before beforeUnix. Used by the rescale worker Phase 1 and 3.
 func (r *Repository) FindServiceFeedbacksByTagPair(ctx context.Context, tag1, tag2 string, beforeUnix int64) ([]FeedbackRecord, error) {
 	filter := bson.M{
 		"tag1":     tag1,
 		"tag2":     tag2,
-		"category": "service_feedback",
+		"category": "quality",
 		"isRevoked":                    false,
 		"isSelfFeedback":               false,
 		"timestamp":                    bson.M{"$lt": beforeUnix},
@@ -302,6 +302,8 @@ type FeedbackBackfillItem struct {
 // (i.e. trust-graph-updater has not yet graded them). Pass chainID=0 for all chains.
 // limit caps the batch size; callers should pick a value that the queue can absorb.
 // Results are stable-sorted by _id so repeated calls page deterministically.
+//
+// Intended for manual backfill tools only — no worker should call this on a periodic schedule.
 func (r *Repository) ListUnprocessedIDs(ctx context.Context, chainID int64, limit int) ([]FeedbackBackfillItem, error) {
 	if limit <= 0 {
 		return nil, nil

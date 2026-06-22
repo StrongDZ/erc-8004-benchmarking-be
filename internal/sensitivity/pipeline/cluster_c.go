@@ -11,7 +11,7 @@ package pipeline
 //
 // Cụm C therefore measures how the quality-signal weights (and the ReasoningLen /
 // AttachmentCount saturation points and WiBase floor) move each agent's mean
-// incoming edge weight — the quantity that the Cụm D power iteration consumes.
+// incoming edge weight — the quantity that Cụm A's reputation mass accumulates.
 //
 // Parameters: 5 Q-weights (sum=1), ReasoningLenFull, AttachmentCountFull, WiBase.
 

@@ -11,17 +11,20 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"erc-8004-benchmarking-be/internal/domain/serviceendpoint"
 )
 
 // ListFilter controls pagination & filtering on /agents/:id/feedbacks (§3.3).
 type ListFilter struct {
-	ChainID  int64
-	AgentID  string
-	Category string // "service_feedback" | "config_feedback" | "app_specific" | "others" | "junk"
-	Status   string // "accepted" | "revoked" | "junk" | "anomalous"
-	From     *time.Time
-	To       *time.Time
-	SortDesc bool // false = ASC by blockNumber/logIndex
+	ChainID          int64
+	AgentID          string
+	Category         string // "quality" | "quantity" | "junk" | "others"
+	Status           string // "accepted" | "revoked" | "junk" | "anomalous"
+	ServiceEndpoint  string // registered service endpoint; matches related feedback endpoints
+	From             *time.Time
+	To               *time.Time
+	SortDesc         bool // false = ASC by blockNumber/logIndex
 }
 
 // ListFiltered returns filtered feedback records and the total count matching the filter.
@@ -82,6 +85,11 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 			rng["$lte"] = f.To.Unix()
 		}
 		q["timestamp"] = rng
+	}
+	if strings.TrimSpace(f.ServiceEndpoint) != "" {
+		if clause := serviceendpoint.EndpointRelatedFilter(f.ServiceEndpoint); clause != nil {
+			q = bson.M{"$and": bson.A{q, clause}}
+		}
 	}
 	return q
 }

@@ -2,7 +2,6 @@ package scoring
 
 // formulas.go — Pure TrustRank scoring functions.
 // implements §3.1 Total Trust Score
-// implements §3.2 Difficulty Weight (wᵢ)
 // implements §3.3 Adaptive Time Decay (λᵢ)
 // implements §3.4 Progressive Penalty (P)
 // implements composite score blend (reputation + services + publisher + compliance)
@@ -16,9 +15,7 @@ import (
 
 // FormulaConfig holds the tunable scoring parameters, read from environment at startup.
 type FormulaConfig struct {
-	Alpha        float64 // §3.2 minimum difficulty weight (default 1.0)
-	Beta         float64 // §3.2 difficulty amplifier (default 1.5)
-	K            float64 // §3.2 micro-unit amplifier for USDC price (default 100.0)
+	Alpha        float64 // constant per-feedback weight wᵢ (default 1.0); sets decay rate λ = ln2/(T_base·(1+ln(wᵢ)))
 	TBaseDays    float64 // §3.3 half-life base in days (default 15.0)
 	C            float64 // confidence prior strength: evidence mass B at which confidence = 0.5 (default 3.0)
 	Gamma        float64 // reliability penalty base coefficient (default 0.1)
@@ -31,8 +28,6 @@ type FormulaConfig struct {
 func DefaultFormulaConfig() FormulaConfig {
 	return FormulaConfig{
 		Alpha:        1.0,
-		Beta:         1.5,
-		K:            100.0,
 		TBaseDays:    15.0,
 		C:            3.0,
 		Gamma:        0.1,
@@ -44,16 +39,8 @@ func DefaultFormulaConfig() FormulaConfig {
 
 // TaskInput is the per-feedback input to ComputeScore.
 type TaskInput struct {
-	PriceUSDC float64 // task reward in USDC (0 for free tasks)
 	Vi        float64 // validation score [0, 1]
 	DeltaDays float64 // fractional days since task completion — MUST NOT be in seconds
-}
-
-// ComputeWi computes the logarithmic difficulty weight for a task.
-// §3.2: wᵢ = α + β · ln(1 + k · Priceᵢ)
-// NOTE: math.Log is the NATURAL logarithm. Never math.Log10.
-func ComputeWi(priceUSDC, alpha, beta, k float64) float64 {
-	return alpha + beta*math.Log(1.0+k*priceUSDC)
 }
 
 // ComputeDecayRate computes the adaptive decay rate λᵢ.

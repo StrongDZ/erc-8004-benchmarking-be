@@ -22,7 +22,7 @@ type SourceCollections struct {
 	Feedbacks       *mongodrv.Collection // feedback_history
 	Agents          *mongodrv.Collection // agents
 	AgentScoreStats *mongodrv.Collection // agent_score_stats
-	Wallets         *mongodrv.Collection // wallets — owner external on-chain score (Cụm D teleport)
+	Wallets         *mongodrv.Collection // wallets — owner external on-chain score (Cụm D E-component)
 }
 
 // BuildOptions carries everything BuildFromSource needs to know.
@@ -30,7 +30,6 @@ type BuildOptions struct {
 	ChainID    int64
 	Filter     FilterConfig
 	Now        time.Time // injected for deterministic snapshot IDs (use time.Now() in prod)
-	Defaults   scoring.FormulaConfig
 	Composite  scoring.CompositeWeights
 	Compliance scoring.ComplianceWeights
 }
@@ -64,7 +63,7 @@ func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptio
 	}
 
 	feedbacks := projectFeedbacks(fbs)
-	edges := buildEdges(fbs, agentDocs, opts.Defaults)
+	edges := buildEdges(fbs, agentDocs)
 	baseline, err := computeBaseline(ctx, src, agents, opts)
 	if err != nil {
 		return SnapshotData{}, fmt.Errorf("compute baseline: %w", err)
@@ -216,7 +215,6 @@ func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
 			ChainID:              fb.ChainID,
 			ClientAddress:        fb.ClientAddress,
 			FeedbackIndex:        fb.FeedbackIndex,
-			PriceUSDC:            fb.PriceUSDC,
 			Wi:                   fb.Wi,
 			ValueScale:           fb.ValueScale,
 			ValueNormalized:      normalizeValue(fb),
@@ -269,12 +267,10 @@ func classifierConfidence(fb feedback.FeedbackRecord) float64 {
 	return 1.0
 }
 
-// buildEdges groups feedbacks by (client → agent owner) and computes initial wᵢ
-// from default formula params. Used by Cụm C and D power iteration.
-func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, defaults scoring.FormulaConfig) []GraphEdge {
+// buildEdges groups feedbacks by (client → agent owner). Retained for graph-edge stats; no cluster sweeps edge weights directly.
+func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini) []GraphEdge {
 	type key struct{ from, to string }
 	agg := map[key]*GraphEdge{}
-	priceSum := map[key]float64{}
 	for _, fb := range fbs {
 		meta := agentDocs[fb.AgentID]
 		to := meta.Owner
@@ -296,14 +292,9 @@ func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, d
 			agg[k] = e
 		}
 		e.FeedbackCount++
-		priceSum[k] += fb.PriceUSDC
 	}
 	out := make([]GraphEdge, 0, len(agg))
-	for k, e := range agg {
-		if e.FeedbackCount > 0 {
-			e.AvgPriceUSDC = priceSum[k] / float64(e.FeedbackCount)
-			e.InitialWi = scoring.ComputeWi(e.AvgPriceUSDC, defaults.Alpha, defaults.Beta, defaults.K)
-		}
+	for _, e := range agg {
 		out = append(out, *e)
 	}
 	return out
@@ -370,7 +361,7 @@ func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentS
 
 // loadOwnerExternalScores returns owner-address → external on-chain score [0,100]
 // from the wallets collection. Owners without an enrichment row (or a nil handle)
-// simply map to 0 — Cụm D's BlendTeleport treats that as "external not landed yet".
+// simply map to 0 — Cụm D treats external=0 as signal absent (ePresent=false).
 func loadOwnerExternalScores(ctx context.Context, coll *mongodrv.Collection, chainID int64, ownerByAgent map[string]string) map[string]float64 {
 	out := map[string]float64{}
 	if coll == nil {

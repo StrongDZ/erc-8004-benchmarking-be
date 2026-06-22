@@ -82,12 +82,6 @@ func validate(cfg Config) error {
 	if cfg.TrustRankAlpha <= 0 {
 		return fmt.Errorf("TRUSTRANK_ALPHA must be > 0")
 	}
-	if cfg.TrustRankBeta < 0 {
-		return fmt.Errorf("TRUSTRANK_BETA must be >= 0")
-	}
-	if cfg.TrustRankK <= 0 {
-		return fmt.Errorf("TRUSTRANK_K must be > 0")
-	}
 	if cfg.TrustRankTBase <= 0 {
 		return fmt.Errorf("TRUSTRANK_TBASE_DAYS must be > 0")
 	}

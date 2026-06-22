@@ -29,18 +29,36 @@ type AgentScoreStats struct {
 
 	// Composite trust score [0, 100] and component breakdown.
 	// Populated by score-refresh worker each cycle.
-	CompositeScore  float64 `bson:"compositeScore"`
-	ReputationNorm  float64 `bson:"reputationNorm"` // == ReputationScore (kept for API/back-compat)
-	AdoptionScore   float64 `bson:"adoptionScore"`  // log-scaled distinct-client breadth [0,100]
-	ServicesScore   float64 `bson:"servicesScore"`
+	CompositeScore   float64 `bson:"compositeScore"`
+	ReputationNorm   float64 `bson:"reputationNorm"` // == ReputationScore (kept for API/back-compat)
+	AdoptionScore    float64 `bson:"adoptionScore"`  // log-scaled distinct-client breadth [0,100]
+	ServicesScore    float64 `bson:"servicesScore"`
 	PublisherScore   float64 `bson:"publisherScore"`
 	PublisherPresent bool    `bson:"publisherPresent"`
 	ComplianceScore  float64 `bson:"complianceScore"`
 	// ServiceWarnings lists service names that need attention
 	// (e.g., JSON-required endpoint fetched but content was not valid JSON).
 	ServiceWarnings []string `bson:"serviceWarnings,omitempty"`
+	// ServiceScores stores per-service reputation state and counters.
+	// Mapping key is endpoint (normalized via trim/lowercase in compute paths).
+	ServiceScores []ServiceReputationStats `bson:"serviceScores,omitempty"`
 
 	ComputedAt int64 `bson:"computedAt"` // Unix seconds of last computation
+}
+
+// ServiceReputationStats is the service-scoped equivalent of the agent reputation
+// state for one declared endpoint.
+type ServiceReputationStats struct {
+	Name             string  `bson:"name,omitempty"`
+	Endpoint         string  `bson:"endpoint"`
+	ReputationScore  float64 `bson:"reputationScore"`
+	WeightedScoreSum float64 `bson:"weightedScoreSum"`
+	WeightMass       float64 `bson:"weightMass"`
+	ScoreUpdateAt    int64   `bson:"scoreUpdateAt"`
+	ConsecutiveFails int64   `bson:"consecutiveFails"`
+	TotalTasks       int64   `bson:"totalTasks"`
+	TotalPassed      int64   `bson:"totalPassed"`
+	TotalFailed      int64   `bson:"totalFailed"`
 }
 
 // Repository wraps the agent_score_stats collection.

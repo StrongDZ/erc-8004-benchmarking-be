@@ -1,10 +1,12 @@
 package main
 
 // restart-trustrank — destructive reset for TrustRank re-processing:
-//   1) Delete stale RabbitMQ queues (classified feedback, desc summary, wallet_enrich, per-chain service_uri).
-//   2) Drop the entire analyzed agents database (agents, scores, feedbacks, …).
-//   3) Delete config documents whose _id matches trustrank_worker_<chain_id>
+//   1) Stop indexer + trustrank-worker (prevents out-of-order event inserts during replay).
+//   2) Delete stale RabbitMQ queues (classified feedback, desc summary, wallet_enrich, per-chain service_uri).
+//   3) Drop the entire analyzed agents database (agents, scores, feedbacks, …).
+//   4) Delete config documents whose _id matches trustrank_worker_<chain_id>
 //      (per-chain TrustRank cursors in the primary DB config collection).
+//   5) Recreate queue consumers, wait until TrustRank catches uri_fetched_* on every chain, then start indexer.
 //
 // Requires .env / MONGO_URI like other tools. Use --dry-run first.
 // scripts/restart-trustrank.sh runs `docker compose -f ../docker-compose.all.yaml up --build`
@@ -12,14 +14,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.mongodb.org/mongo-driver/bson"
@@ -27,6 +33,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	bootstrapapp "erc-8004-benchmarking-be/internal/app/uribootstrap"
 	"erc-8004-benchmarking-be/internal/config"
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"
 	rabbitmqclient "erc-8004-benchmarking-be/internal/infra/rabbitmq"
@@ -35,9 +42,14 @@ import (
 
 var trustrankCheckpointID = regexp.MustCompile(`^trustrank_worker_(\d+)$`)
 
+const debugLogPath = "/Users/macbook/Documents/Code/Bachelor_Thesis/.cursor/debug-61862d.log"
+
 func main() {
 	dryRun := flag.Bool("dry-run", false, "only print what would be done (no writes)")
 	yes := flag.Bool("y", false, "skip interactive confirmation")
+	noRestart := flag.Bool("no-restart-workers", false, "skip docker compose restart of queue consumers after reset")
+	noStopIndexer := flag.Bool("no-stop-indexer", false, "do not stop indexer during replay (not recommended)")
+	waitTimeout := flag.Duration("wait-timeout", 90*time.Minute, "max wait for TrustRank replay to catch uri_fetched cursors")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -91,6 +103,25 @@ func main() {
 		}
 	}
 
+	indexerStopped := false
+	if !*noStopIndexer {
+		// Stop EVERY worker that writes to the analyzed DB before dropping it.
+		// Leaving score-worker / wallet-enrich / trust-graph-updater running during
+		// the drop lets them re-insert wallet docs (incl. null-key rows) into the
+		// freshly-emptied collection before trustrank-worker can build the unique
+		// ux_chain_address index → index build fails → trustrank-worker crash-loops.
+		if err := composeStop([]string{
+			"indexer", "trustrank-worker", "consumer", "score-worker",
+			"wallet-enrich", "trust-graph-updater", "uri-resolver", "desc-summarizer",
+		}); err != nil {
+			log.Fatalf("restart-trustrank: stop workers: %v", err)
+		}
+		indexerStopped = true
+		// #region agent log
+		debugLog("H1", "main.go:stop-indexer", "stopped all DB-writer workers before reset", map[string]any{"chains": chainIDs})
+		// #endregion
+	}
+
 	if err := deleteRabbitQueues(rabbitMQURIForHost(cfg.RabbitMQURI), queues); err != nil {
 		log.Fatalf("restart-trustrank: delete rabbitmq queues: %v", err)
 	}
@@ -106,6 +137,246 @@ func main() {
 		log.Fatalf("restart-trustrank: delete checkpoints: %v", err)
 	}
 	log.Printf("deleted %d checkpoint document(s) from %q.%q", res.DeletedCount, primaryName, configColl)
+
+	if !*noRestart {
+		if err := restartComposeWorkers(); err != nil {
+			log.Fatalf("restart-trustrank: restart workers: %v", err)
+		}
+		if err := waitTrustRankCaughtUp(ctx, client, cfg, chainIDs, *waitTimeout); err != nil {
+			log.Fatalf("restart-trustrank: wait for replay: %v", err)
+		}
+	}
+
+	if indexerStopped {
+		if err := composeStart([]string{"indexer"}); err != nil {
+			log.Fatalf("restart-trustrank: start indexer: %v", err)
+		}
+		log.Print("indexer restarted after TrustRank replay completed")
+		// #region agent log
+		debugLog("H1", "main.go:start-indexer", "indexer restarted after trustrank caught up", nil)
+		// #endregion
+	}
+}
+
+type chainCursor struct {
+	BlockNumber uint64
+	LogIndex    uint
+}
+
+func debugLog(hypothesisID, location, message string, data map[string]any) {
+	payload := map[string]any{
+		"sessionId":    "61862d",
+		"hypothesisId": hypothesisID,
+		"location":     location,
+		"message":      message,
+		"data":         data,
+		"timestamp":    time.Now().UnixMilli(),
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(debugLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(b, '\n'))
+}
+
+func composeFilePath() (string, string, error) {
+	beRoot, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("getwd: %w", err)
+	}
+	composeFile := filepath.Join(beRoot, "..", "docker-compose.all.yaml")
+	if _, err := os.Stat(composeFile); err != nil {
+		return "", "", fmt.Errorf("compose file %q: %w", composeFile, err)
+	}
+	return composeFile, filepath.Dir(composeFile), nil
+}
+
+func composeDocker(args ...string) error {
+	composeFile, composeDir, err := composeFilePath()
+	if err != nil {
+		return err
+	}
+	full := append([]string{"compose", "-f", composeFile}, args...)
+	cmd := exec.Command("docker", full...)
+	cmd.Dir = composeDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func composeStop(services []string) error {
+	args := append([]string{"stop"}, services...)
+	if err := composeDocker(args...); err != nil {
+		return err
+	}
+	log.Printf("stopped docker compose services: %s", strings.Join(services, ", "))
+	return nil
+}
+
+func composeStart(services []string) error {
+	args := append([]string{"start"}, services...)
+	if err := composeDocker(args...); err != nil {
+		return err
+	}
+	log.Printf("started docker compose services: %s", strings.Join(services, ", "))
+	return nil
+}
+
+func loadCursor(ctx context.Context, coll *mongo.Collection, key string) (*chainCursor, bool) {
+	var doc struct {
+		Metadata map[string]any `bson:"metadata"`
+	}
+	err := coll.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
+	if err != nil {
+		return nil, false
+	}
+	cur := parseChainCursor(doc.Metadata)
+	if cur == nil {
+		return nil, false
+	}
+	return cur, true
+}
+
+func parseChainCursor(metadata map[string]any) *chainCursor {
+	if metadata == nil {
+		return nil
+	}
+	bn, ok1 := metadata["blockNumber"]
+	li, ok2 := metadata["logIndex"]
+	if !ok1 || !ok2 {
+		return nil
+	}
+	var blockNumber uint64
+	var logIndex uint
+	switch v := bn.(type) {
+	case float64:
+		blockNumber = uint64(v)
+	case int64:
+		blockNumber = uint64(v)
+	case int32:
+		blockNumber = uint64(v)
+	default:
+		return nil
+	}
+	switch v := li.(type) {
+	case float64:
+		logIndex = uint(v)
+	case int64:
+		logIndex = uint(v)
+	case int32:
+		logIndex = uint(v)
+	default:
+		return nil
+	}
+	return &chainCursor{BlockNumber: blockNumber, LogIndex: logIndex}
+}
+
+func cursorAtOrBeyond(tr, uri *chainCursor) bool {
+	if tr == nil {
+		return false
+	}
+	if uri == nil {
+		return true
+	}
+	if tr.BlockNumber > uri.BlockNumber {
+		return true
+	}
+	if tr.BlockNumber < uri.BlockNumber {
+		return false
+	}
+	return tr.LogIndex >= uri.LogIndex
+}
+
+// waitTrustRankCaughtUp polls until every chain's trustrank_worker cursor reaches uri_fetched.
+func waitTrustRankCaughtUp(ctx context.Context, client *mongo.Client, cfg config.Config, chainIDs []int64, timeout time.Duration) error {
+	cfgColl := client.Database(cfg.MongoDatabase).Collection(cfg.ConfigColl)
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	log.Printf("waiting for TrustRank replay (timeout %s)...", timeout)
+
+	for {
+		pending := make([]int64, 0)
+		status := make(map[string]any)
+
+		for _, chainID := range chainIDs {
+			uriKey := bootstrapapp.URIFetchedCursorKey(chainID)
+			trKey := fmt.Sprintf("trustrank_worker_%d", chainID)
+			uriCur, hasURI := loadCursor(ctx, cfgColl, uriKey)
+			trCur, _ := loadCursor(ctx, cfgColl, trKey)
+			if !hasURI {
+				continue
+			}
+			if !cursorAtOrBeyond(trCur, uriCur) {
+				pending = append(pending, chainID)
+				status[fmt.Sprintf("%d", chainID)] = map[string]any{
+					"trustrank": trCur,
+					"uri":       uriCur,
+				}
+			}
+		}
+
+		if len(pending) == 0 {
+			log.Print("TrustRank replay caught up on all chains")
+			// #region agent log
+			debugLog("H1", "main.go:wait-caught-up", "all chains caught up", map[string]any{"chains": chainIDs})
+			// #endregion
+			return nil
+		}
+
+		if time.Now().After(deadline) {
+			// #region agent log
+			debugLog("H1", "main.go:wait-timeout", "replay timeout", map[string]any{"pending": pending, "status": status})
+			// #endregion
+			return fmt.Errorf("timeout after %s; pending chains: %v", timeout, pending)
+		}
+
+		log.Printf("TrustRank replay pending on %d chain(s): %v", len(pending), pending)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// restartComposeWorkers recycles RabbitMQ consumers so they re-declare queues after
+// restart-trustrank deletes them. Without this, desc-summarizer / wallet-enrich die
+// with "delivery channel closed" while containers stay Up.
+func restartComposeWorkers() error {
+	// Start trustrank-worker ALONE first so it (re)builds the wallets unique index
+	// ux_chain_address on the freshly-emptied collection before any other writer
+	// (wallet-enrich / trust-graph-updater / score-worker) can insert wallet docs.
+	// Once the unique index exists it rejects duplicate null-key rows, so the later
+	// workers can start safely.
+	if err := composeDocker("up", "-d", "--no-deps", "trustrank-worker"); err != nil {
+		return err
+	}
+	log.Print("started trustrank-worker first; waiting for it to build wallets indexes")
+	time.Sleep(12 * time.Second)
+
+	services := []string{
+		"uri-resolver",
+		"desc-summarizer",
+		"wallet-enrich",
+		"trust-graph-updater",
+		"score-worker",
+		"consumer",
+	}
+	args := append([]string{"up", "-d", "--no-deps"}, services...)
+	if err := composeDocker(args...); err != nil {
+		return err
+	}
+	log.Printf("recreated docker compose services: %s", strings.Join(services, ", "))
+	return nil
 }
 
 func buildResetQueues(chainIDs []int64) []string {

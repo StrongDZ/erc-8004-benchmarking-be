@@ -23,7 +23,7 @@ var (
 // noiseTag1Set: meaningless placeholder / gibberish tokens → junk.
 var noiseTag1Set = map[string]bool{
 	"test": true, "asd": true, "custom": true, "settled": true,
-	"claudelance": true, "vibez": true,
+	"vibez": true,
 }
 
 // ─── Layer 2: QUANTITY (category) — tag names a measured metric ───────────────
@@ -37,12 +37,12 @@ var quantityTag1Set = map[string]bool{
 	"attendance-rate": true, "completion-rate": true, "execution-speed": true,
 	"payment-speed": true, "settlement-speed": true, "win-rate": true,
 	"coverage-rate": true, "exit-rate": true, "active": true, "safety-score": true, "contractrisk": true,
-	"counterparty": true, "longevity": true,
+	"counterparty": true, "longevity": true, "activity": true,
 }
 
 // quantityTag2Set: tag2 discriminators that mark the record as a measured metric.
 var quantityTag2Set = map[string]bool{
-	"oracle-screening": true, "liveness-check": true, "win-rate": true,
+	"liveness-check": true, "win-rate": true,
 	"coverage-rate": true, "exit-rate": true, "automated-screening": true,
 	"completion-rate": true, "scroll-stop-rate": true,
 }
@@ -53,7 +53,7 @@ var quantityTag2Set = map[string]bool{
 // (Metric-shaped terms like "score"/"accuracy"/"speed" are deliberately NOT here;
 // they go to quantity or escalate to the LLM.)
 var qualityTag1Set = map[string]bool{
-	"trustscore": true, "trust-score": true,
+	"trustscore": true, "trust-score": true, "trust": true, "trust-oracle": true,
 	"starred": true, "quality": true, "performance": true, "service": true,
 	"helpful": true, "fast": true, "reliable": true, "reliability": true,
 	"excellence": true, "excellent": true, "satisfaction": true, "experience": true,
@@ -65,6 +65,7 @@ var qualityTag1Set = map[string]bool{
 	"usability": true, "compliance": true, "peer-review": true,
 	"content-moderation": true, "amazing": true, "awesome": true, "beautiful": true,
 	"professional": true, "impressive": true, "outstanding": true, "best": true,
+	"miner-vouch": true,
 	// common typos
 	"helpfull": true, "powerfull": true, "usefull": true, "reliabel": true,
 	"excelent": true,
@@ -74,7 +75,7 @@ var qualityTag1Set = map[string]bool{
 var qualityKeywords = []string{
 	"helpful", "fast", "reliable", "quality", "excellent", "good",
 	"useful", "great", "smart", "simple", "easy", "smooth", "solid",
-	"stable", "best", "nice", "clean", "amazing", "awesome", "love",
+	"stable", "best", "nice", "clean", "amazing", "awesome", "love", "trust", "fragment",
 }
 
 // ─── Feature axis: INFRASTRUCTURE vs AGENT_DOMAIN ─────────────────────────────
@@ -83,10 +84,10 @@ var qualityKeywords = []string{
 // regardless of business → feature = infrastructure. Everything else defaults to
 // agent_domain. (Rule engine has no agent context, so "both" is only the LLM's.)
 var infraTagSet = map[string]bool{
-	"reachable": true, "liveness": true, "liveness-check": true, "uptime": true,
+	"reachable": true, "liveness": true, "liveness-check": true, "uptime": true, "successrate": true, "success-rate": true,
 	"responsetime": true, "response-time": true, "ping": true, "health-check": true,
 	"blocktimefreshness": true, "blocktime-freshness": true, "blocktime freshness": true, "a2a": true, "mcp": true,
 	"web": true, "trust-oracle": true, "oracle-screening": true, "trust-score": true,
 	"trustscore": true, "reputation": true, "sentinel8004": true, "agentguard": true,
-	"safety-score": true, "ownerverified": true, "owner verified": true,
+	"safety-score": true, "ownerverified": true, "owner verified": true, "sentinelnet-v1": true,
 }

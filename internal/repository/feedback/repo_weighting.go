@@ -38,11 +38,15 @@ func (r *Repository) UpdateWeighting(ctx context.Context, feedbackID string, u W
 	return err
 }
 
-// UpdateFallback writes the LLM fallback classification and effective category for one feedback record by _id.
+// UpdateFallback writes the LLM fallback classification and effective category/feature for one feedback record by _id.
 func (r *Repository) UpdateFallback(ctx context.Context, feedbackID string, f FallbackClassification) error {
-	_, err := r.UpdateOne(ctx, bson.M{"_id": feedbackID}, bson.M{"$set": bson.M{
+	set := bson.M{
 		"classification.fallback": f,
 		"category":                f.Category,
-	}})
+	}
+	if f.Feature != "" {
+		set["feature"] = f.Feature
+	}
+	_, err := r.UpdateOne(ctx, bson.M{"_id": feedbackID}, bson.M{"$set": set})
 	return err
 }

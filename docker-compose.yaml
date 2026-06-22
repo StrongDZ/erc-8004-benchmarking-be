@@ -226,22 +226,6 @@ services:
             MONGO_URI: mongodb://mongo:27017
             RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
 
-    trustrank-pass:
-        build:
-            context: .
-            dockerfile: Dockerfile
-            target: trustrank-pass
-        image: erc8004-trustrank-pass:latest
-        container_name: erc8004-trustrank-pass
-        restart: unless-stopped
-        depends_on:
-            mongo:
-                condition: service_healthy
-        env_file:
-            - .env
-        environment:
-            MONGO_URI: mongodb://mongo:27017
-
     desc-summarizer:
         build:
             context: .

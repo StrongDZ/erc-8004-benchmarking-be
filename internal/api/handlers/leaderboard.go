@@ -172,32 +172,29 @@ func (h *LeaderboardHandler) Tags(w http.ResponseWriter, r *http.Request) {
 
 // WalletRanking handles GET /leaderboard/wallet-ranking.
 // @Summary Wallet ranking
-// @Description Returns wallets ranked by trust score, grouped from top leaderboard agents.
+// @Description Returns rated wallets ordered by trust score from the wallets collection.
 // @Tags leaderboard
 // @Produce json
 // @Param chainId query string false "Chain ID(s), comma-separated"
-// @Param agentLimit query int false "Top agents to sample before grouping (default 200, max 500)"
+// @Param page query int false "Page number (default 1)"
+// @Param limit query int false "Page size (default 50, max 100)"
 // @Success 200 {object} dto.Response
 // @Failure 500 {object} dto.Response
 // @Router /leaderboard/wallet-ranking [get]
 func (h *LeaderboardHandler) WalletRanking(w http.ResponseWriter, r *http.Request) {
 	chainIDs := dto.ParseInt64Slice(r, "chainId")
-	agentLimit := dto.ParseInt(r, "agentLimit", 200)
-	if agentLimit < 1 {
-		agentLimit = 1
-	}
-	if agentLimit > 500 {
-		agentLimit = 500
-	}
-	rows, err := h.svc.WalletRanking(r.Context(), service.WalletRankingParams{
-		ChainIDs:   chainIDs,
-		AgentLimit: agentLimit,
+	page, limit, skip := dto.ParsePagination(r, 50, 100)
+	result, err := h.svc.WalletRanking(r.Context(), service.WalletRankingParams{
+		ChainIDs: chainIDs,
+		Page:     page,
+		Limit:    limit,
+		Skip:     skip,
 	})
 	if err != nil {
 		dto.Fail(w, r, http.StatusInternalServerError, dto.CodeInternalError, err.Error())
 		return
 	}
-	dto.Success(w, r, rows)
+	dto.SuccessMeta(w, r, result.Rows, &dto.Meta{Page: result.Page, Limit: result.Limit, Total: result.Total})
 }
 
 // RisingStars handles GET /leaderboard/rising-stars (§2.3).

@@ -16,6 +16,7 @@ import (
 	"erc-8004-benchmarking-be/internal/api/dto"
 	"erc-8004-benchmarking-be/internal/domain/identity"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	"erc-8004-benchmarking-be/internal/domain/serviceendpoint"
 	"erc-8004-benchmarking-be/internal/domain/serviceenrich"
 	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
@@ -338,7 +339,11 @@ func (s *Agent) Overview(ctx context.Context, chainID int64, agentID string) (*d
 
 	agentWallet := extractAgentWallet(doc.OnchainMetadata)
 
-	svcs := buildServiceOverviews(ctx, s.deps.Offchain, doc)
+	var stats *scorestats.AgentScoreStats
+	if s.deps.ScoreStats != nil {
+		stats, _ = s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID)
+	}
+	svcs := buildServiceOverviews(ctx, s.deps.Offchain, doc, stats)
 
 	return &dto.AgentOverview{
 		ChainID:          doc.ChainID,
@@ -410,7 +415,7 @@ func registrationMapFromAgentURI(rowMap map[string]*offchainrepo.OffchainData, a
 	return serviceenrich.ParseRegistrationServices(row.Content)
 }
 
-func buildServiceOverviews(ctx context.Context, repo agentOffchainRepo, doc *agentrepo.AgentDocument) []dto.ServiceOverview {
+func buildServiceOverviews(ctx context.Context, repo agentOffchainRepo, doc *agentrepo.AgentDocument, stats *scorestats.AgentScoreStats) []dto.ServiceOverview {
 	uris := make([]string, 0, len(doc.Services)+1)
 	if doc.AgentURI != "" {
 		uris = append(uris, doc.AgentURI)
@@ -438,6 +443,24 @@ func buildServiceOverviews(ctx context.Context, repo agentOffchainRepo, doc *age
 		}
 		health, info := probeEndpointHealthFromRow(sv.Name, sv.Endpoint, declaredRow)
 		reg, hasReg := regMap[sv.Endpoint]
+		var scoringView *dto.ServiceScoring
+		if stats != nil {
+			for _, score := range stats.ServiceScores {
+				if !serviceendpoint.Related(sv.Endpoint, score.Endpoint) {
+					continue
+				}
+				scoringView = &dto.ServiceScoring{
+					ReputationScore:  round2(score.ReputationScore),
+					ScoreUpdateAt:    score.ScoreUpdateAt,
+					ConsecutiveFails: score.ConsecutiveFails,
+					TotalTasks:       score.TotalTasks,
+					TotalPassed:      score.TotalPassed,
+					TotalFailed:      score.TotalFailed,
+					SuccessRate:      safeRate(score.TotalPassed, score.TotalTasks),
+				}
+				break
+			}
+		}
 		svcs = append(svcs, dto.ServiceOverview{
 			Name:       sv.Name,
 			Endpoint:   sv.Endpoint,
@@ -446,6 +469,7 @@ func buildServiceOverviews(ctx context.Context, repo agentOffchainRepo, doc *age
 			Domains:    sv.Domains,
 			Health:     health,
 			HealthInfo: info,
+			Scoring:    scoringView,
 			Enrichment: serviceenrich.BuildEnrichment(sv.Name, sv.Endpoint, reg, hasReg, enrichRow),
 		})
 	}
@@ -554,7 +578,7 @@ func (s *Agent) TrustScoreHistory(ctx context.Context, chainID int64, agentID st
 		}
 
 		vi := computeVi(f)
-		wi := scoring.ComputeWi(f.PriceUSDC, cfg.Alpha, cfg.Beta, cfg.K)
+		wi := cfg.Alpha
 		a, b = scoring.ApplyFeedbackToMass(a, b, lastTs, wi, vi, f.Timestamp, cfg)
 		if vi < 0.40 {
 			consecFails++
@@ -609,16 +633,17 @@ func midnightsBetween(from, to int64) []int64 {
 
 // FeedbacksParams are the parsed inputs for /agents/:id/feedbacks (§3.3).
 type FeedbacksParams struct {
-	ChainID  int64
-	AgentID  string
-	Category string
-	Status   string
-	From     *time.Time
-	To       *time.Time
-	SortDesc bool
-	Page     int
-	Limit    int
-	Skip     int64
+	ChainID         int64
+	AgentID         string
+	Category        string
+	Status          string
+	ServiceEndpoint string
+	From            *time.Time
+	To              *time.Time
+	SortDesc        bool
+	Page            int
+	Limit           int
+	Skip            int64
 }
 
 // FeedbacksResult carries the list + pagination.
@@ -632,13 +657,14 @@ type FeedbacksResult struct {
 // Feedbacks returns a filtered, paginated feedback list.
 func (s *Agent) Feedbacks(ctx context.Context, p FeedbacksParams) (*FeedbacksResult, error) {
 	f := feedbackrepo.ListFilter{
-		ChainID:  p.ChainID,
-		AgentID:  p.AgentID,
-		Category: p.Category,
-		Status:   p.Status,
-		From:     p.From,
-		To:       p.To,
-		SortDesc: p.SortDesc,
+		ChainID:         p.ChainID,
+		AgentID:         p.AgentID,
+		Category:        p.Category,
+		Status:          p.Status,
+		ServiceEndpoint: p.ServiceEndpoint,
+		From:            p.From,
+		To:              p.To,
+		SortDesc:        p.SortDesc,
 	}
 	docs, total, err := s.deps.Feedback.ListFiltered(ctx, f, p.Skip, int64(p.Limit))
 	if err != nil {
@@ -861,6 +887,27 @@ func (s *Agent) ReconnectServiceEndpoint(ctx context.Context, chainID int64, age
 	}
 
 	enrichment := enrichmentForService(ctx, s.deps.Offchain, doc, svc, &row)
+	var scoringView *dto.ServiceScoring
+	if s.deps.ScoreStats != nil {
+		stats, _ := s.deps.ScoreStats.FindByAgentID(ctx, chainID, agentID)
+		if stats != nil {
+			for _, serviceScore := range stats.ServiceScores {
+				if !serviceendpoint.Related(svc.Endpoint, serviceScore.Endpoint) {
+					continue
+				}
+				scoringView = &dto.ServiceScoring{
+					ReputationScore:  round2(serviceScore.ReputationScore),
+					ScoreUpdateAt:    serviceScore.ScoreUpdateAt,
+					ConsecutiveFails: serviceScore.ConsecutiveFails,
+					TotalTasks:       serviceScore.TotalTasks,
+					TotalPassed:      serviceScore.TotalPassed,
+					TotalFailed:      serviceScore.TotalFailed,
+					SuccessRate:      safeRate(serviceScore.TotalPassed, serviceScore.TotalTasks),
+				}
+				break
+			}
+		}
+	}
 
 	return &dto.ServiceOverview{
 		Name:       svc.Name,
@@ -870,6 +917,7 @@ func (s *Agent) ReconnectServiceEndpoint(ctx context.Context, chainID int64, age
 		Domains:    svc.Domains,
 		Health:     health,
 		HealthInfo: healthInfo,
+		Scoring:    scoringView,
 		Enrichment: enrichment,
 	}, nil
 }

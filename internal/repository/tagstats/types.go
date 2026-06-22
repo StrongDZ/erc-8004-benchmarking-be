@@ -6,7 +6,7 @@ import (
 	mongorepo "erc-8004-benchmarking-be/internal/repository"
 )
 
-// TierCounts tracks how many service_feedback values fell into each scale tier.
+// TierCounts tracks how many quality-category values fell into each scale tier.
 // Tier is assigned from the real value (value / 10^valueDecimals).
 type TierCounts struct {
 	Binary    int64 `bson:"binary"`    // |real| <= 1.0

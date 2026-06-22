@@ -57,6 +57,7 @@ func (r *Repository) UpsertFromWritePath(
 	consecutiveFails, totalTasks, totalPassed, totalFailed int64, monthUniqueUsers int,
 	composite, reputationNorm, adoption, services, publisher float64, publisherPresent bool, compliance float64,
 	serviceWarnings []string,
+	serviceScores []ServiceReputationStats,
 ) error {
 	filter := bson.M{"chainId": chainID, "agentId": agentID}
 	update := bson.M{"$set": bson.M{
@@ -79,6 +80,7 @@ func (r *Repository) UpsertFromWritePath(
 		"publisherPresent": publisherPresent,
 		"complianceScore":  compliance,
 		"serviceWarnings":  serviceWarnings,
+		"serviceScores":    serviceScores,
 	}}
 	_, err := r.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
 	if err != nil {

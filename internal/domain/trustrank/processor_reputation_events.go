@@ -2,7 +2,6 @@ package trustrank
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"strings"
 	"time"
@@ -11,6 +10,7 @@ import (
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
+	"erc-8004-benchmarking-be/internal/domain/serviceendpoint"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	eventrepo "erc-8004-benchmarking-be/internal/repository/event"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
@@ -68,8 +68,17 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if scale == "" && realOK {
 		scale = classifier.AssignTier(real)
 	}
+	// A negative value has no positive bounded scale. Force unbounded even when a
+	// bounded scale was detected from positive feedback on this (tag1, tag2) pair,
+	// so negatives never normalize into a quality score or classify as quality.
+	if realOK && real < 0 {
+		scale = "unbounded"
+	}
 
 	cls := classifier.Classify(tag1, tag2, scale)
+	if isSelf {
+		cls = classifier.SelfFeedbackResult()
+	}
 
 	var vi float64
 	if !realOK || isAnomalous {
@@ -87,8 +96,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		bs.pendingTierUpdates = append(bs.pendingTierUpdates, tu)
 	}
 
-	priceUSDC := readPriceFromContent(bs.uriMap[feedbackURI])
-	wi := scoring.ComputeWi(priceUSDC, bs.formulaCfg.Alpha, bs.formulaCfg.Beta, bs.formulaCfg.K)
+	wi := bs.formulaCfg.Alpha
 
 	var adjustments []scoring.WiAdjustment
 	if adj, ok := scoring.LowConfidenceAdjustment(cls.Confidence); ok {
@@ -112,10 +120,9 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		FeedbackURI:    feedbackURI,
 		FeedbackHash:   feedbackHash,
 		FeedbackParsed: feedbackParsed,
-		PriceUSDC:      priceUSDC,
 		Wi:             wi,
 		ValueScale:     scale,
-		IsSelfFeedback: isSelf,
+		IsSelfFeedback:      isSelf,
 		Type:           "reputation_feedback",
 		BlockNumber:    ev.BlockNumber,
 		TxHash:         ev.TxHash,
@@ -148,6 +155,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if cls.Category != classifier.CategoryQuality {
 		return
 	}
+	matchedSvc, hasMatchedService := serviceendpoint.MatchService(agentDoc.Services, endpoint)
 
 	// Fetch current scoring state from agent_score_stats (single source of truth).
 	// If absent (first feedback ever), default to zero-value with neutral publisher.
@@ -177,6 +185,17 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	// Reputation = Quality·Confidence·Reliability·100 from the freshly updated mass.
 	// The consecutive-fail penalty is the Reliability factor (no separate subtraction).
 	newRep := scoring.ComputeReputationScore(newA, newB, newConsecFails, bs.formulaCfg.C, bs.formulaCfg.Gamma, bs.formulaCfg.Theta)
+	newServiceScores := prev.ServiceScores
+	if hasMatchedService {
+		newServiceScores = upsertServiceReputation(
+			prev.ServiceScores,
+			matchedSvc,
+			wi,
+			vi,
+			ev.Timestamp,
+			bs.formulaCfg,
+		)
+	}
 
 	// Adoption / S / P / C are carried forward from the last refresh cycle; the
 	// score-refresh worker recomputes them authoritatively (incl. distinct clients).
@@ -196,6 +215,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		newConsecFails, newTotalTasks, newPassed, newFailed, monthUniqueUsers,
 		composite, newRep, adoption, services, publisher, publisherPresent, compliance,
 		prev.ServiceWarnings,
+		newServiceScores,
 	); err != nil {
 		log.Printf("trustrank: upsert write-path stats chain=%d agent=%s: %v", bs.chainID, agentID, err)
 		// non-fatal — refresh worker will eventually reconcile via replay.
@@ -211,6 +231,59 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	}}); err != nil {
 		log.Printf("trustrank: sync agent score chain=%d agent=%s: %v", bs.chainID, agentID, err)
 	}
+}
+
+func upsertServiceReputation(
+	current []scorestats.ServiceReputationStats,
+	service serviceendpoint.ServiceMeta,
+	wi, vi float64,
+	ts int64,
+	cfg scoring.FormulaConfig,
+) []scorestats.ServiceReputationStats {
+	if strings.TrimSpace(service.Endpoint) == "" {
+		return current
+	}
+	next := append([]scorestats.ServiceReputationStats(nil), current...)
+	idx := -1
+	for i := range next {
+		if serviceendpoint.Related(next[i].Endpoint, service.Endpoint) {
+			idx = i
+			break
+		}
+	}
+	var st scorestats.ServiceReputationStats
+	if idx >= 0 {
+		st = next[idx]
+	} else {
+		st = scorestats.ServiceReputationStats{
+			Name:     service.Name,
+			Endpoint: service.Endpoint,
+		}
+	}
+	if strings.TrimSpace(st.Name) == "" {
+		st.Name = service.Name
+	}
+	if strings.TrimSpace(st.Endpoint) == "" {
+		st.Endpoint = service.Endpoint
+	}
+	newA, newB := scoring.ApplyFeedbackToMass(st.WeightedScoreSum, st.WeightMass, st.ScoreUpdateAt, wi, vi, ts, cfg)
+	st.WeightedScoreSum = newA
+	st.WeightMass = newB
+	st.ScoreUpdateAt = ts
+	st.TotalTasks++
+	if vi >= 0.40 {
+		st.TotalPassed++
+		st.ConsecutiveFails = 0
+	} else {
+		st.TotalFailed++
+		st.ConsecutiveFails++
+	}
+	st.ReputationScore = scoring.ComputeReputationScore(newA, newB, st.ConsecutiveFails, cfg.C, cfg.Gamma, cfg.Theta)
+	if idx >= 0 {
+		next[idx] = st
+		return next
+	}
+	return append(next, st)
 }
 
 func (p *Processor) handleFeedbackRevoked(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
@@ -297,17 +370,4 @@ func (p *Processor) lookupScale(tag1, tag2 string) string {
 	scale := doc.DetectedScale
 	p.tagScaleCache.Store(cacheKey, cachedScale{Scale: scale, ExpiresAt: now + cacheTTLSecs})
 	return scale
-}
-
-func readPriceFromContent(content string) float64 {
-	if content == "" {
-		return 0.0
-	}
-	var parsed struct {
-		PriceUSDC float64 `json:"priceUSDC"`
-	}
-	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
-		return 0.0
-	}
-	return parsed.PriceUSDC
 }

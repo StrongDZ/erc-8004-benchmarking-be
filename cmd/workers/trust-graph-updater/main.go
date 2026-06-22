@@ -22,6 +22,7 @@ import (
 	"erc-8004-benchmarking-be/internal/domain/propagation"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
 	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
+	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -37,6 +38,7 @@ func main() {
 	db := mongoClient.Database(mustEnv("MONGO_DATABASE_ANALYZED_AGENTS"))
 	walletRepo := walletrepo.NewRepository(db, envOr("MONGO_COLLECTION_WALLETS", "wallets"))
 	feedbackRepo := feedbackrepo.NewRepository(db, envOr("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"))
+	agentRepo := agentrepo.NewRepository(db, envOr("MONGO_COLLECTION_AGENTS", "agents"), envOr("MONGO_COLLECTION_AGENT_SCORE_STATS", "agent_score_stats"))
 
 	if err := walletRepo.EnsureIndexes(ctx); err != nil {
 		log.Printf("trust-graph-updater: ensure wallet indexes: %v", err)
@@ -52,13 +54,17 @@ func main() {
 
 	var hybridClassifier *classifier.HybridClassifier
 	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
+		// AI_SERVICE_MODEL selects the ai-service classify backend: empty → Ollama
+		// LLM (V7), "3tier" → per-tag SVM + agent-domain cosine, "knn"/"linear"/…
+		aiModel := envOr("AI_SERVICE_MODEL", "")
 		ai := classifier.NewAIClient(classifier.AIClientConfig{
 			BaseURL:        llmURL,
-			PromptVersion:  "v6",
+			Model:          aiModel,
+			PromptVersion:  "v7",
 			TimeoutSeconds: envInt("LLM_TIMEOUT_SECONDS", 120),
 		})
 		hybridClassifier = classifier.NewHybridClassifier(ai)
-		log.Printf("trust-graph-updater: LLM fallback enabled at %s", llmURL)
+		log.Printf("trust-graph-updater: AI fallback enabled at %s (model=%q)", llmURL, aiModel)
 	} else {
 		log.Println("trust-graph-updater: LLM_BASE_URL not set; LLM fallback disabled (others → requeue)")
 	}
@@ -70,6 +76,7 @@ func main() {
 		Conn:         conn,
 		FeedbackRepo: feedbackRepo,
 		WalletRepo:   walletRepo,
+		AgentRepo:    agentRepo,
 		PropCfg:      propCfg,
 		Cfg: trustgraph.AppConfig{
 			ColdStartT0: envFloat("TRUST_WEIGHT_COLD_START_T0", 10.0),

@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 FROM golang:1.24-alpine AS builder
 
 WORKDIR /src
@@ -23,7 +21,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/score-r
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/uri-bootstrap ./cmd/workers/uri-bootstrap
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rescale ./cmd/workers/rescale
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trust-graph-updater ./cmd/workers/trust-graph-updater
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/trustrank-pass ./cmd/workers/trustrank-pass
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/desc-summarizer ./cmd/workers/desc-summarizer
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/oasf-schema-refresh ./cmd/workers/oasf-schema-refresh
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/wallet-enrich ./cmd/workers/wallet-enrich
@@ -64,10 +61,6 @@ ENTRYPOINT ["/usr/local/bin/rescale-worker"]
 FROM base-runtime AS trust-graph-updater
 COPY --from=builder /out/trust-graph-updater /usr/local/bin/trust-graph-updater
 ENTRYPOINT ["/usr/local/bin/trust-graph-updater"]
-
-FROM base-runtime AS trustrank-pass
-COPY --from=builder /out/trustrank-pass /usr/local/bin/trustrank-pass
-ENTRYPOINT ["/usr/local/bin/trustrank-pass"]
 
 FROM base-runtime AS desc-summarizer
 COPY --from=builder /out/desc-summarizer /usr/local/bin/desc-summarizer

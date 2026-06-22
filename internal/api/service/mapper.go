@@ -169,7 +169,6 @@ func toFeedbackRow(r feedback.FeedbackRecord) dto.FeedbackRow {
 		ValueScale:     r.ValueScale,
 		Vi:             computeVi(r),
 		Wi:             round2(r.Wi),
-		PriceUSDC:      r.PriceUSDC,
 		Tag1:           r.Tag1,
 		Tag2:           r.Tag2,
 		Endpoint:       r.Endpoint,

@@ -213,9 +213,21 @@ type ServiceOverview struct {
 	// JSON-required protocol (oasf, a2a, mcp),
 	// "fail" when the most recent fetch attempt recorded an error,
 	// and "unknown" when the endpoint has never been probed.
-	Health     string `json:"health"`
-	HealthInfo string `json:"healthInfo,omitempty"`
+	Health     string             `json:"health"`
+	HealthInfo string             `json:"healthInfo,omitempty"`
+	Scoring    *ServiceScoring    `json:"scoring,omitempty"`
 	Enrichment *ServiceEnrichment `json:"enrichment,omitempty"`
+}
+
+// ServiceScoring is the service-level reputation breakdown.
+type ServiceScoring struct {
+	ReputationScore  float64 `json:"reputationScore"`
+	ScoreUpdateAt    int64   `json:"scoreUpdateAt"`
+	ConsecutiveFails int64   `json:"consecutiveFails"`
+	TotalTasks       int64   `json:"totalTasks"`
+	TotalPassed      int64   `json:"totalPassed"`
+	TotalFailed      int64   `json:"totalFailed"`
+	SuccessRate      float64 `json:"successRate"`
 }
 
 // AgentOverview is the payload for GET /agents/:chainId/:agentId/overview.
@@ -265,7 +277,6 @@ type FeedbackRow struct {
 	ValueScale     string                 `json:"valueScale,omitempty"`
 	Vi             float64                `json:"vi"`
 	Wi             float64                `json:"wi"`
-	PriceUSDC      float64                `json:"priceUSDC"`
 	Tag1           string                 `json:"tag1,omitempty"`
 	Tag2           string                 `json:"tag2,omitempty"`
 	Endpoint       string                 `json:"endpoint,omitempty"`

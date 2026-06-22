@@ -99,9 +99,12 @@ func loadGoldLabels(path string) (map[string]GoldLabel, error) {
 	header := rows[0]
 	idIdx := indexOf(header, "feedback_id")
 	goldIdx := indexOf(header, "gold_category")
+	if goldIdx < 0 {
+		goldIdx = indexOf(header, "category") // gold_final.csv uses category as the human label
+	}
 	notesIdx := indexOf(header, "notes")
 	if idIdx < 0 || goldIdx < 0 {
-		return nil, fmt.Errorf("labels missing required columns feedback_id, gold_category (got %v)", header)
+		return nil, fmt.Errorf("labels missing required columns feedback_id, gold_category|category (got %v)", header)
 	}
 
 	out := make(map[string]GoldLabel, len(rows))

@@ -15,11 +15,11 @@ import (
 	"strings"
 )
 
-// AllCategories lists the 5 canonical labels in display order. Anything else
-// in either gold or predicted columns is bucketed under "<other>" so totals
+// AllCategories lists the canonical labels in display order. Anything else
+// in either gold or predicted columns is bucketed under its raw value so totals
 // always reconcile.
 var AllCategories = []string{
-	"junk", "service_feedback", "config_feedback", "app_specific", "others",
+	"junk", "quality", "quantity", "others",
 }
 
 // CategoryStats holds precision/recall/F1 numbers for one category.
@@ -171,6 +171,15 @@ func normCategory(s string) string {
 	if s == "" {
 		return "others"
 	}
+	// Legacy 5-class → 3-class fold for mixed historical labels.
+	switch s {
+	case "spam", "noise":
+		return "junk"
+	case "service_feedback", "config_feedback":
+		return "quality"
+	case "app_specific":
+		return "quantity"
+	}
 	for _, c := range AllCategories {
 		if c == s {
 			return s
@@ -214,12 +223,12 @@ func hasNonZero(m map[string]int) bool {
 
 func shortCat(c string) string {
 	switch c {
-	case "service_feedback":
-		return "service"
-	case "config_feedback":
-		return "config"
+	case "service_feedback", "config_feedback":
+		return "quality"
 	case "app_specific":
-		return "app"
+		return "quantity"
+	case "spam", "noise":
+		return "junk"
 	default:
 		return c
 	}

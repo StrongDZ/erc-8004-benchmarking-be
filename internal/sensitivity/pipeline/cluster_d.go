@@ -1,38 +1,30 @@
 package pipeline
 
-// cluster_d.go — Cụm D: EigenTrust Power Iteration + Teleport Prior.
+// cluster_d.go — Cụm D: WalletTrust Publisher sensitivity.
 //
-// Mirrors the production propagation pass (trustpropagation.EigenTrustPass via
-// loader.go): a bipartite client-wallet → agent graph where
+// Replaces the old Cụm D (EigenTrust propagation). Computes WalletTrust(owner) directly
+// as the publisher score for each agent, sweeping the three blend weights WR/WE/WO.
 //
-//	t[j] = α·inflow[j] + (1-α)·p[j]
-//	p[wallet] = BlendTeleport(reviewerReliability, externalScore, TeleportGamma)
-//	p[agent]  = AgentDirectReputation(reputation, adoption, services, compliance)
-//	inflow[owner] = weightMass-weighted mean of owned agents' t[agent]
+//	WalletTrust(owner) = renorm(WR·R, WE·E, WO·O)
+//	  R = ReviewerReliability(validFbCount, 0)            [from feedback snapshot]
+//	  E = ExternalScore                                    [from baseline_scores]
+//	  O = Σ(AgentDirectReputation_i·wm_i)/Σ(wm_i)        [owned agents with wm>0]
 //
-// Parameters: Alpha (damping), Epsilon (convergence), MaxIter, and TeleportGamma —
-// the new knob blending reviewer reliability against the external on-chain score in
-// the teleport prior. SeedThreshold is gone (the old TrustRank seeding is replaced
-// by the EigenTrust teleport vector).
+// Output: per-agent composite score using WalletTrust as publisher (20%).
 
 import (
-	"erc-8004-benchmarking-be/internal/app/trustpropagation"
-	"erc-8004-benchmarking-be/internal/domain/extscore"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/sensitivity/runner"
 	"erc-8004-benchmarking-be/internal/sensitivity/snapshot"
 )
 
-const agentNodePrefix = "agent:"
-
 // ClusterDParamSpecs returns the canonical Cluster-D parameter list with sweep ranges.
 func ClusterDParamSpecs() []runner.ParamSpec {
-	def := trustpropagation.DefaultIterConfig()
+	w := scoring.DefaultWalletTrustWeights()
 	return []runner.ParamSpec{
-		{Name: "Alpha", Default: def.Alpha, Low: 0.5, High: 0.99},
-		{Name: "Epsilon", Default: def.Epsilon, Low: 1e-6, High: 1e-2},
-		{Name: "MaxIter", Default: float64(def.MaxIter), Low: 10, High: 100},
-		{Name: "TeleportGamma", Default: extscore.TeleportGamma, Low: 0.0, High: 1.0},
+		{Name: "WR", Default: w.WR, Low: 0.10, High: 0.80},
+		{Name: "WE", Default: w.WE, Low: 0.00, High: 0.60},
+		{Name: "WO", Default: w.WO, Low: 0.00, High: 0.70},
 	}
 }
 
@@ -45,65 +37,26 @@ func DefaultClusterDConfig() map[string]float64 {
 	return cfg
 }
 
-// graphTemplate holds the gamma-independent parts of the trust graph so each
-// recompute only re-derives the wallet teleport priors for the swept TeleportGamma.
-type graphTemplate struct {
-	agentNodes    []trustpropagation.GraphNode // DirectRep/Weight/OwnerID fixed
-	walletPriors  map[string]walletPrior       // wallet node ID -> (reliability, external)
-	edges         []trustpropagation.GraphEdge
-	ownerByAgent  map[string]string // agentID -> owner wallet node ID
+type ownerEntry struct {
+	directRep  float64
+	weightMass float64
 }
 
-type walletPrior struct {
-	reliability float64
-	external    float64
+// clusterDTemplate holds precomputed per-owner data that is independent of the
+// swept WR/WE/WO weights, so each recompute only re-derives WalletTrust blends.
+type clusterDTemplate struct {
+	// per agent
+	baseline map[string]snapshot.BaselineScore // agentID → scores
+	// per owner
+	validCountByOwner      map[string]int64
+	externalByOwner        map[string]float64
+	externalPresentByOwner map[string]bool
+	ownerToAgents          map[string][]ownerEntry // owner → [(directRep, weightMass)]
+	agents                 []snapshot.AgentSnapshot
 }
 
-// ClusterDRecompute returns per-agent trust scores AFTER running EigenTrustPass. The
-// per-agent score is its owner wallet's propagated [0,100] (p99-normalized) score —
-// agents sharing an owner share that wallet's score, exactly as wallet-level
-// propagation works in production.
-func ClusterDRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
-	tpl := buildGraphTemplate(data)
-
-	return func(cfg map[string]float64) map[string]float64 {
-		gamma := cfg["TeleportGamma"]
-		gd := tpl.materialize(gamma)
-		scores, _ := trustpropagation.EigenTrustPass(gd, trustpropagation.IterConfig{
-			Alpha:   cfg["Alpha"],
-			Epsilon: cfg["Epsilon"],
-			MaxIter: int(cfg["MaxIter"]),
-		})
-
-		out := make(map[string]float64, len(data.Agents))
-		for _, a := range data.Agents {
-			out[a.ID] = scores.Rated[tpl.ownerByAgent[a.ID]]
-		}
-		return out
-	}
-}
-
-// materialize builds the full GraphData for a given TeleportGamma, blending each
-// wallet's reviewer reliability with its external on-chain score into the teleport.
-func (t graphTemplate) materialize(gamma float64) trustpropagation.GraphData {
-	nodes := make([]trustpropagation.GraphNode, 0, len(t.agentNodes)+len(t.walletPriors))
-	nodes = append(nodes, t.agentNodes...)
-	for id, wp := range t.walletPriors {
-		nodes = append(nodes, trustpropagation.GraphNode{
-			ID:        id,
-			Kind:      trustpropagation.NodeKindWallet,
-			DirectRep: extscore.BlendTeleport(wp.reliability, wp.external, gamma),
-		})
-	}
-	return trustpropagation.GraphData{Nodes: nodes, Edges: t.edges}
-}
-
-// buildGraphTemplate constructs the gamma-independent graph from the snapshot:
-//   - agent nodes seeded by AgentDirectReputation, weighted by evidence mass, linked
-//     to their owner wallet;
-//   - wallet priors (reviewer reliability from feedback counts + owner external score);
-//   - client→agent edges weighted by valid-feedback count.
-func buildGraphTemplate(data snapshot.SnapshotData) graphTemplate {
+// buildClusterDTemplate precomputes the weight-independent parts from the snapshot.
+func buildClusterDTemplate(data snapshot.SnapshotData) clusterDTemplate {
 	cw := scoring.DefaultCompositeWeights()
 
 	baselineByID := make(map[string]snapshot.BaselineScore, len(data.Baseline))
@@ -111,91 +64,99 @@ func buildGraphTemplate(data snapshot.SnapshotData) graphTemplate {
 		baselineByID[b.AgentID] = b
 	}
 
-	walletPriors := make(map[string]walletPrior)
-	ensureWallet := func(id string) {
-		if id == "" {
-			return
-		}
-		if _, ok := walletPriors[id]; !ok {
-			walletPriors[id] = walletPrior{reliability: 50} // neutral until evidence
-		}
-	}
-
-	// Agent nodes + owner wallet teleport (external score lives on the owner wallet).
-	agentNodes := make([]trustpropagation.GraphNode, 0, len(data.Agents))
-	ownerByAgent := make(map[string]string, len(data.Agents))
-	for _, a := range data.Agents {
-		b := baselineByID[a.ID]
-		ownerByAgent[a.ID] = a.Owner
-		ensureWallet(a.Owner)
-		if a.Owner != "" {
-			wp := walletPriors[a.Owner]
-			if b.ExternalScore > wp.external {
-				wp.external = b.ExternalScore
-			}
-			walletPriors[a.Owner] = wp
-		}
-		agentNodes = append(agentNodes, trustpropagation.GraphNode{
-			ID:        agentNodePrefix + a.ID,
-			Kind:      trustpropagation.NodeKindAgent,
-			DirectRep: scoring.AgentDirectReputation(b.ReputationScore, b.AdoptionScore, b.ServicesScore, b.ComplianceScore, b.WeightMass > 0, cw),
-			Weight:    b.WeightMass,
-			OwnerID:   a.Owner,
-		})
-	}
-
-	// Reviewer reliability per client wallet, from its valid-feedback count in the
-	// (quality-only) snapshot. junkCount is unobservable here, so 0.
+	// R: count feedbacks each client wallet submitted (quality-only snapshot; junk=0).
 	validCount := make(map[string]int64)
-	type edgeKey struct{ from, to string }
-	edgeCount := make(map[edgeKey]float64)
 	for _, fb := range data.Feedbacks {
-		if fb.ClientAddress == "" {
+		if fb.ClientAddress != "" {
+			validCount[fb.ClientAddress]++
+		}
+	}
+
+	// E and O: iterate over agents.
+	external := make(map[string]float64)
+	externalPresent := make(map[string]bool)
+	ownerToAgents := make(map[string][]ownerEntry)
+	for _, a := range data.Agents {
+		if a.Owner == "" {
 			continue
 		}
-		validCount[fb.ClientAddress]++
-		ensureWallet(fb.ClientAddress)
-		edgeCount[edgeKey{from: fb.ClientAddress, to: agentNodePrefix + fb.AgentID}]++
-	}
-	for addr, cnt := range validCount {
-		wp := walletPriors[addr]
-		wp.reliability = scoring.ReviewerReliability(cnt, 0)
-		walletPriors[addr] = wp
+		b := baselineByID[a.ID]
+		if b.ExternalScore > external[a.Owner] {
+			external[a.Owner] = b.ExternalScore
+		}
+		if b.ExternalScore > 0 {
+			externalPresent[a.Owner] = true
+		}
+		if b.WeightMass <= 0 {
+			continue
+		}
+		dr := scoring.AgentDirectReputation(b.ReputationScore, b.AdoptionScore, b.ServicesScore, b.ComplianceScore, true, cw)
+		ownerToAgents[a.Owner] = append(ownerToAgents[a.Owner], ownerEntry{directRep: dr, weightMass: b.WeightMass})
 	}
 
-	edges := make([]trustpropagation.GraphEdge, 0, len(edgeCount))
-	for k, n := range edgeCount {
-		edges = append(edges, trustpropagation.GraphEdge{From: k.from, To: k.to, Weight: n})
-	}
-
-	return graphTemplate{
-		agentNodes:   agentNodes,
-		walletPriors: walletPriors,
-		edges:        edges,
-		ownerByAgent: ownerByAgent,
+	return clusterDTemplate{
+		baseline:               baselineByID,
+		validCountByOwner:      validCount,
+		externalByOwner:        external,
+		externalPresentByOwner: externalPresent,
+		ownerToAgents:          ownerToAgents,
+		agents:                 data.Agents,
 	}
 }
 
-// ConvergencePoint records the iteration count power iteration took for one Alpha.
-type ConvergencePoint struct {
-	Alpha      float64
-	Iterations int
+// walletTrustFor computes WalletTrust for an owner address given the sweep weights.
+func (t *clusterDTemplate) walletTrustFor(owner string, w scoring.WalletTrustWeights) float64 {
+	R := scoring.ReviewerReliability(t.validCountByOwner[owner], 0)
+	E := t.externalByOwner[owner]
+	ePresent := t.externalPresentByOwner[owner]
+
+	var O float64
+	oPresent := false
+	if entries := t.ownerToAgents[owner]; len(entries) > 0 {
+		var sumN, sumD float64
+		for _, e := range entries {
+			sumN += e.directRep * e.weightMass
+			sumD += e.weightMass
+		}
+		if sumD > 0 {
+			O = sumN / sumD
+			oPresent = true
+		}
+	}
+	return scoring.ComputeWalletTrust(R, E, O, ePresent, oPresent, w)
 }
 
-// ConvergenceCurve sweeps Alpha and records how many iterations EigenTrust power
-// iteration took to converge, holding epsilon/maxIter and the teleport prior
-// (default TeleportGamma) fixed. Points are returned in the order of the supplied
-// alphas (caller passes them ascending).
-func ConvergenceCurve(data snapshot.SnapshotData, alphas []float64, epsilon float64, maxIter int) []ConvergencePoint {
-	gd := buildGraphTemplate(data).materialize(extscore.TeleportGamma)
-	out := make([]ConvergencePoint, 0, len(alphas))
-	for _, a := range alphas {
-		_, iters := trustpropagation.EigenTrustPass(gd, trustpropagation.IterConfig{
-			Alpha:   a,
-			Epsilon: epsilon,
-			MaxIter: maxIter,
-		})
-		out = append(out, ConvergencePoint{Alpha: a, Iterations: iters})
+// ClusterDRecompute returns per-agent composite scores after substituting
+// WalletTrust(owner) as publisher for each swept WR/WE/WO configuration.
+func ClusterDRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
+	tpl := buildClusterDTemplate(data)
+	cw := scoring.DefaultCompositeWeights()
+
+	return func(cfg map[string]float64) map[string]float64 {
+		w := scoring.WalletTrustWeights{WR: cfg["WR"], WE: cfg["WE"], WO: cfg["WO"]}
+
+		// Cache WalletTrust per owner for this config.
+		wtCache := make(map[string]float64)
+		walletTrust := func(owner string) float64 {
+			if v, ok := wtCache[owner]; ok {
+				return v
+			}
+			v := tpl.walletTrustFor(owner, w)
+			wtCache[owner] = v
+			return v
+		}
+
+		out := make(map[string]float64, len(tpl.agents))
+		for _, a := range tpl.agents {
+			b := tpl.baseline[a.ID]
+			pubScore := walletTrust(a.Owner)
+			qualityPresent := b.WeightMass > 0
+			composite := scoring.ComputeCompositeFromStats(
+				b.ReputationScore, b.AdoptionScore, b.ServicesScore, pubScore, b.ComplianceScore,
+				qualityPresent, true, cw,
+			)
+			out[a.ID] = composite
+		}
+		return out
 	}
-	return out
 }

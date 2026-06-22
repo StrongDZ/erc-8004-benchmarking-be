@@ -53,7 +53,6 @@ type FeedbackSnapshot struct {
 	ChainID              int64   `bson:"chainId"`
 	ClientAddress        string  `bson:"clientAddress"`
 	FeedbackIndex        uint64  `bson:"feedbackIndex"`
-	PriceUSDC            float64 `bson:"priceUSDC"`
 	ValueNormalized      float64 `bson:"valueNormalized"`        // vi ∈ [-1,1] computed via classifier.NormalizeValueWithScale
 	ValueScale           string  `bson:"valueScale,omitempty"`
 	Wi                   float64 `bson:"wi"`                     // copied from source for cross-check
@@ -76,15 +75,13 @@ type GraphEdge struct {
 	FromWallet       string  `bson:"fromWallet"`        // client address
 	ToWallet         string  `bson:"toWallet"`          // agent owner (or agentWallet)
 	FeedbackCount    int     `bson:"feedbackCount"`     // number of feedbacks from→to
-	InitialWi        float64 `bson:"initialWi"`         // computed wi (using defaults) at snapshot time
-	AvgPriceUSDC     float64 `bson:"avgPriceUsdc"`
 	AvgQualityScore  float64 `bson:"avgQualityScore"`   // Q ∈ [0,1] avg across feedbacks
 }
 
 // BaselineScore is one document in <snapshot_db>.baseline_scores.
 // Computed with default formula parameters at snapshot creation time.
 // Mirrors the v2 agent_score_stats component set so Cụm B can re-blend the
-// 5-component composite and Cụm D can seed the teleport prior.
+// 5-component composite and Cụm D can compute WalletTrust per owner.
 type BaselineScore struct {
 	AgentID          string  `bson:"_id"`           // agentId
 	ChainID          int64   `bson:"chainId"`
@@ -95,6 +92,6 @@ type BaselineScore struct {
 	PublisherPresent bool    `bson:"publisherPresent"`
 	ComplianceScore  float64 `bson:"complianceScore"`
 	CompositeScore   float64 `bson:"compositeScore"`
-	WeightMass       float64 `bson:"weightMass"`    // B = Σ wᵢ·dᵢ — evidence mass for Cụm D owner aggregation
-	ExternalScore    float64 `bson:"externalScore"` // owner wallet on-chain score [0,100], 0 when unenriched (Cụm D teleport input)
+	WeightMass       float64 `bson:"weightMass"`    // B = Σ wᵢ·dᵢ — evidence mass for Cụm D O-component (owned-agent quality)
+	ExternalScore    float64 `bson:"externalScore"` // owner wallet on-chain score [0,100], 0 when unenriched (Cụm D E-component)
 }

@@ -63,7 +63,6 @@ func snapshotCreate(args []string) {
 		ChainID:    *chainID,
 		Filter:     filt,
 		Now:        now,
-		Defaults:   scoring.DefaultFormulaConfig(),
 		Composite:  scoring.DefaultCompositeWeights(),
 		Compliance: scoring.DefaultComplianceWeights(),
 	}

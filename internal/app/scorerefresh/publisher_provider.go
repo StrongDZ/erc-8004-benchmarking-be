@@ -8,8 +8,8 @@ import (
 	"erc-8004-benchmarking-be/internal/utils"
 )
 
-// WalletTrustPublisherProvider maps an agent's owner to that owner wallet's propagated
-// trustScore. present=false when the owner is unrated (not in the rated snapshot).
+// WalletTrustPublisherProvider maps an agent's owner to that owner wallet's WalletTrust score.
+// Falls back to 50 (neutral default) for owners not yet in the rated snapshot.
 type WalletTrustPublisherProvider struct {
 	byID map[string]float64 // key = wallet _id "<chainID>:<lower(owner)>"
 }
@@ -26,7 +26,7 @@ func NewWalletTrustPublisherProvider(rated []walletrepo.RatedTrust) WalletTrustP
 func (p WalletTrustPublisherProvider) Score(_ context.Context, owner string, chainID int64) (float64, bool) {
 	score, ok := p.byID[fmt.Sprintf("%d:%s", chainID, utils.NormalizeAddress(owner))]
 	if !ok {
-		return 0, false
+		return 50.0, true // neutral default for owners not yet rated
 	}
 	return score, true
 }

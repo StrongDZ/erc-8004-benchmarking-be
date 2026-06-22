@@ -20,7 +20,7 @@ type FeedbackResponse struct {
 // RuleClassification holds the rule-engine verdict — always present.
 type RuleClassification struct {
 	Category string `bson:"category"`          // junk | quality | quantity | others
-	Feature  string `bson:"feature,omitempty"` // infrastructure | agent_domain | both
+	Feature  string `bson:"feature,omitempty"` // infrastructure | agent_domain | both | self_feedback
 }
 
 // FallbackClassification holds the LLM verdict — populated only when the LLM
@@ -60,15 +60,15 @@ type FeedbackRecord struct {
 	LogIndex       uint                   `bson:"logIndex"`
 	Timestamp      int64                  `bson:"timestamp"`
 	Type           string                 `bson:"type"` // reputation_feedback, etc.
-	PriceUSDC      float64                `bson:"priceUSDC"`
-	Wi             float64                `bson:"wi"`                     // difficulty weight at time of scoring
-	WiComputedAt   int64                  `bson:"wiComputedAt,omitempty"` // Unix seconds when wi was computed
+	Wi                  float64 `bson:"wi"`                            // base feedback weight (WalletTrust applied at score-refresh replay)
+	WiComputedAt        int64   `bson:"wiComputedAt,omitempty"`         // Unix seconds when wi was computed
+	WalletTrustAtIngest float64 `bson:"walletTrustAtIngest,omitempty"` // legacy: WalletTrust frozen at ingest; 0 = base-only row
 	QualityScore   float64                `bson:"qualityScore"`           // Q ∈ [0,1] composite quality
 	ValidationVerdict string              `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
 	ValidationReason string               `bson:"validationReason,omitempty"` // detail when verdict != valid
 	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
 	Category       string                 `bson:"category,omitempty"`       // effective category: junk|quality|quantity, rule at ingest, LLM overwrites
-	Feature        string                 `bson:"feature,omitempty"`        // infrastructure|agent_domain|both (second axis, not scoring)
+	Feature        string                 `bson:"feature,omitempty"`        // infrastructure|agent_domain|both|self_feedback (second axis, not scoring)
 	Classification FeedbackClassification `bson:"classification"`          // set by classifier
 	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
 	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet
