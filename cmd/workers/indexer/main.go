@@ -68,6 +68,7 @@ func main() {
 		cfg.RPCMaxRetries,
 		cfg.RetryBackoff,
 		retry.ParseBackoffStrategy(cfg.RetryStrategy),
+		cfg.ReorgSafetyBlocks,
 	)
 
 	app := indexerapp.NewApp(crawler, cfg.PollInterval, cfg.ErrorPollInterval)

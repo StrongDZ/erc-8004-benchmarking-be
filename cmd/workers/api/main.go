@@ -19,11 +19,15 @@ import (
 	"os/signal"
 	"syscall"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+
 	_ "erc-8004-benchmarking-be/swagger"
 	"erc-8004-benchmarking-be/internal/api"
 	"erc-8004-benchmarking-be/internal/config"
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"
+	rabbitmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
+	"erc-8004-benchmarking-be/internal/mq"
 )
 
 func main() {
@@ -56,8 +60,24 @@ func main() {
 		}
 	}
 
+	// Optional RabbitMQ connection: enables POST /admin/scoring/recompute and
+	// POST /admin/simulator/start. If unavailable, those endpoints return 500
+	// but all other API routes continue to function normally.
+	var publisher mq.Publisher
+	if conn, err := amqp.Dial(cfg.RabbitMQURI); err != nil {
+		log.Printf("api: rabbitmq disabled (connect failed): %v", err)
+	} else {
+		defer conn.Close()
+		if p, err := rabbitmqinfra.NewMultiPublisher(conn); err != nil {
+			log.Printf("api: rabbitmq publisher setup failed: %v", err)
+		} else {
+			publisher = p
+			log.Printf("api: rabbitmq connected; admin recompute/simulator enabled")
+		}
+	}
+
 	repos := api.NewRepositories(mc, cfg)
-	srv := api.NewServer(cfg, repos, redisClient)
+	srv := api.NewServer(cfg, repos, redisClient, publisher)
 
 	if err := srv.Start(ctx); err != nil {
 		log.Fatalf("api: %v", err)

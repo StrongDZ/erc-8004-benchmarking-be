@@ -9,8 +9,13 @@ import (
 	"time"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
+	"erc-8004-benchmarking-be/internal/domain/simulator"
+	"erc-8004-benchmarking-be/internal/mq"
+	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
+	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -45,6 +50,14 @@ type AdminDeps struct {
 	Feedback  adminFeedbackRepo
 	Agents    adminAgentRepo
 	Contracts adminContractRepo
+
+	// Publisher sends the on-demand recompute trigger to score-refresh.
+	Publisher mq.Publisher
+
+	// SimAgents/SimFeedbacks/SimWallets back the sandbox-chain feedback simulator.
+	SimAgents    *agentrepo.Repository
+	SimFeedbacks *feedbackrepo.Repository
+	SimWallets   *walletrepo.Repository
 }
 
 // Admin exposes observability endpoints gated behind ADMIN_API_KEY.
@@ -137,4 +150,44 @@ func (s *Admin) IndexerStatus(ctx context.Context) (*dto.IndexerStatus, error) {
 
 func nowMinus24h() int64 {
 	return time.Now().Add(-24 * time.Hour).Unix()
+}
+
+// TriggerRecompute publishes an on-demand recompute request to score-refresh.
+// chainID == 0 means replay every chain. Returns immediately; the replay itself
+// runs asynchronously and may take several minutes (Table~tab:latency).
+func (s *Admin) TriggerRecompute(ctx context.Context, chainID int64) (string, error) {
+	if s.deps.Publisher == nil {
+		return "", fmt.Errorf("admin: publisher not configured (RabbitMQ unavailable)")
+	}
+	requestID := fmt.Sprintf("recompute-%d", time.Now().UnixNano())
+	msg := mq.RecomputeTriggerMessage{ChainID: chainID, RequestID: requestID}
+	if err := s.deps.Publisher.Publish(ctx, mq.QueueScoreRefreshTrigger, msg); err != nil {
+		return "", fmt.Errorf("admin: publish recompute trigger: %w", err)
+	}
+	return requestID, nil
+}
+
+// StartSimulator generates count synthetic feedback records on the sandbox
+// chain for agentID (or a freshly generated one if empty), then publishes a
+// recompute trigger scoped to the sandbox chain so the synthetic feedback
+// flows into agent_score_stats/composite score.
+func (s *Admin) StartSimulator(ctx context.Context, agentID string, count int) (simulator.Result, string, error) {
+	if s.deps.Publisher == nil {
+		return simulator.Result{}, "", fmt.Errorf("admin: publisher not configured (RabbitMQ unavailable)")
+	}
+	res, err := simulator.Generate(ctx, simulator.Deps{
+		Agents:    s.deps.SimAgents,
+		Feedbacks: s.deps.SimFeedbacks,
+		Wallets:   s.deps.SimWallets,
+	}, agentID, count)
+	if err != nil {
+		return simulator.Result{}, "", fmt.Errorf("admin: simulator generate: %w", err)
+	}
+
+	requestID := fmt.Sprintf("simulator-%d", time.Now().UnixNano())
+	msg := mq.RecomputeTriggerMessage{ChainID: simulator.SandboxChainID, RequestID: requestID}
+	if err := s.deps.Publisher.Publish(ctx, mq.QueueScoreRefreshTrigger, msg); err != nil {
+		return res, "", fmt.Errorf("admin: publish scoped recompute: %w", err)
+	}
+	return res, requestID, nil
 }

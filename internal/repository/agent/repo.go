@@ -215,6 +215,17 @@ func (r *Repository) FindAll(ctx context.Context, skip, limit int64) ([]AgentDoc
 	return r.Find(ctx, bson.M{}, opts)
 }
 
+// FindAllFiltered returns agents, optionally scoped to one chain. chainID == 0
+// behaves exactly like FindAll (all chains). Paginated by skip/limit.
+func (r *Repository) FindAllFiltered(ctx context.Context, chainID, skip, limit int64) ([]AgentDocument, error) {
+	filter := bson.M{}
+	if chainID != 0 {
+		filter = bson.M{"chainId": chainID}
+	}
+	opts := options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetSkip(skip).SetLimit(limit)
+	return r.Find(ctx, filter, opts)
+}
+
 // WalletScore carries the propagation result for one wallet node.
 type WalletScore struct {
 	ID    string  // document _id ({chainId}:{address})

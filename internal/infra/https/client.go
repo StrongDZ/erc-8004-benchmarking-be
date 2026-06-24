@@ -84,8 +84,11 @@ func NewClientWithOptions(opts ClientOptions) *Client {
 	}
 
 	return &Client{
-		httpClient: &http.Client{Timeout: opts.Timeout},
-		opts:       opts,
+		httpClient: &http.Client{
+			Timeout:   opts.Timeout,
+			Transport: &http.Transport{DialContext: safeDialContext},
+		},
+		opts: opts,
 	}
 }
 

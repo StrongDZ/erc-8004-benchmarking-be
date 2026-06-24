@@ -14,11 +14,12 @@ import (
 
 // Queue name constants.
 const (
-	QueueRawLogs            = "erc8004.raw_logs"
-	QueueAgentURI           = "erc8004.agent_uri"
-	QueueFeedbackClassified = "erc8004.feedback.classified"
-	QueueAgentDescSummary   = "erc8004.agent.desc.summary"
-	QueueWalletEnrich       = "erc8004.wallet_enrich"
+	QueueRawLogs             = "erc8004.raw_logs"
+	QueueAgentURI            = "erc8004.agent_uri"
+	QueueFeedbackClassified  = "erc8004.feedback.classified"
+	QueueAgentDescSummary    = "erc8004.agent.desc.summary"
+	QueueWalletEnrich        = "erc8004.wallet_enrich"
+	QueueScoreRefreshTrigger = "erc8004.scorerefresh.trigger"
 )
 
 // EventURIQueueName returns the per-chain queue for event-sourced URI messages.
@@ -124,6 +125,16 @@ func PublishWalletEnrich(ctx context.Context, publisher Publisher, wasNew bool, 
 		return nil
 	}
 	return publisher.Publish(ctx, QueueWalletEnrich, WalletEnrichMessage{ChainID: chainID, Address: address})
+}
+
+// RecomputeTriggerMessage is published to QueueScoreRefreshTrigger by the API
+// process to request an out-of-band authoritative score replay. ChainID == 0
+// means replay every chain (matches runCycle's existing full-corpus behaviour);
+// a non-zero value scopes the replay to one chain (used by the simulator to
+// replay only its sandbox chain).
+type RecomputeTriggerMessage struct {
+	ChainID   int64  `json:"chainId"`
+	RequestID string `json:"requestId"`
 }
 
 // DescHash returns the sha256[:16] hex digest used as the description idempotency key.

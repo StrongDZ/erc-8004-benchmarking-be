@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+
 	scorerefreshapp "erc-8004-benchmarking-be/internal/app/scorerefresh"
 	"erc-8004-benchmarking-be/internal/config"
 	"erc-8004-benchmarking-be/internal/domain/scoring"
@@ -50,6 +52,12 @@ func main() {
 	offchain := offchainrepo.NewRepository(rawDB, cfg.OffchainColl)
 	wallets := walletrepo.NewRepository(analyzedDB, cfg.WalletColl)
 
+	conn, err := amqp.Dial(cfg.RabbitMQURI)
+	if err != nil {
+		log.Fatalf("rabbitmq connect: %v", err)
+	}
+	defer conn.Close()
+
 	if err := agents.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("agents indexes: %v", err)
 	}
@@ -84,6 +92,7 @@ func main() {
 		agents, feedbacks, scoreStats, offchain, wallets,
 		formulaCfg, compositeWeights, complianceWeights,
 		cfg.ScoreRefreshCron,
+		conn,
 	)
 
 	log.Printf("score-refresh started cron=%q", cfg.ScoreRefreshCron)

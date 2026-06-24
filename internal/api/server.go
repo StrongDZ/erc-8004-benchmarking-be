@@ -21,6 +21,8 @@ import (
 	domainuri "erc-8004-benchmarking-be/internal/domain/uri"
 	httpclient "erc-8004-benchmarking-be/internal/infra/https"
 	redisinfra "erc-8004-benchmarking-be/internal/infra/redis"
+	"erc-8004-benchmarking-be/internal/mq"
+	adminauditrepo "erc-8004-benchmarking-be/internal/repository/adminaudit"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	contractsrepo "erc-8004-benchmarking-be/internal/repository/contracts"
 	crawlerrepo "erc-8004-benchmarking-be/internal/repository/crawler"
@@ -59,6 +61,7 @@ type Repositories struct {
 	Wallets     *walletrepo.Repository
 	OASFSkills  *oasfschema.Repository
 	OASFDomains *oasfschema.Repository
+	Audit       *adminauditrepo.Repository
 }
 
 // NewRepositories wires all repositories against both the primary and analyzed databases.
@@ -80,6 +83,7 @@ func NewRepositories(client *mongodrv.Client, cfg config.Config) *Repositories {
 		Wallets:     walletrepo.NewRepository(analyzed, cfg.WalletColl),
 		OASFSkills:  oasfschema.NewRepository(primary, "oasf_skills"),
 		OASFDomains: oasfschema.NewRepository(primary, "oasf_domains"),
+		Audit:       adminauditrepo.NewRepository(primary, cfg.AdminAuditColl),
 	}
 }
 
@@ -95,7 +99,9 @@ type Server struct {
 // NewServer builds the router, applies middleware, and returns a ready Server.
 // The optional redis client enables realtime WS fan-out by subscribing to
 // cfg.RedisEventsChannel and forwarding payloads to Hub.Broadcast.
-func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client) *Server {
+// publisher may be nil (admin recompute/simulator endpoints will return 500 in
+// that case, but all other endpoints continue to function normally).
+func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client, publisher mq.Publisher) *Server {
 	formula := scoring.DefaultFormulaConfig()
 	formula.Alpha = cfg.TrustRankAlpha
 	formula.TBaseDays = cfg.TrustRankTBase
@@ -141,6 +147,10 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	adminSvc := service.NewAdmin(service.AdminDeps{
 		Crawlers: repos.Crawlers, Events: repos.Events, Feedback: repos.Feedback,
 		Agents: repos.Agents, Contracts: repos.Contracts,
+		Publisher:    publisher,
+		SimAgents:    repos.Agents,
+		SimFeedbacks: repos.Feedback,
+		SimWallets:   repos.Wallets,
 	})
 	walletSvc := service.NewWallet(service.WalletDeps{
 		Agents: repos.Agents, Feedback: repos.Feedback, Wallet: repos.Wallets,
@@ -213,12 +223,15 @@ func NewServer(cfg config.Config, repos *Repositories, redis *redisinfra.Client)
 	// /api/v1/wallets/*
 	mux.Handle("GET /api/v1/wallets/ens", c30s(http.HandlerFunc(walletH.WalletsENS)))
 
-	// /api/v1/admin/* (gated)
+	// /api/v1/admin/* (gated) — every route is audit-logged regardless of outcome.
 	adminAuth := middleware.AdminAuth(cfg.AdminAPIKey)
+	auditIndexerStatus := middleware.AuditAdmin(repos.Audit, "indexer-status")
+	auditRecompute := middleware.AuditAdmin(repos.Audit, "scoring-recompute")
+	auditSimulator := middleware.AuditAdmin(repos.Audit, "simulator-start")
 	// Indexer status is read-only observability and intentionally public.
-	mux.HandleFunc("GET /api/v1/admin/indexer-status", adminH.IndexerStatus)
-	mux.Handle("POST /api/v1/admin/scoring/recompute", adminAuth(http.HandlerFunc(adminH.RecomputeScoring)))
-	mux.Handle("POST /api/v1/admin/simulator/start", adminAuth(http.HandlerFunc(adminH.SimulatorStart)))
+	mux.Handle("GET /api/v1/admin/indexer-status", auditIndexerStatus(http.HandlerFunc(adminH.IndexerStatus)))
+	mux.Handle("POST /api/v1/admin/scoring/recompute", auditRecompute(adminAuth(http.HandlerFunc(adminH.RecomputeScoring))))
+	mux.Handle("POST /api/v1/admin/simulator/start", auditSimulator(adminAuth(http.HandlerFunc(adminH.SimulatorStart))))
 
 	// /api/v1/ws — realtime event stream (WebSocket upgrade).
 	// Hub runs inside Server.Start; clients are upgraded & registered here.

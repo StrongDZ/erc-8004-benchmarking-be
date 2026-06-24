@@ -44,6 +44,7 @@ type Crawler struct {
 	rpcMaxRetries     int
 	retryBackoffStart time.Duration
 	retryStrategy     retry.BackoffStrategy
+	reorgSafetyBlocks uint64
 	breakers          *BreakerRegistry
 
 	jobMu    sync.Mutex
@@ -61,6 +62,7 @@ func NewCrawler(
 	rpcMaxRetries int,
 	retryBackoffStart time.Duration,
 	retryStrategy retry.BackoffStrategy,
+	reorgSafetyBlocks uint64,
 ) *Crawler {
 	mc := int64(maxConcurrency)
 	if mc < 1 {
@@ -82,9 +84,23 @@ func NewCrawler(
 		rpcMaxRetries:     rpcMaxRetries,
 		retryBackoffStart: retryBackoffStart,
 		retryStrategy:     retryStrategy,
+		reorgSafetyBlocks: reorgSafetyBlocks,
 		breakers:          NewBreakerRegistry(DefaultBreakerConfig()),
 		jobLocks:          make(map[string]*sync.Mutex),
 	}
+}
+
+// safeLatestBlock returns the highest block number safe to ingest given a
+// confirmation-depth margin: chainHead - safetyBlocks, floored at 0.
+// safetyBlocks == 0 disables the margin entirely (ingest up to chainHead).
+func safeLatestBlock(chainHead, safetyBlocks uint64) uint64 {
+	if safetyBlocks == 0 {
+		return chainHead
+	}
+	if chainHead <= safetyBlocks {
+		return 0
+	}
+	return chainHead - safetyBlocks
 }
 
 func (c *Crawler) lockJob(chainID int64, contractLower string) func() {
@@ -215,14 +231,22 @@ func (c *Crawler) crawlEvents(ctx context.Context, rpcs []string, chainID int64,
 	sess := &rpcRetrySession{c: c, ctx: ctx, rpcs: rpcs, chainID: chainID, contract: contractAddress}
 	defer sess.close()
 
-	var latest uint64
+	var chainHead uint64
 	var err error
-	latest, err = doWithRetryValue(sess, func(cl *ethclient.Client) (uint64, error) {
+	chainHead, err = doWithRetryValue(sess, func(cl *ethclient.Client) (uint64, error) {
 		return cl.BlockNumber(ctx)
 	})
 	if err != nil {
 		return err
 	}
+
+	// Confirmation-depth safety margin: never ingest above (chain head - reorgSafetyBlocks),
+	// so that by the time a block is processed it has accumulated that many confirmations
+	// and the probability of it being reorged out is negligible. This is the crawler's
+	// reorg defence; eth_getLogs (unlike a log subscription) does not reliably report
+	// Removed=true for blocks that have already been reorged out from under it, so waiting
+	// out the confirmation window is the effective safeguard, not a post-hoc retraction.
+	latest := safeLatestBlock(chainHead, c.reorgSafetyBlocks)
 
 	topic0s := EventTopic0Hashes(target.EventABI)
 	var topics [][]common.Hash

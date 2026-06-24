@@ -31,6 +31,7 @@ type Config struct {
 	ScoreStatsColl          string // agent_score_stats — periodic materialized view
 	WalletColl              string // wallets — unified wallet trust nodes
 	WalletExternalCacheColl string // wallet_external_cache — permanent RPC/Etherscan enrichment cache (erc8004 db, survives analyzed_agents resets)
+	AdminAuditColl          string // admin_audit_log — append-only log of /admin/* access
 
 	// Score-refresh worker
 	ScoreRefreshCron      string // cron expression, default "*/30 * * * *"
@@ -48,6 +49,7 @@ type Config struct {
 	RPCMaxRetries       int // per-RPC retry rounds after first failure
 	RetryBackoff        time.Duration
 	RetryStrategy       string // linear | exponential | fibonacci | random
+	ReorgSafetyBlocks   uint64 // confirmation depth: never ingest above (chain head - this many blocks)
 
 	// RabbitMQ
 	RabbitMQURI         string
@@ -180,6 +182,7 @@ func Load() (Config, error) {
 		AgentsColl:              utils.Getenv("MONGO_COLLECTION_AGENTS", "agents"),
 		IdentityHistColl:        utils.Getenv("MONGO_COLLECTION_IDENTITY_HISTORY", "identity_history"),
 		ScoreHistColl:           utils.Getenv("MONGO_COLLECTION_SCORE_HISTORY", "score_history"),
+		AdminAuditColl:          utils.Getenv("MONGO_COLLECTION_ADMIN_AUDIT_LOG", "admin_audit_log"),
 		FeedbackHistColl:        utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
 		TagStatsColl:            utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
 		TagCorrectionsColl:      utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
@@ -201,6 +204,7 @@ func Load() (Config, error) {
 		RPCMaxRetries:       utils.GetenvInt("CRAWLER_RPC_MAX_RETRIES", 3),
 		RetryBackoff:        time.Duration(utils.GetenvInt("CRAWLER_RETRY_BACKOFF_MS", 100)) * time.Millisecond,
 		RetryStrategy:       utils.Getenv("CRAWLER_RETRY_STRATEGY", "linear"),
+		ReorgSafetyBlocks:   uint64(utils.GetenvInt("CRAWLER_REORG_SAFETY_BLOCKS", 5)),
 
 		RabbitMQURI:               utils.Getenv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),
 		RabbitMQQueue:             utils.Getenv("RABBITMQ_QUEUE", "erc8004.raw_logs"),
