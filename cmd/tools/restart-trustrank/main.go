@@ -106,13 +106,13 @@ func main() {
 	indexerStopped := false
 	if !*noStopIndexer {
 		// Stop EVERY worker that writes to the analyzed DB before dropping it.
-		// Leaving score-worker / wallet-enrich / trust-graph-updater running during
+		// Leaving score-worker / wallet-enrich / feedback-others running during
 		// the drop lets them re-insert wallet docs (incl. null-key rows) into the
 		// freshly-emptied collection before trustrank-worker can build the unique
 		// ux_chain_address index → index build fails → trustrank-worker crash-loops.
 		if err := composeStop([]string{
 			"indexer", "trustrank-worker", "consumer", "score-worker",
-			"wallet-enrich", "trust-graph-updater", "uri-resolver", "desc-summarizer",
+			"wallet-enrich", "feedback-others", "uri-resolver", "desc-summarizer",
 		}); err != nil {
 			log.Fatalf("restart-trustrank: stop workers: %v", err)
 		}
@@ -354,7 +354,7 @@ func waitTrustRankCaughtUp(ctx context.Context, client *mongo.Client, cfg config
 func restartComposeWorkers() error {
 	// Start trustrank-worker ALONE first so it (re)builds the wallets unique index
 	// ux_chain_address on the freshly-emptied collection before any other writer
-	// (wallet-enrich / trust-graph-updater / score-worker) can insert wallet docs.
+	// (wallet-enrich / feedback-others / score-worker) can insert wallet docs.
 	// Once the unique index exists it rejects duplicate null-key rows, so the later
 	// workers can start safely.
 	if err := composeDocker("up", "-d", "--no-deps", "trustrank-worker"); err != nil {
@@ -367,7 +367,7 @@ func restartComposeWorkers() error {
 		"uri-resolver",
 		"desc-summarizer",
 		"wallet-enrich",
-		"trust-graph-updater",
+		"feedback-others",
 		"score-worker",
 		"consumer",
 	}
@@ -381,7 +381,7 @@ func restartComposeWorkers() error {
 
 func buildResetQueues(chainIDs []int64) []string {
 	queues := []string{
-		mq.QueueFeedbackClassified,
+		mq.QueueFeedbackOthers,
 		mq.QueueAgentDescSummary,
 		mq.QueueWalletEnrich,
 	}

@@ -292,14 +292,14 @@ type FeedbackEdge struct {
 }
 
 // FeedbackBackfillItem is the minimal projection needed to re-publish a feedback
-// into the trust-graph queue.
+// into the feedback-others queue for async grading.
 type FeedbackBackfillItem struct {
 	ID      string `bson:"_id"`
 	ChainID int64  `bson:"chainId"`
 }
 
 // ListUnprocessedIDs returns feedbacks where validationVerdict is missing or empty
-// (i.e. trust-graph-updater has not yet graded them). Pass chainID=0 for all chains.
+// (i.e. grading by trustrank/feedback-others has not yet completed). Pass chainID=0 for all chains.
 // limit caps the batch size; callers should pick a value that the queue can absorb.
 // Results are stable-sorted by _id so repeated calls page deterministically.
 //
@@ -333,7 +333,7 @@ func (r *Repository) ListUnprocessedIDs(ctx context.Context, chainID int64, limi
 
 // ScanAllNonJunkEdges returns feedback edges that are not explicitly rejected (junk/missing/self).
 // This includes verdict="valid", verdict="" (unprocessed), and verdict="legacy".
-// When wi=0 (unprocessed by trust-graph-updater), the caller should supply a default weight.
+// When wi=0 (not yet graded by trustrank or feedback-others), the caller should supply a default weight.
 func (r *Repository) ScanAllNonJunkEdges(ctx context.Context, chainID int64) ([]FeedbackEdge, error) {
 	filter := bson.M{
 		"validationVerdict": bson.M{"$nin": []string{"junk", "missing_fields", "self"}},

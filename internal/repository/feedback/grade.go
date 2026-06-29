@@ -2,7 +2,7 @@ package feedback
 
 import "strings"
 
-// IsGraded reports whether trust-graph-updater has finished grading a feedback row.
+// IsGraded reports whether feedback grading (by trustrank inline or feedback-others worker) has finished for a row.
 // Graded verdicts exclude empty, "legacy", and "pending" — those may still be (re)processed.
 func IsGraded(verdict string) bool {
 	v := strings.TrimSpace(verdict)

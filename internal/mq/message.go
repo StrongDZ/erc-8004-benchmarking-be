@@ -16,7 +16,6 @@ import (
 const (
 	QueueRawLogs             = "erc8004.raw_logs"
 	QueueAgentURI            = "erc8004.agent_uri"
-	QueueFeedbackClassified  = "erc8004.feedback.classified"
 	QueueFeedbackOthers      = "erc8004.feedback.others"
 	QueueAgentDescSummary    = "erc8004.agent.desc.summary"
 	QueueWalletEnrich        = "erc8004.wallet_enrich"
@@ -83,13 +82,6 @@ type ServiceURIMessage struct {
 	AgentID     string `json:"agentId,omitempty"`
 	ServiceName string `json:"serviceName,omitempty"`
 	PublishedAt int64  `json:"publishedAt"`
-}
-
-// FeedbackClassifiedMessage is published to QueueFeedbackClassified by the trustrank
-// processor after a feedback record has been classified and written to feedback_history.
-type FeedbackClassifiedMessage struct {
-	FeedbackID string `json:"feedbackId"`
-	ChainID    int64  `json:"chainId"`
 }
 
 // FeedbackOthersMessage is published to QueueFeedbackOthers by the trustrank

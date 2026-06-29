@@ -9,7 +9,7 @@ import (
 	mongorepo "erc-8004-benchmarking-be/internal/repository"
 )
 
-// WalletKind enumerates the role of a wallet node in the trust graph.
+// WalletKind enumerates the role of a wallet node in the trust scoring system.
 type WalletKind string
 
 const (
@@ -24,7 +24,7 @@ type WalletDocument struct {
 	ChainID int64  `bson:"chainId"`
 	Kind    string `bson:"kind"`    // "user" | "owner" (derived)
 
-	// Base score (write-time, incrementally updated by trust-graph-updater).
+	// Base score (write-time, incrementally updated by the trustrank worker).
 	TrustScore float64 `bson:"trustScore"` // [0, 100]
 
 	// Post-propagation score timestamp (batch pass writes this).

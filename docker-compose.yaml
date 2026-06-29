@@ -186,13 +186,13 @@ services:
             MONGO_URI: mongodb://mongo:27017
             RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
 
-    trust-graph-updater:
+    feedback-others:
         build:
             context: .
             dockerfile: Dockerfile
-            target: trust-graph-updater
-        image: erc8004-trust-graph-updater:latest
-        container_name: erc8004-trust-graph-updater
+            target: feedback-others
+        image: erc8004-feedback-others:latest
+        container_name: erc8004-feedback-others
         restart: unless-stopped
         stop_grace_period: 3m
         depends_on:
