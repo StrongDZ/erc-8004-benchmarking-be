@@ -159,7 +159,9 @@ func (a *App) computeDeltas(ctx context.Context, rec *tagstats.ScaleChangeCorrec
 		}
 
 		wi := fb.Wi
-		lambda := scoring.ComputeDecayRate(max(wi, a.formulaCfg.Alpha), a.formulaCfg.TBaseDays)
+		// Decay uses the global rate (λ = ln2/T_base) the mass was accumulated with,
+		// so corrections stay consistent with the replay source of truth.
+		lambda := scoring.ComputeDecayRate(a.formulaCfg.TBaseDays)
 		deltaDays := float64(nowUnix-fb.Timestamp) / 86400.0
 		if deltaDays < 0 {
 			deltaDays = 0

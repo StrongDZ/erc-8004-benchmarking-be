@@ -10,7 +10,7 @@ package pipeline
 //	  Confidence  = B / (C + B)
 //	  Reliability = 1 / (1 + γ·N^θ)  N = current consecutive-fail streak
 //
-// A and B are decayed forward with a single global rate λ = ComputeDecayRate(α,
+// A and B are decayed forward with a single global rate λ = ComputeDecayRate(
 // T_base) to each feedback's timestamp, then once more to `now` at read time —
 // exactly as ApplyFeedbackToMass / ComputeReputationAt (and replay.go's decayMass).
 //
@@ -19,8 +19,9 @@ package pipeline
 // removed because task-price data is too sparse to map. So β and K no longer affect
 // the score and are NOT swept here; the wᵢ sensitivity lives in Cụm C (quality → wᵢ).
 //
-// Parameters varied: Alpha (decay), TBaseDays (decay half-life), C (confidence prior),
-// Gamma, Theta (reliability).
+// Parameters varied: TBaseDays (decay half-life), C (confidence prior), Gamma, Theta
+// (reliability). Alpha is NOT swept: it no longer affects the decay rate (λ = ln2/T_base)
+// and the replay uses the persisted fb.Wi directly (wᵢ sensitivity lives in Cụm C).
 
 import (
 	"sort"
@@ -39,7 +40,6 @@ const passThreshold = 0.40
 func ClusterAParamSpecs() []runner.ParamSpec {
 	def := scoring.DefaultFormulaConfig()
 	return []runner.ParamSpec{
-		{Name: "Alpha", Default: def.Alpha, Low: def.Alpha * 0.5, High: def.Alpha * 1.5},
 		{Name: "TBaseDays", Default: def.TBaseDays, Low: def.TBaseDays * 0.5, High: def.TBaseDays * 1.5},
 		{Name: "C", Default: def.C, Low: def.C * 0.5, High: def.C * 1.5},
 		{Name: "Gamma", Default: def.Gamma, Low: def.Gamma * 0.5, High: def.Gamma * 1.5},
@@ -74,7 +74,6 @@ func ClusterARecompute(data snapshot.SnapshotData, nowUnix int64) runner.Recompu
 
 	return func(cfg map[string]float64) map[string]float64 {
 		formula := scoring.FormulaConfig{
-			Alpha:     cfg["Alpha"],
 			TBaseDays: cfg["TBaseDays"],
 			C:         cfg["C"],
 			Gamma:     cfg["Gamma"],

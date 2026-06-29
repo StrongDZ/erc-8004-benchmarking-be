@@ -84,13 +84,14 @@ func Classify(tag1, tag2, scale string) Result {
 		return Result{Category: CategoryJunk, Confidence: ruleConfidence, Source: "rule"}
 	}
 	if t1 == "" && t2 == "" {
-		if scale == "unbounded" {
-			return Result{Category: CategoryJunk, Feature: FeatureNone, Confidence: 0.80, Source: "rule"}
-		}
-		return Result{Category: CategoryQuality, Feature: FeatureDomain, Confidence: 0.80, Source: "rule"}
+		// Empty tags carry no rule signal — escalate to the LLM (others) so it can read
+		// the offchain content instead of scoring/junking blindly.
+		return Result{Category: CategoryOthers, Confidence: 0.0, Source: "fallback"}
 	}
 	if emojiOnlyRe.MatchString(t1raw) && t2 == "" {
-		return Result{Category: CategoryJunk, Confidence: ruleConfidence, Source: "rule"}
+		// Emoji-only tag with no tag2 — let the LLM inspect offchain content
+		// (e.g. 👍 paired with a meaningful comment) rather than dropping it as junk.
+		return Result{Category: CategoryOthers, Confidence: 0.50, Source: "rule"}
 	}
 
 	// ── Layer 2: QUANTITY — whitelist metric tags only ───────────────
@@ -128,8 +129,8 @@ func isSpam(t1, t2 string) bool {
 }
 
 // isNoise matches explicit placeholder/gibberish tag1 values (test/asd/custom-style).
-// Records with empty tag1+tag2 are handled separately above (line 86): unbounded → junk,
-// bounded → quality. They never escalate to others.
+// Records with empty tag1+tag2 are handled separately above: they escalate to "others"
+// so the LLM can read the offchain content.
 func isNoise(t1, t2 string) bool {
 	if noiseTag1Set[t1] && (t2 == "" || noiseTag1Set[t2] || allDigitsRe.MatchString(t2)) {
 		return true

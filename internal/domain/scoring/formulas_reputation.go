@@ -36,13 +36,30 @@ func ComputeConfidence(b, c float64) float64 {
 }
 
 // ComputeReliability returns the consecutive-failure factor 1/(1 + γ·N^θ) ∈ (0,1].
-// N = 0 (no current streak) → 1.0. The streak resets on the next passing task,
-// so the penalty is fully recoverable.
+// N = 0 (no current streak) → 1.0. A passing task decays the streak via
+// DecayConsecutiveFails rather than clearing it outright, so the penalty recovers
+// gradually over several successes (still fully recoverable).
 func ComputeReliability(nFail int64, gamma, theta float64) float64 {
 	if nFail <= 0 {
 		return 1.0
 	}
 	return 1.0 / (1.0 + gamma*math.Pow(float64(nFail), theta))
+}
+
+// DecayConsecutiveFails returns the new consecutive-fail streak after one passing
+// task. Instead of clearing the streak outright, a success removes a third of it
+// (round-half-up) but always at least 1, so the Reliability penalty fades over
+// several successes rather than vanishing after a single one. Repeated successes
+// trace 10 → 7 → 5 → 3 → 2 → 1 → 0. n ≤ 0 returns 0.
+func DecayConsecutiveFails(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	reduction := int64(math.Round(float64(n) / 3.0))
+	if reduction < 1 {
+		reduction = 1
+	}
+	return n - reduction
 }
 
 // ComputeReputationScore blends the three factors into a [0,100] reputation.
@@ -69,7 +86,7 @@ func ComputeAdoption(u, uRef int) float64 {
 }
 
 // massDecayFactor returns the decay multiplier applied to BOTH A and B between two
-// timestamps. A single global rate (λ from cfg.Alpha) is used so that A and B decay
+// timestamps. A single global rate (λ = ln2/T_base) is used so that A and B decay
 // identically — this keeps Quality = A/B stable over idle time while Confidence =
 // B/(C+B) shrinks, which is exactly the anti-squatting behaviour we want.
 func massDecayFactor(lastUpdateUnix, nowUnix int64, cfg FormulaConfig) float64 {
@@ -77,7 +94,7 @@ func massDecayFactor(lastUpdateUnix, nowUnix int64, cfg FormulaConfig) float64 {
 	if deltaDays < 0 {
 		deltaDays = 0
 	}
-	lambda := ComputeDecayRate(cfg.Alpha, cfg.TBaseDays)
+	lambda := ComputeDecayRate(cfg.TBaseDays)
 	return ComputeDecayFactor(lambda, deltaDays)
 }
 

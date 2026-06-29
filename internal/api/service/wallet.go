@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"erc-8004-benchmarking-be/internal/api/dto"
+	"erc-8004-benchmarking-be/internal/domain/extscore"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
@@ -191,8 +192,21 @@ type WalletProfileResult struct {
 	OwnedAgentIDs      []string `json:"ownedAgentIds,omitempty"`
 	ExternalScore      *float64 `json:"externalScore"`
 	ExternalComplete   bool     `json:"externalComplete"`
-	ENS                string   `json:"ens,omitempty"`
-	ENSAvatar          string   `json:"ensAvatar,omitempty"`
+	// ExternalFactors is the per-factor decomposition of ExternalScore (age,
+	// counterparties, balance, activity, ENS). Present only when external
+	// enrichment has run for the wallet.
+	ExternalFactors []ExternalFactorDTO `json:"externalFactors,omitempty"`
+	ENS             string              `json:"ens,omitempty"`
+	ENSAvatar       string              `json:"ensAvatar,omitempty"`
+}
+
+// ExternalFactorDTO is one weighted component of the on-chain credit score.
+type ExternalFactorDTO struct {
+	Key     string  `json:"key"`     // age | counterparties | balance | activity | ens
+	Weight  float64 `json:"weight"`  // nominal weight in [0,1] (factors sum to 1.0)
+	Score   float64 `json:"score"`   // normalized strength [0,100]
+	Present bool    `json:"present"` // whether the underlying feature was fetched
+	Raw     float64 `json:"raw"`     // raw magnitude: age days / count / USD / nonce / 1|0
 }
 
 // Profile returns the trust profile for a wallet address.
@@ -236,10 +250,38 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 
 	var externalScore *float64
 	var externalComplete bool
+	var externalFactors []ExternalFactorDTO
 	if doc.External.Present {
 		v := doc.External.Score
 		externalScore = &v
 		externalComplete = doc.External.Complete
+
+		// Mirror extenrich.ensFeatures: balance+nonce land on the cheap RPC pass
+		// (gated by Present); age+counterparties need the explorer pass (Complete).
+		explorerDataPresent := extscore.ExplorerApplicable(doc.ChainID) &&
+			!doc.External.ExplorerSkipped &&
+			doc.External.Complete
+		feat := extscore.Features{
+			BalanceUSD:            doc.External.BalanceUSD,
+			Nonce:                 doc.External.Nonce,
+			AgeDays:               doc.External.AgeDays,
+			UniqueCounterparties:  doc.External.Counterparties,
+			HasENS:                doc.External.ENS != "",
+			BalancePresent:        doc.External.Present,
+			NoncePresent:          doc.External.Present,
+			AgePresent:            explorerDataPresent,
+			CounterpartiesPresent: explorerDataPresent,
+			ENSApplicable:         doc.ChainID == 1,
+		}
+		for _, fac := range extscore.Breakdown(feat) {
+			externalFactors = append(externalFactors, ExternalFactorDTO{
+				Key:     fac.Key,
+				Weight:  fac.Weight,
+				Score:   fac.Score,
+				Present: fac.Present,
+				Raw:     fac.Raw,
+			})
+		}
 	}
 
 	return &WalletProfileResult{
@@ -255,6 +297,7 @@ func (s *Wallet) Profile(ctx context.Context, address string, chainID int64) (*W
 		OwnedAgentIDs:      doc.OwnedAgentIDs,
 		ExternalScore:      externalScore,
 		ExternalComplete:   externalComplete,
+		ExternalFactors:    externalFactors,
 		ENS:                doc.External.ENS,
 		ENSAvatar:          doc.External.ENSAvatar,
 	}, nil

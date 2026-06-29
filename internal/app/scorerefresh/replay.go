@@ -53,7 +53,7 @@ func replayAgent(
 	// Milestones in ascending chronological order: T-30d, T-7d, T-24h.
 	milestones := [3]int64{now - 30*86400, now - 7*86400, now - 86400}
 
-	lambda := scoring.ComputeDecayRate(formulaCfg.Alpha, formulaCfg.TBaseDays)
+	lambda := scoring.ComputeDecayRate(formulaCfg.TBaseDays)
 	// v2 weighted-mean mass accumulators: A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ.
 	a := 0.0
 	b := 0.0
@@ -145,7 +145,7 @@ func replayAgent(
 			consecFails++
 			totalFailed++
 		} else {
-			consecFails = 0
+			consecFails = scoring.DecayConsecutiveFails(consecFails)
 			totalPassed++
 		}
 
@@ -167,7 +167,7 @@ func replayAgent(
 				acc.consec++
 				acc.failed++
 			} else {
-				acc.consec = 0
+				acc.consec = scoring.DecayConsecutiveFails(acc.consec)
 				acc.passed++
 			}
 		}

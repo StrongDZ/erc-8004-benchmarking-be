@@ -255,14 +255,17 @@ func (a *App) runCycle(ctx context.Context, chainID int64) {
 	log.Printf("score-refresh: cycle done agents=%d", total)
 
 	// Compute and persist WalletTrust for every wallet using the freshly replayed agent stats.
-	a.computeAndWriteWalletTrust(ctx, ownerToAgents, now)
+	a.computeAndWriteWalletTrust(ctx, chainID, ownerToAgents, now)
 }
 
-// computeAndWriteWalletTrust derives WalletTrust for every wallet in the collection and
-// writes trustScore via BulkSetTrustScore. Called once per score-refresh cycle after
-// all agent scores have been replayed so the O-component (owned-agent quality) is fresh.
-func (a *App) computeAndWriteWalletTrust(ctx context.Context, ownerToAgents map[string][]ownerAgentEntry, now int64) {
-	allWallets, err := a.wallets.ScanAll(ctx, 0)
+// computeAndWriteWalletTrust derives WalletTrust for the wallets in scope and writes
+// trustScore via BulkSetTrustScore. Called once per score-refresh cycle after all agent
+// scores have been replayed so the O-component (owned-agent quality) is fresh. chainID
+// scopes the wallet set to match the replay scope (0 = all chains, the full cron cycle);
+// a scoped recompute must not touch other chains' wallets, whose owned-agent stats were
+// not replayed this cycle.
+func (a *App) computeAndWriteWalletTrust(ctx context.Context, chainID int64, ownerToAgents map[string][]ownerAgentEntry, now int64) {
+	allWallets, err := a.wallets.ScanAll(ctx, chainID)
 	if err != nil {
 		log.Printf("score-refresh: wallet trust: scan wallets: %v", err)
 		return
@@ -270,6 +273,7 @@ func (a *App) computeAndWriteWalletTrust(ctx context.Context, ownerToAgents map[
 
 	wtWeights := scoring.DefaultWalletTrustWeights()
 	scores := make([]agentrepo.WalletScore, 0, len(allWallets))
+	var unratedIDs []string
 
 	for _, wd := range allWallets {
 		R := scoring.ReviewerReliability(wd.FeedbackValidCount, wd.FeedbackJunkCount)
@@ -291,6 +295,16 @@ func (a *App) computeAndWriteWalletTrust(ctx context.Context, ownerToAgents map[
 			}
 		}
 
+		// A wallet is rated only with real evidence: feedback history, external enrichment,
+		// or owned-agent quality. Evidence-less wallets (e.g. a one-off feedback sender with
+		// no valid/junk counts) would otherwise tie at the neutral ~50 and flood the rated
+		// ranking, so they are marked unrated instead.
+		hasEvidence := wd.FeedbackValidCount+wd.FeedbackJunkCount > 0 || ePresent || oPresent
+		if !hasEvidence {
+			unratedIDs = append(unratedIDs, wd.ID)
+			continue
+		}
+
 		wt := scoring.ComputeWalletTrust(R, E, O, ePresent, oPresent, wtWeights)
 		scores = append(scores, agentrepo.WalletScore{ID: wd.ID, Score: wt, At: now})
 	}
@@ -299,5 +313,10 @@ func (a *App) computeAndWriteWalletTrust(ctx context.Context, ownerToAgents map[
 		log.Printf("score-refresh: wallet trust: bulk write: %v", err)
 		return
 	}
-	log.Printf("score-refresh: wallet trust updated count=%d", len(scores))
+	if len(unratedIDs) > 0 {
+		if err := a.wallets.BulkSetUnrated(ctx, unratedIDs, now); err != nil {
+			log.Printf("score-refresh: wallet trust: bulk set unrated: %v", err)
+		}
+	}
+	log.Printf("score-refresh: wallet trust updated rated=%d unrated=%d", len(scores), len(unratedIDs))
 }

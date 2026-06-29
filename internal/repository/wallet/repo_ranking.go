@@ -32,12 +32,15 @@ func (r *Repository) ListRatedRanking(ctx context.Context, chainIDs []int64, ski
 
 	pipeline := bson.A{
 		bson.M{"$match": match},
+		// Normalize the address before grouping so legacy mixed-case rows dedupe
+		// against their lowercase counterparts (addresses are persisted lowercase).
+		bson.M{"$addFields": bson.M{"addrLower": bson.M{"$toLower": "$address"}}},
 		bson.M{"$sort": bson.D{
-			{Key: "address", Value: 1},
+			{Key: "addrLower", Value: 1},
 			{Key: "trustScore", Value: -1},
 		}},
 		bson.M{"$group": bson.M{
-			"_id":                "$address",
+			"_id":                "$addrLower",
 			"trustScore":         bson.M{"$first": "$trustScore"},
 			"feedbackTotalCount": bson.M{"$first": "$feedbackTotalCount"},
 		}},

@@ -216,7 +216,9 @@ func (s *Leaderboard) WalletRanking(ctx context.Context, p WalletRankingParams) 
 	rows := make([]dto.WalletRankingRow, 0, len(ranked))
 	for _, row := range ranked {
 		score := row.TrustScore
-		agents := ownerAgents[row.Address]
+		// ownerAgents is keyed by lowercased owner; normalize the lookup key so a
+		// legacy mixed-case ranking row still matches its owned agents.
+		agents := ownerAgents[strings.ToLower(strings.TrimSpace(row.Address))]
 		if agents == nil {
 			agents = []dto.AgentRow{}
 		}

@@ -52,16 +52,45 @@ func boolScore(b bool) float64 {
 	return 0
 }
 
+// Factor is one weighted component of Score_ext, exposed for UI breakdowns.
+// Score is the factor's normalized strength [0,100]; Weight its nominal share
+// (factors sum to 1.0 when all present); Raw the underlying magnitude
+// (age days / counterparty count / USD / nonce / 1|0 for ENS).
+type Factor struct {
+	Key     string
+	Weight  float64
+	Score   float64
+	Present bool
+	Raw     float64
+}
+
+// Breakdown returns the per-factor decomposition behind Score, in display order.
+// Score consumes this same slice, so the displayed components never drift from
+// the actual scoring formula.
+func Breakdown(f Features) []Factor {
+	return []Factor{
+		{Key: "age", Weight: weights.Age, Score: math.Min(f.AgeDays/365.0, 1.0) * 100, Present: f.AgePresent, Raw: f.AgeDays},
+		{Key: "counterparties", Weight: weights.Counterparties, Score: 100 * satLog10(float64(f.UniqueCounterparties), 2), Present: f.CounterpartiesPresent, Raw: float64(f.UniqueCounterparties)},
+		{Key: "balance", Weight: weights.Balance, Score: 100 * satLog10(f.BalanceUSD, 4), Present: f.BalancePresent, Raw: f.BalanceUSD},
+		{Key: "activity", Weight: weights.Nonce, Score: 100 * satLog10(float64(f.Nonce), 3), Present: f.NoncePresent, Raw: float64(f.Nonce)},
+		{Key: "ens", Weight: weights.ENS, Score: boolScore(f.HasENS), Present: f.ENSApplicable, Raw: boolToRaw(f.HasENS)},
+	}
+}
+
+func boolToRaw(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // Score returns Score_ext in [0,100] over the PRESENT features, redistributing
 // the weight of absent features.
 func Score(f Features) float64 {
-	age := math.Min(f.AgeDays/365.0, 1.0) * 100
-	comps := []scoring.WeightedComponent{
-		{Score: age, Weight: weights.Age, Present: f.AgePresent},
-		{Score: 100 * satLog10(float64(f.UniqueCounterparties), 2), Weight: weights.Counterparties, Present: f.CounterpartiesPresent},
-		{Score: 100 * satLog10(f.BalanceUSD, 4), Weight: weights.Balance, Present: f.BalancePresent},
-		{Score: 100 * satLog10(float64(f.Nonce), 3), Weight: weights.Nonce, Present: f.NoncePresent},
-		{Score: boolScore(f.HasENS), Weight: weights.ENS, Present: f.ENSApplicable},
+	bd := Breakdown(f)
+	comps := make([]scoring.WeightedComponent, len(bd))
+	for i, fac := range bd {
+		comps[i] = scoring.WeightedComponent{Score: fac.Score, Weight: fac.Weight, Present: fac.Present}
 	}
 	return scoring.ComputeCompositeRenorm(comps)
 }

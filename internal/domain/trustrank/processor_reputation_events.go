@@ -16,6 +16,7 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
+	"erc-8004-benchmarking-be/internal/repository/wallet"
 	"erc-8004-benchmarking-be/internal/utils"
 )
 
@@ -28,6 +29,26 @@ func (p *Processor) processReputationEvent(bs *batchState, agentID string, ev ev
 	case "ResponseAppended":
 		p.handleResponseAppended(bs, agentID, ev)
 	}
+}
+
+// resolvePublisherScore returns the owner wallet's publisher reputation and presence,
+// matching the score-refresh WalletTrustPublisherProvider (present is always true; an
+// unrated or unknown owner gets the neutral default). Seeding a brand-new agent's prev
+// with this keeps the O(1) write-path composite consistent with the next full refresh.
+func (p *Processor) resolvePublisherScore(ctx context.Context, owner string, chainID int64) (float64, bool) {
+	const neutral = 50.0
+	if p.walletRepo == nil || owner == "" {
+		return neutral, true
+	}
+	id := wallet.WalletDocumentID(chainID, utils.NormalizeAddress(owner))
+	scores, err := p.walletRepo.BulkGetTrustScores(ctx, []string{id})
+	if err != nil {
+		return neutral, true
+	}
+	if s, ok := scores[id]; ok {
+		return s, true
+	}
+	return neutral, true
 }
 
 func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventrepo.DecodedEvent) {
@@ -161,7 +182,11 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	// If absent (first feedback ever), default to zero-value with neutral publisher.
 	prev, _ := p.statsRepo.FindByID(context.Background(), bs.chainID, agentID)
 	if prev == nil {
-		prev = &scorestats.AgentScoreStats{ChainID: bs.chainID, AgentID: agentID, PublisherScore: 50.0}
+		// Brand-new agent: seed the publisher term from the owner wallet so the O(1)
+		// write-path composite matches the score-refresh provider (always present=true)
+		// instead of dropping the 20% publisher weight until the first refresh.
+		pubScore, pubPresent := p.resolvePublisherScore(context.Background(), agentDoc.Owner, bs.chainID)
+		prev = &scorestats.AgentScoreStats{ChainID: bs.chainID, AgentID: agentID, PublisherScore: pubScore, PublisherPresent: pubPresent}
 	}
 
 	// v2 weighted-mean state: decay the two mass accumulators forward and add this
@@ -173,7 +198,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	if vi >= 0.40 {
 		newPassed = prev.TotalPassed + 1
 		newFailed = prev.TotalFailed
-		newConsecFails = 0
+		newConsecFails = scoring.DecayConsecutiveFails(prev.ConsecutiveFails)
 	} else {
 		newPassed = prev.TotalPassed
 		newFailed = prev.TotalFailed + 1
@@ -273,7 +298,7 @@ func upsertServiceReputation(
 	st.TotalTasks++
 	if vi >= 0.40 {
 		st.TotalPassed++
-		st.ConsecutiveFails = 0
+		st.ConsecutiveFails = scoring.DecayConsecutiveFails(st.ConsecutiveFails)
 	} else {
 		st.TotalFailed++
 		st.ConsecutiveFails++

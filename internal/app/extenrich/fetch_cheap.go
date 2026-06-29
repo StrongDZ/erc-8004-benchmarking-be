@@ -22,7 +22,6 @@ func (a *App) FetchCheapSignal(ctx context.Context, w wallet.WalletDocument) (wa
 	rpcClient := NewRPCClient(a.httpc, rpcs)
 	usdPrice, _ := a.price.NativeUSD(w.ChainID)
 	now := time.Now().Unix()
-	ensApplicable := w.ChainID == 1
 
 	results, err := rpcClient.FetchBalanceNonce([]string{w.Address})
 	if err != nil {
@@ -39,7 +38,8 @@ func (a *App) FetchCheapSignal(ctx context.Context, w wallet.WalletDocument) (wa
 		Nonce:          r.Nonce,
 		BalancePresent: true,
 		NoncePresent:   true,
-		ENSApplicable:  ensApplicable,
+		// ENS is not resolved in the cheap pass; the ENS/rich sweep sets this true on chain 1.
+		ENSApplicable:  false,
 	}
 
 	doc := w.External

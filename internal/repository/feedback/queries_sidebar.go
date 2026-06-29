@@ -5,11 +5,12 @@ package feedback
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	"erc-8004-benchmarking-be/internal/utils"
 )
 
 // DistinctClientRow is one wallet that submitted feedback to an agent.
@@ -96,7 +97,7 @@ func (r *Repository) ListDistinctClientsByAgent(ctx context.Context, chainID int
 // that received feedback from the given wallet.
 func (r *Repository) CountDistinctAgentsByClient(ctx context.Context, address string) (int64, error) {
 	pipeline := mongodrv.Pipeline{
-		{{Key: "$match", Value: bson.M{"clientAddress": strings.TrimSpace(address)}}},
+		{{Key: "$match", Value: bson.M{"clientAddress": utils.NormalizeAddress(address)}}},
 		{{Key: "$group", Value: bson.M{"_id": bson.M{"chainId": "$chainId", "agentId": "$agentId"}}}},
 		{{Key: "$count", Value: "total"}},
 	}
@@ -122,7 +123,7 @@ func (r *Repository) CountDistinctAgentsByClient(ctx context.Context, address st
 // from the wallet, sorted by most recent feedback first.
 func (r *Repository) ListDistinctAgentsByClient(ctx context.Context, address string, skip, limit int64) ([]DistinctAgentRow, error) {
 	pipeline := mongodrv.Pipeline{
-		{{Key: "$match", Value: bson.M{"clientAddress": strings.TrimSpace(address)}}},
+		{{Key: "$match", Value: bson.M{"clientAddress": utils.NormalizeAddress(address)}}},
 		{{Key: "$group", Value: bson.M{
 			"_id": bson.M{
 				"chainId": "$chainId",

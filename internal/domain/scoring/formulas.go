@@ -15,7 +15,7 @@ import (
 
 // FormulaConfig holds the tunable scoring parameters, read from environment at startup.
 type FormulaConfig struct {
-	Alpha        float64 // constant per-feedback weight wᵢ (default 1.0); sets decay rate λ = ln2/(T_base·(1+ln(wᵢ)))
+	Alpha        float64 // base per-feedback weight wᵢ (default 1.0): seeds wᵢ before ApplyAdjustments. Does NOT affect the decay rate (λ = ln2/T_base).
 	TBaseDays    float64 // §3.3 half-life base in days (default 15.0)
 	C            float64 // confidence prior strength: evidence mass B at which confidence = 0.5 (default 3.0)
 	Gamma        float64 // reliability penalty base coefficient (default 0.1)
@@ -43,10 +43,11 @@ type TaskInput struct {
 	DeltaDays float64 // fractional days since task completion — MUST NOT be in seconds
 }
 
-// ComputeDecayRate computes the adaptive decay rate λᵢ.
-// §3.3: λᵢ = ln(2) / (T_base · (1 + ln(wᵢ)))
-func ComputeDecayRate(wi, tBaseDays float64) float64 {
-	return math.Log(2) / (tBaseDays * (1.0 + math.Log(wi)))
+// ComputeDecayRate computes the global time-decay rate λ from the half-life base T_base.
+// λ = ln(2) / T_base, so the reputation mass half-life is exactly T_base days. The
+// per-feedback weight wᵢ affects mass magnitude (A += wᵢ·vᵢ), not the decay rate.
+func ComputeDecayRate(tBaseDays float64) float64 {
+	return math.Log(2) / tBaseDays
 }
 
 // ComputeDecayFactor computes the time decay multiplier e^(-λᵢ·Δt).

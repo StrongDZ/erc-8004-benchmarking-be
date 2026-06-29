@@ -13,6 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"erc-8004-benchmarking-be/internal/domain/serviceendpoint"
+	"erc-8004-benchmarking-be/internal/utils"
 )
 
 // ListFilter controls pagination & filtering on /agents/:id/feedbacks (§3.3).
@@ -58,8 +59,14 @@ func (r *Repository) ListFiltered(ctx context.Context, f ListFilter, skip, limit
 func buildFeedbackQuery(f ListFilter) bson.M {
 	q := bson.M{"chainId": f.ChainID, "agentId": f.AgentID}
 
+	// A category constraint can come from two independent sources — the explicit
+	// f.Category filter and the status branch (e.g. "accepted" → category ≠ junk).
+	// Collect both and combine via $and so neither clobbers the other's "category"
+	// map key. Contradictory combinations (e.g. category=quality + status=junk)
+	// intentionally yield an empty result.
+	var catConds []bson.M
 	if f.Category != "" {
-		q["category"] = f.Category
+		catConds = append(catConds, bson.M{"category": f.Category})
 	}
 	switch f.Status {
 	case "revoked":
@@ -69,12 +76,21 @@ func buildFeedbackQuery(f ListFilter) bson.M {
 			bson.M{"revokeTxHash": bson.M{"$exists": false}},
 			bson.M{"revokeTxHash": ""},
 		}
-		q["category"] = bson.M{"$ne": "junk"}
+		catConds = append(catConds, bson.M{"category": bson.M{"$ne": "junk"}})
 	case "junk":
-		q["category"] = "junk"
+		catConds = append(catConds, bson.M{"category": "junk"})
 	case "anomalous":
 		q["vi"] = 0
-		q["category"] = bson.M{"$ne": "junk"}
+		catConds = append(catConds, bson.M{"category": bson.M{"$ne": "junk"}})
+	}
+	switch len(catConds) {
+	case 1:
+		// Single source — merge directly to keep the simple, index-friendly shape.
+		for k, v := range catConds[0] {
+			q[k] = v
+		}
+	case 2:
+		q["$and"] = bson.A{catConds[0], catConds[1]}
 	}
 	if f.From != nil || f.To != nil {
 		rng := bson.M{}
@@ -278,7 +294,7 @@ func (r *Repository) ListForReputationHistory(ctx context.Context, chainID int64
 // ListByClientAddress returns paginated feedback submitted by a specific wallet address,
 // sorted newest-first (blockNumber desc). Used by GET /wallet/:address/feedbacks.
 func (r *Repository) ListByClientAddress(ctx context.Context, address string, skip, limit int64) ([]FeedbackRecord, int64, error) {
-	q := bson.M{"clientAddress": strings.TrimSpace(address)}
+	q := bson.M{"clientAddress": utils.NormalizeAddress(address)}
 
 	total, err := r.Count(ctx, q)
 	if err != nil {

@@ -108,7 +108,6 @@ func (a *App) cheapPassChain(ctx context.Context, chainID int64, rpcs []string, 
 	rpcClient := NewRPCClient(a.httpc, rpcs)
 	usdPrice, _ := a.price.NativeUSD(chainID)
 	now := time.Now().Unix()
-	ensApplicable := chainID == 1
 
 	jobs := make(chan []wallet.WalletDocument)
 	var wg sync.WaitGroup
@@ -120,7 +119,7 @@ func (a *App) cheapPassChain(ctx context.Context, chainID int64, rpcs []string, 
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
-				if err := a.cheapPassBatch(ctx, rpcClient, usdPrice, ensApplicable, now, batch); err != nil {
+				if err := a.cheapPassBatch(ctx, rpcClient, usdPrice, now, batch); err != nil {
 					mu.Lock()
 					if firstErr == nil {
 						firstErr = err
@@ -144,7 +143,7 @@ func (a *App) cheapPassChain(ctx context.Context, chainID int64, rpcs []string, 
 
 // cheapPassBatch fetches balance+nonce for one batch of wallets via a single
 // batched JSON-RPC request and writes through any successful results.
-func (a *App) cheapPassBatch(ctx context.Context, rpcClient *RPCClient, usdPrice float64, ensApplicable bool, now int64, batch []wallet.WalletDocument) error {
+func (a *App) cheapPassBatch(ctx context.Context, rpcClient *RPCClient, usdPrice float64, now int64, batch []wallet.WalletDocument) error {
 	addrs := make([]string, len(batch))
 	for i, w := range batch {
 		addrs[i] = w.Address
@@ -166,7 +165,8 @@ func (a *App) cheapPassBatch(ctx context.Context, rpcClient *RPCClient, usdPrice
 			Nonce:          r.Nonce,
 			BalancePresent: true,
 			NoncePresent:   true,
-			ENSApplicable:  ensApplicable,
+			// ENS is not resolved in the cheap pass; the ENS/rich sweep sets this true on chain 1.
+			ENSApplicable:  false,
 		}
 		doc := w.External
 		doc.Score = extscore.Score(f)
