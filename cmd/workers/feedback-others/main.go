@@ -8,7 +8,6 @@
 //	MONGO_COLLECTION_AGENT_SCORE_STATS,
 //	LLM_BASE_URL, AI_SERVICE_MODEL, LLM_TIMEOUT_SECONDS,
 //	FEEDBACK_OTHERS_WORKERS, FEEDBACK_OTHERS_PREFETCH
-//	(fall back to TRUST_GRAPH_WORKERS / TRUST_GRAPH_PREFETCH for backward compat)
 package main
 
 import (
@@ -70,8 +69,8 @@ func main() {
 		FeedbackRepo: feedbackRepo,
 		AgentRepo:    agentRepo,
 		Cfg: feedbackother.AppConfig{
-			Workers:  envIntAlias("FEEDBACK_OTHERS_WORKERS", "TRUST_GRAPH_WORKERS", 8),
-			Prefetch: envIntAlias("FEEDBACK_OTHERS_PREFETCH", "TRUST_GRAPH_PREFETCH", 10),
+			Workers:  envInt("FEEDBACK_OTHERS_WORKERS", 8),
+			Prefetch: envInt("FEEDBACK_OTHERS_PREFETCH", 10),
 		},
 		Classifier: hybridClassifier,
 	})
@@ -81,23 +80,6 @@ func main() {
 		log.Fatalf("feedback-others: %v", err)
 	}
 	log.Println("feedback-others: stopped")
-}
-
-// envIntAlias reads newKey first; if absent, tries oldKey and logs a one-line
-// deprecation warning so existing .env files keep working during the transition.
-func envIntAlias(newKey, oldKey string, def int) int {
-	if v := os.Getenv(newKey); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			return i
-		}
-	}
-	if v := os.Getenv(oldKey); v != "" {
-		if i, err := strconv.Atoi(v); err == nil {
-			log.Printf("feedback-others: %s is deprecated, use %s instead", oldKey, newKey)
-			return i
-		}
-	}
-	return def
 }
 
 func mustEnv(k string) string {

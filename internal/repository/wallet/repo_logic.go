@@ -133,7 +133,7 @@ func chunkStrings(s []string, size int) [][]string {
 	return chunks
 }
 
-// computeCounterIncrements returns the $inc subdocument for ApplyTrustDelta.
+// computeCounterIncrements returns the $inc subdocument for IncrementFeedbackCounters.
 func computeCounterIncrements(isValid bool) map[string]any {
 	inc := map[string]any{
 		"feedbackTotalCount": int64(1),

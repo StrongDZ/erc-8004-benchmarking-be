@@ -1,9 +1,9 @@
 package scoring
 
 // feedback_grade.go — Pure grading routine shared by ingest and async worker.
-// Ports the verdict gate from trustgraph/validator.go and the quality-input
-// extraction from trustgraph/extract_quality.go into a single side-effect-free
-// function. Never called with category="others" — that path is intentionally omitted.
+// Combines the verdict gate and the quality-input extraction into a single
+// side-effect-free function. Never called with category="others" — that path
+// is intentionally omitted.
 
 import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
@@ -20,7 +20,7 @@ type GradeResult struct {
 }
 
 // GradeFeedback grades a feedback whose category is already resolved (never "others").
-// Pure: no I/O. Mirrors the old trustgraph Validate + weight, minus the ErrPendingLLM path.
+// Pure: no I/O. Applies the verdict gate, then computes quality + weight.
 func GradeFeedback(fb feedbackrepo.FeedbackRecord, cfg QualityWeightConfig) GradeResult {
 	if fb.IsSelfFeedback {
 		return GradeResult{

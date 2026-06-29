@@ -191,7 +191,7 @@ func (r *Repository) ScanCompositeScores(ctx context.Context, chainID int64) ([]
 }
 
 // AgentComponents is a lightweight projection of an agent's score components,
-// used by the propagation pass to compute the publisher-excluded direct prior.
+// used by the score-refresh replay to compute the publisher-excluded direct prior.
 type AgentComponents struct {
 	ChainID         int64   `bson:"chainId"`
 	AgentID         string  `bson:"agentId"`

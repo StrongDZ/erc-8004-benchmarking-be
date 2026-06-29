@@ -42,40 +42,39 @@ type FeedbackClassification struct {
 // FeedbackRecord stores a single feedback event and its scoring impact.
 // Schema follows ERC-8004 feedback_history collection spec.
 type FeedbackRecord struct {
-	ID             string                 `bson:"_id"` // {chainId}:{agentId}:{clientAddress}:{feedbackIndex}
-	AgentID        string                 `bson:"agentId"`
-	ChainID        int64                  `bson:"chainId"`
-	ClientAddress  string                 `bson:"clientAddress"`
-	FeedbackIndex  uint64                 `bson:"feedbackIndex"`
-	Value          string                 `bson:"value"` // int128 as string
-	ValueDecimals  uint8                  `bson:"valueDecimals"`
-	Tag1           string                 `bson:"tag1,omitempty"`
-	Tag2           string                 `bson:"tag2,omitempty"`
-	Endpoint       string                 `bson:"endpoint,omitempty"`
-	FeedbackURI    string                 `bson:"feedbackURI,omitempty"`
-	FeedbackHash   string                 `bson:"feedbackHash,omitempty"`
-	FeedbackParsed map[string]any         `bson:"feedbackParsed,omitempty"`
-	BlockNumber    uint64                 `bson:"blockNumber"`
-	TxHash         string                 `bson:"txHash"`
-	LogIndex       uint                   `bson:"logIndex"`
-	Timestamp      int64                  `bson:"timestamp"`
-	Type           string                 `bson:"type"` // reputation_feedback, etc.
-	Wi                  float64 `bson:"wi"`                            // base feedback weight (WalletTrust applied at score-refresh replay)
-	WiComputedAt        int64   `bson:"wiComputedAt,omitempty"`         // Unix seconds when wi was computed
-	WalletTrustAtIngest float64 `bson:"walletTrustAtIngest,omitempty"` // legacy: WalletTrust frozen at ingest; 0 = base-only row
-	QualityScore   float64                `bson:"qualityScore"`           // Q ∈ [0,1] composite quality
-	ValidationVerdict string              `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
-	ValidationReason string               `bson:"validationReason,omitempty"` // detail when verdict != valid
-	ValueScale     string                 `bson:"valueScale,omitempty"`   // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
-	Category       string                 `bson:"category,omitempty"`       // effective category: junk|quality|quantity, rule at ingest, LLM overwrites
-	Feature        string                 `bson:"feature,omitempty"`        // infrastructure|agent_domain|both|self_feedback (second axis, not scoring)
-	Classification FeedbackClassification `bson:"classification"`          // set by classifier
-	Unit           string                 `bson:"unit,omitempty"`           // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
-	IsSelfFeedback bool                   `bson:"isSelfFeedback,omitempty"` // clientAddress == owner or agentWallet
-	Responses      []FeedbackResponse     `bson:"responses,omitempty"`     // ResponseAppended history
-	RevokeTxHash   string                 `bson:"revokeTxHash,omitempty"`  // set when FeedbackRevoked
-	IsRevoked      bool                   `bson:"isRevoked,omitempty"`     // true after FeedbackRevoked
-	RevokedAt      int64                  `bson:"revokedAt,omitempty"`     // Unix seconds of revocation event
+	ID                string                 `bson:"_id"` // {chainId}:{agentId}:{clientAddress}:{feedbackIndex}
+	AgentID           string                 `bson:"agentId"`
+	ChainID           int64                  `bson:"chainId"`
+	ClientAddress     string                 `bson:"clientAddress"`
+	FeedbackIndex     uint64                 `bson:"feedbackIndex"`
+	Value             string                 `bson:"value"` // int128 as string
+	ValueDecimals     uint8                  `bson:"valueDecimals"`
+	Tag1              string                 `bson:"tag1,omitempty"`
+	Tag2              string                 `bson:"tag2,omitempty"`
+	Endpoint          string                 `bson:"endpoint,omitempty"`
+	FeedbackURI       string                 `bson:"feedbackURI,omitempty"`
+	FeedbackHash      string                 `bson:"feedbackHash,omitempty"`
+	FeedbackParsed    map[string]any         `bson:"feedbackParsed,omitempty"`
+	BlockNumber       uint64                 `bson:"blockNumber"`
+	TxHash            string                 `bson:"txHash"`
+	LogIndex          uint                   `bson:"logIndex"`
+	Timestamp         int64                  `bson:"timestamp"`
+	Type              string                 `bson:"type"`                        // reputation_feedback, etc.
+	Wi                float64                `bson:"wi"`                          // base feedback weight (WalletTrust applied at score-refresh replay)
+	WiComputedAt      int64                  `bson:"wiComputedAt,omitempty"`      // Unix seconds when wi was computed
+	QualityScore      float64                `bson:"qualityScore"`                // Q ∈ [0,1] composite quality
+	ValidationVerdict string                 `bson:"validationVerdict,omitempty"` // "valid"|"junk"|"missing_fields"|"self"|"pending"|"legacy"
+	ValidationReason  string                 `bson:"validationReason,omitempty"`  // detail when verdict != valid
+	ValueScale        string                 `bson:"valueScale,omitempty"`        // scale used to compute vi: "binary"|"star5"|"star10"|"pct100"|"unbounded"|""
+	Category          string                 `bson:"category,omitempty"`          // effective category: junk|quality|quantity, rule at ingest, LLM overwrites
+	Feature           string                 `bson:"feature,omitempty"`           // infrastructure|agent_domain|both|self_feedback (second axis, not scoring)
+	Classification    FeedbackClassification `bson:"classification"`              // set by classifier
+	Unit              string                 `bson:"unit,omitempty"`              // display unit: "ms", "s", "%", "blocks", "USDC", "none", etc.
+	IsSelfFeedback    bool                   `bson:"isSelfFeedback,omitempty"`    // clientAddress == owner or agentWallet
+	Responses         []FeedbackResponse     `bson:"responses,omitempty"`         // ResponseAppended history
+	RevokeTxHash      string                 `bson:"revokeTxHash,omitempty"`      // set when FeedbackRevoked
+	IsRevoked         bool                   `bson:"isRevoked,omitempty"`         // true after FeedbackRevoked
+	RevokedAt         int64                  `bson:"revokedAt,omitempty"`         // Unix seconds of revocation event
 }
 
 // FeedbackUpdate holds a partial update for a single feedback document.

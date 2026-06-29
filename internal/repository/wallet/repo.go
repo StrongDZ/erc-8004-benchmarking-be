@@ -74,14 +74,6 @@ func (r *Repository) GetByAddress(ctx context.Context, chainID int64, address st
 	return &doc, nil
 }
 
-// DeltaInput is the payload for ApplyTrustDelta.
-type DeltaInput struct {
-	ChainID  int64
-	Address  string
-	NewTrust float64 // already clipped to [0, 100] by caller
-	IsValid  bool    // true for valid feedback; false for junk/gate-failed
-}
-
 // UpsertCold ensures a wallet record exists for (chainID, address). If absent, inserts
 // with trustScore = t0. If already present, only bumps updatedAt. Returns the post-upsert
 // doc and wasNew (true if a new document was inserted).
@@ -178,26 +170,8 @@ func (r *Repository) ReconcileOwnership(ctx context.Context, chainID int64, agen
 	return wasNew, nil
 }
 
-// ApplyTrustDelta atomically writes the new trustScore + bumps feedback counters.
-// Caller must clip NewTrust before calling (use clipTrustScore).
-// Caller must hold a per-wallet mutex before calling to avoid concurrent writes.
-func (r *Repository) ApplyTrustDelta(ctx context.Context, in DeltaInput) error {
-	id := WalletDocumentID(in.ChainID, in.Address)
-	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
-		"$set": bson.M{
-			"trustScore": clipTrustScore(in.NewTrust),
-			"updatedAt":  time.Now().Unix(),
-		},
-		"$inc": computeCounterIncrements(in.IsValid),
-	})
-	if err != nil {
-		return fmt.Errorf("wallet repo: apply trust delta (%d, %s): %w", in.ChainID, in.Address, err)
-	}
-	return nil
-}
-
 // IncrementFeedbackCounters bumps feedbackTotalCount and the valid/junk counter
-// for a wallet WITHOUT touching trustScore (owned by the propagation pass).
+// for a wallet WITHOUT touching trustScore (owned by the score-refresh replay).
 func (r *Repository) IncrementFeedbackCounters(ctx context.Context, chainID int64, address string, isValid bool) error {
 	id := WalletDocumentID(chainID, address)
 	_, err := r.UpdateOne(ctx, bson.M{"_id": id}, bson.M{
@@ -406,7 +380,7 @@ func (r *Repository) ScanAll(ctx context.Context, chainID int64) ([]WalletDocume
 	)
 }
 
-// BulkSetTrustScore writes the propagation result into trustScore (the single
+// BulkSetTrustScore writes the score-refresh result into trustScore (the single
 // canonical wallet trust score) using unordered bulk writes.
 func (r *Repository) BulkSetTrustScore(ctx context.Context, scores []agentrep.WalletScore) error {
 	if len(scores) == 0 {
@@ -417,9 +391,9 @@ func (r *Repository) BulkSetTrustScore(ctx context.Context, scores []agentrep.Wa
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": s.ID}).
 			SetUpdate(bson.M{"$set": bson.M{
-				"trustScore":           clipTrustScore(s.Score),
-				"trustRated":           true,
-				"propagationUpdatedAt": s.At,
+				"trustScore":   clipTrustScore(s.Score),
+				"trustRated":   true,
+				"trustScoreAt": s.At,
 			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
@@ -490,9 +464,9 @@ func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64)
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": id}).
 			SetUpdate(bson.M{"$set": bson.M{
-				"trustRated":           false,
-				"trustScore":           nil,
-				"propagationUpdatedAt": at,
+				"trustRated":   false,
+				"trustScore":   nil,
+				"trustScoreAt": at,
 			}}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
@@ -511,15 +485,14 @@ type FeedbackCounterSet struct {
 }
 
 // BulkSetFeedbackCounters UPSERTS feedbackValidCount / feedbackJunkCount for many reviewer
-// wallets by _id. Unlike the per-event $inc (ApplyTrustDelta / IncrementFeedbackCounters),
+// wallets by _id. Unlike the per-event $inc (IncrementFeedbackCounters),
 // this overwrites with counts derived from the full verdict corpus in a score-refresh
 // cycle, so it is idempotent. Only called on the full cycle (chainID==0) where every
 // agent — and thus every reviewer's complete verdict set — was replayed.
 //
 // The upsert ensures reviewer-only wallets (addresses that submitted feedback but never
 // owned an agent) are created on first encounter, with a cold-start "user" doc identical
-// to what UpsertCold would have produced. This restores the reviewer-node creation
-// previously handled by the deleted trust-graph-updater worker.
+// to what UpsertCold would have produced.
 func (r *Repository) BulkSetFeedbackCounters(ctx context.Context, counters []FeedbackCounterSet) error {
 	if len(counters) == 0 {
 		return nil

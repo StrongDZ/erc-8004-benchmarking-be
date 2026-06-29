@@ -226,7 +226,7 @@ func (r *Repository) FindAllFiltered(ctx context.Context, chainID, skip, limit i
 	return r.Find(ctx, filter, opts)
 }
 
-// WalletScore carries the propagation result for one wallet node.
+// WalletScore carries the score-refresh result for one wallet node.
 type WalletScore struct {
 	ID    string  // document _id ({chainId}:{address})
 	Score float64 // [0, 100]
@@ -241,7 +241,7 @@ type AgentOwnerEdge struct {
 }
 
 // ScanOwnerEdges returns (agentId, chainId, owner) for all agents with a non-empty owner.
-// Pass chainID=0 for all chains. Used by the propagation loader to derive owner→agent edges
+// Pass chainID=0 for all chains. Used by the score-refresh replay to derive owner→agent edges
 // even when the wallets collection is empty.
 func (r *Repository) ScanOwnerEdges(ctx context.Context, chainID int64) ([]AgentOwnerEdge, error) {
 	filter := bson.M{"owner": bson.M{"$ne": ""}}

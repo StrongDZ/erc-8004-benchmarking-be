@@ -32,7 +32,7 @@ type URIPublisher interface {
 	Publish(ctx context.Context, queueName string, msg any) error
 }
 
-// FeedbackPublisher publishes classified feedback IDs to the trust-graph worker queue.
+// FeedbackPublisher publishes classified feedback IDs to the feedback-others queue.
 // May be nil; when nil, publishing is skipped.
 type FeedbackPublisher interface {
 	Publish(ctx context.Context, queueName string, msg any) error
@@ -287,7 +287,7 @@ type Processor struct {
 	uriPublisher  URIPublisher         // may be nil; publishes service endpoint URIs asynchronously
 	fbPublisher   FeedbackPublisher    // may be nil; publishes classified feedback IDs
 	descPublisher DescSummaryPublisher // may be nil; publishes agent description-summary jobs
-	walletRepo    *wallet.Repository   // may be nil; syncs owner → wallets for trust graph
+	walletRepo    *wallet.Repository   // may be nil; syncs owner → wallets collection
 	coldStartT0   float64              // initial trustScore for new owner wallets
 	tagStatsRepo  *tagstats.StatsRepository
 	tagCorrsRepo  *tagstats.CorrectionRepository
