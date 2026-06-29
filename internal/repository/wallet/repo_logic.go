@@ -67,6 +67,37 @@ func buildUpsertColdUpdate(chainID int64, address string, t0 float64, nowUnix in
 	}
 }
 
+// defaultReviewerColdStartT0 is the initial trust score assigned to a reviewer-only
+// wallet created during the score-refresh counter upsert. Matches the default cold-start
+// T0 used by UpsertCold for owner wallets.
+const defaultReviewerColdStartT0 = 10.0
+
+// buildFeedbackCounterUpsertUpdate constructs the Mongo update document used by
+// BulkSetFeedbackCounters when upserting a reviewer wallet. On INSERT it creates a
+// well-formed cold-start "user" wallet (identical to what UpsertCold would produce);
+// on both INSERT and UPDATE it sets the derived counters. No field appears in both
+// $set and $setOnInsert (Mongo rejects overlapping keys).
+func buildFeedbackCounterUpsertUpdate(c FeedbackCounterSet, nowUnix int64) map[string]any {
+	addr := normalizeAddress(c.Address)
+	return map[string]any{
+		"$setOnInsert": map[string]any{
+			"_id":                WalletDocumentID(c.ChainID, c.Address),
+			"address":            addr,
+			"chainId":            c.ChainID,
+			"kind":               string(WalletKindUser),
+			"trustScore":         clipTrustScore(defaultReviewerColdStartT0),
+			"feedbackTotalCount": int64(0),
+			"junkRatio":          0.0,
+			"createdAt":          nowUnix,
+		},
+		"$set": map[string]any{
+			"feedbackValidCount": c.Valid,
+			"feedbackJunkCount":  c.Junk,
+			"updatedAt":          nowUnix,
+		},
+	}
+}
+
 const bulkTrustScoreChunkSize = 5000
 
 // dedupeNonEmptyIDs returns unique non-empty strings preserving first-seen order.

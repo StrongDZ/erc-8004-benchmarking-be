@@ -500,18 +500,26 @@ func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64)
 }
 
 // FeedbackCounterSet is one reviewer wallet's derived valid/junk verdict tally
-// for BulkSetFeedbackCounters.
+// for BulkSetFeedbackCounters. ChainID and Address are required so the upsert
+// can create the wallet document for reviewer-only wallets that were never owners.
 type FeedbackCounterSet struct {
-	ID    string
-	Valid int64
-	Junk  int64
+	ID      string
+	ChainID int64
+	Address string // lowercased
+	Valid   int64
+	Junk    int64
 }
 
-// BulkSetFeedbackCounters SETS feedbackValidCount / feedbackJunkCount for many reviewer
+// BulkSetFeedbackCounters UPSERTS feedbackValidCount / feedbackJunkCount for many reviewer
 // wallets by _id. Unlike the per-event $inc (ApplyTrustDelta / IncrementFeedbackCounters),
 // this overwrites with counts derived from the full verdict corpus in a score-refresh
 // cycle, so it is idempotent. Only called on the full cycle (chainID==0) where every
 // agent — and thus every reviewer's complete verdict set — was replayed.
+//
+// The upsert ensures reviewer-only wallets (addresses that submitted feedback but never
+// owned an agent) are created on first encounter, with a cold-start "user" doc identical
+// to what UpsertCold would have produced. This restores the reviewer-node creation
+// previously handled by the deleted trust-graph-updater worker.
 func (r *Repository) BulkSetFeedbackCounters(ctx context.Context, counters []FeedbackCounterSet) error {
 	if len(counters) == 0 {
 		return nil
@@ -521,11 +529,8 @@ func (r *Repository) BulkSetFeedbackCounters(ctx context.Context, counters []Fee
 	for _, c := range counters {
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": c.ID}).
-			SetUpdate(bson.M{"$set": bson.M{
-				"feedbackValidCount": c.Valid,
-				"feedbackJunkCount":  c.Junk,
-				"updatedAt":          now,
-			}}))
+			SetUpdate(buildFeedbackCounterUpsertUpdate(c, now)).
+			SetUpsert(true))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	if err != nil {

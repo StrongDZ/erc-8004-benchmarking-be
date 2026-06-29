@@ -304,7 +304,13 @@ func feedbackCountersForCycle(chainID int64, tally map[string]reviewerCounter) [
 	}
 	counters := make([]walletrepo.FeedbackCounterSet, 0, len(tally))
 	for id, rc := range tally {
-		counters = append(counters, walletrepo.FeedbackCounterSet{ID: id, Valid: rc.valid, Junk: rc.junk})
+		counters = append(counters, walletrepo.FeedbackCounterSet{
+			ID:      id,
+			ChainID: rc.chainID,
+			Address: rc.address,
+			Valid:   rc.valid,
+			Junk:    rc.junk,
+		})
 	}
 	return counters
 }

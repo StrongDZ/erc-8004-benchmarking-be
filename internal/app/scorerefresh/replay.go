@@ -26,8 +26,10 @@ import (
 // replay pass, keyed (by the caller) on the wallet document _id. Aggregated across all
 // agents in runCycle, then SET onto the wallet via BulkSetFeedbackCounters.
 type reviewerCounter struct {
-	valid int64
-	junk  int64
+	chainID int64
+	address string // lowercased; needed to create the wallet doc on upsert
+	valid   int64
+	junk    int64
 }
 
 const consistencyWindow = 20
@@ -163,8 +165,12 @@ func replayAgent(
 		}
 
 		// Reviewer tally: a non-gated verdict counts as valid, anything gated as junk.
+		// chainID and address are carried so BulkSetFeedbackCounters can create the
+		// wallet document on upsert for reviewer-only wallets that were never owners.
 		wid := walletrepo.WalletDocumentID(fb.ChainID, utils.NormalizeAddress(fb.ClientAddress))
 		rc := reviewerTally[wid]
+		rc.chainID = fb.ChainID
+		rc.address = utils.NormalizeAddress(fb.ClientAddress)
 		if g.Gated {
 			rc.junk++
 		} else {

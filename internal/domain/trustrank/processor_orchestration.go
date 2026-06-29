@@ -30,7 +30,7 @@ import (
 // uriPublisher may be nil; when set, service endpoint URIs discovered during
 // identity event processing are published to the service_uri queue.
 // fbPublisher may be nil; when set, rule-undecided ("others") feedback IDs are published to QueueFeedbackOthers,
-// and brand-new sender wallets are published to QueueWalletEnrich.
+// and brand-new owner wallets are published to QueueWalletEnrich.
 // descPublisher may be nil; when set, agent description-summary jobs are published to QueueAgentDescSummary.
 // tagStatsRepo / tagCorrsRepo may be nil to disable dynamic scale detection.
 func NewProcessor(
