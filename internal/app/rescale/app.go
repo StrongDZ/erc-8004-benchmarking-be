@@ -267,19 +267,43 @@ func (a *App) updateFeedbackScale(ctx context.Context, rec *tagstats.ScaleChange
 		return err
 	}
 
-	var updates []feedbackrepo.ScaleUpdate
-	for i := range fbs {
-		fb := &fbs[i]
-		if fb.ValueScale == rec.NewScale {
-			continue // already up to date (idempotent)
-		}
-		updates = append(updates, feedbackrepo.ScaleUpdate{ID: fb.ID, NewScale: rec.NewScale})
-	}
+	updates := buildScaleUpdates(fbs, rec.NewScale)
 
 	if err := a.feedbackRepo.BulkUpdateValueScale(ctx, updates); err != nil {
 		return err
 	}
 	return a.corrRepo.IncrFeedbacksRescaled(ctx, rec.ID, int64(len(updates)))
+}
+
+// buildScaleUpdates derives the Phase 3 bulk-update list from a slice of feedback records
+// and the target scale. For each record it:
+//   - re-derives the classification with the new scale (classifier.Classify),
+//   - skips the record when both ValueScale and category/feature are already correct,
+//   - includes category/feature/classification.rule.* in the update when the new
+//     classification differs from the stored one (e.g. quality-tagged feedback that
+//     becomes quantity because the new scale is "unbounded").
+//
+// Extracted as a pure function so it can be unit-tested without a database.
+func buildScaleUpdates(fbs []feedbackrepo.FeedbackRecord, newScale string) []feedbackrepo.ScaleUpdate {
+	var updates []feedbackrepo.ScaleUpdate
+	for i := range fbs {
+		fb := &fbs[i]
+		newCls := classifier.Classify(fb.Tag1, fb.Tag2, newScale)
+
+		scaleUnchanged := fb.ValueScale == newScale
+		categoryUnchanged := fb.Category == string(newCls.Category) && fb.Feature == string(newCls.Feature)
+		if scaleUnchanged && categoryUnchanged {
+			continue // fully up to date — idempotent skip
+		}
+
+		upd := feedbackrepo.ScaleUpdate{ID: fb.ID, NewScale: newScale}
+		if !categoryUnchanged {
+			upd.NewCategory = string(newCls.Category)
+			upd.NewFeature = string(newCls.Feature)
+		}
+		updates = append(updates, upd)
+	}
+	return updates
 }
 
 // max returns the larger of two float64 values.

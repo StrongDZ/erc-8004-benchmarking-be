@@ -220,13 +220,18 @@ func (r *Repository) BulkUpdate(ctx context.Context, updates []FeedbackUpdate) e
 	return nil
 }
 
-// ScaleUpdate carries the document ID and the new valueScale for BulkUpdateValueScale.
+// ScaleUpdate carries the document ID, the new valueScale, and optionally the
+// reclassified category/feature for BulkUpdateValueScale.
+// NewCategory == "" means "leave category/feature unchanged".
 type ScaleUpdate struct {
-	ID       string
-	NewScale string
+	ID          string
+	NewScale    string
+	NewCategory string // non-empty → also set category, feature, classification.rule.*
+	NewFeature  string // paired with NewCategory; empty string is valid (clears feature)
 }
 
-// BulkUpdateValueScale sets ValueScale on multiple feedback documents.
+// BulkUpdateValueScale sets ValueScale (and, when ScaleUpdate.NewCategory is set,
+// category/feature/classification.rule.*) on multiple feedback documents.
 // Called by the rescale worker Phase 3. The $set is idempotent — safe to retry.
 func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUpdate) error {
 	if len(updates) == 0 {
@@ -234,9 +239,16 @@ func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUp
 	}
 	ops := make([]mongodrv.WriteModel, 0, len(updates))
 	for _, u := range updates {
+		fields := bson.M{"valueScale": u.NewScale}
+		if u.NewCategory != "" {
+			fields["category"] = u.NewCategory
+			fields["feature"] = u.NewFeature
+			fields["classification.rule.category"] = u.NewCategory
+			fields["classification.rule.feature"] = u.NewFeature
+		}
 		ops = append(ops, mongodrv.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": u.ID}).
-			SetUpdate(bson.M{"$set": bson.M{"valueScale": u.NewScale}}))
+			SetUpdate(bson.M{"$set": fields}))
 	}
 	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
 	if err != nil {
