@@ -1,12 +1,12 @@
 package feedbackother
 
 // app.go — feedback-others worker: consumes erc8004.feedback.others,
-// runs LLM fallback to resolve the category, then grades with the shared routine.
+// runs LLM fallback to resolve the category, and persists it via UpdateFallback.
 //
-// All rule-undecided ("others") feedback lands here after the trustrank ingest path
-// publishes it to QueueFeedbackOthers.  The worker resolves the LLM verdict, writes
-// it back to MongoDB, grades the record using scoring.GradeFeedback, and updates
-// wallet counters — identical to what the old trustgraph handler did for the resolved-others arm.
+// All rule-undecided ("others") feedback lands here after the event-decoder publishes it
+// to QueueFeedbackOthers.  The worker resolves the LLM verdict and writes it back to
+// MongoDB.  Grading, wallet counters, weighting, and reputation are handled by the
+// score-refresh replay in the next cycle.
 
 import (
 	"context"
@@ -18,12 +18,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
-	"erc-8004-benchmarking-be/internal/domain/scoring"
 	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 // FeedbackRepository is the subset of feedbackrepo.Repository used by this worker.
@@ -31,13 +29,6 @@ import (
 type FeedbackRepository interface {
 	FindByID(ctx context.Context, id string) (*feedbackrepo.FeedbackRecord, error)
 	UpdateFallback(ctx context.Context, feedbackID string, f feedbackrepo.FallbackClassification) error
-	UpdateWeighting(ctx context.Context, feedbackID string, u feedbackrepo.WeightingUpdate) error
-}
-
-// WalletRepository is the subset of walletrepo.Repository used by this worker.
-type WalletRepository interface {
-	UpsertCold(ctx context.Context, chainID int64, address string, t0 float64) (*walletrepo.WalletDocument, bool, error)
-	IncrementFeedbackCounters(ctx context.Context, chainID int64, address string, isValid bool) error
 }
 
 // AgentRepository is the subset of agentrepo.Repository used by this worker.
@@ -48,33 +39,26 @@ type AgentRepository interface {
 
 // AppConfig holds runtime tunables.
 type AppConfig struct {
-	ColdStartT0 float64 // default trust for new wallets
-	Workers     int     // worker goroutines
-	Prefetch    int     // AMQP QoS prefetch
+	Workers  int // worker goroutines
+	Prefetch int // AMQP QoS prefetch
 }
 
 // Deps groups external dependencies.
 type Deps struct {
 	Conn         *amqp.Connection
 	FeedbackRepo FeedbackRepository
-	WalletRepo   WalletRepository
 	// AgentRepo is optional; when non-nil resolveLLM loads the agent's
 	// description/services/OASF so the classifier's domain stage has context.
 	AgentRepo AgentRepository
-	PropCfg   scoring.QualityWeightConfig
 	Cfg       AppConfig
-	// Classifier is optional; when nil all others records are held pending
-	// (persisted with verdict="pending", reason="llm unavailable").
+	// Classifier is optional; when nil (or when the LLM is down) handle()
+	// returns ErrTransient so the message is nack'd and requeued.
 	Classifier *classifier.HybridClassifier
-	// Publisher is optional; when non-nil, handle() publishes a
-	// WalletEnrichMessage whenever UpsertCold inserts a brand-new sender wallet.
-	Publisher mq.Publisher
 }
 
 // App is the feedback-others worker.
 type App struct {
-	deps        Deps
-	walletLocks sync.Map // map[string]*sync.Mutex — per-wallet serialization
+	deps Deps
 }
 
 // NewApp constructs App with sane defaults.
@@ -84,9 +68,6 @@ func NewApp(deps Deps) *App {
 	}
 	if deps.Cfg.Prefetch <= 0 {
 		deps.Cfg.Prefetch = 10
-	}
-	if deps.Cfg.ColdStartT0 <= 0 {
-		deps.Cfg.ColdStartT0 = 10
 	}
 	return &App{deps: deps}
 }
@@ -158,10 +139,4 @@ func (a *App) Run(ctx context.Context) error {
 	close(jobs)
 	wg.Wait()
 	return err
-}
-
-// walletMutex returns the per-address mutex, creating lazily.
-func (a *App) walletMutex(addr string) *sync.Mutex {
-	v, _ := a.walletLocks.LoadOrStore(addr, &sync.Mutex{})
-	return v.(*sync.Mutex)
 }

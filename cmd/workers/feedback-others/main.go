@@ -1,11 +1,11 @@
-// feedback-others consumes erc8004.feedback.others events, runs the LLM fallback
-// to resolve the category for rule-undecided feedback, then grades with the shared routine.
+// feedback-others consumes erc8004.feedback.others events and runs the LLM fallback
+// to resolve the category for rule-undecided feedback.  It persists the resolved category
+// via UpdateFallback only; grading and wallet updates are handled by the score-refresh replay.
 //
 // Required env vars: MONGO_URI, MONGO_DATABASE_ANALYZED_AGENTS, RABBITMQ_URI
-// Optional: MONGO_COLLECTION_WALLETS, MONGO_COLLECTION_FEEDBACK_HISTORY,
-//           MONGO_COLLECTION_AGENTS, MONGO_COLLECTION_AGENT_SCORE_STATS,
+// Optional: MONGO_COLLECTION_FEEDBACK_HISTORY, MONGO_COLLECTION_AGENTS,
+//           MONGO_COLLECTION_AGENT_SCORE_STATS,
 //           LLM_BASE_URL, AI_SERVICE_MODEL, LLM_TIMEOUT_SECONDS,
-//           TRUST_WEIGHT_COLD_START_T0, TRUST_WI_BASE,
 //           FEEDBACK_OTHERS_WORKERS, FEEDBACK_OTHERS_PREFETCH
 //           (fall back to TRUST_GRAPH_WORKERS / TRUST_GRAPH_PREFETCH for backward compat)
 package main
@@ -22,12 +22,9 @@ import (
 
 	"erc-8004-benchmarking-be/internal/app/feedbackother"
 	"erc-8004-benchmarking-be/internal/domain/classifier"
-	"erc-8004-benchmarking-be/internal/domain/scoring"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
-	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
-	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 func main() {
@@ -39,7 +36,6 @@ func main() {
 	defer mongoClient.Disconnect(ctx)
 
 	db := mongoClient.Database(mustEnv("MONGO_DATABASE_ANALYZED_AGENTS"))
-	walletRepo := walletrepo.NewRepository(db, envOr("MONGO_COLLECTION_WALLETS", "wallets"))
 	feedbackRepo := feedbackrepo.NewRepository(db, envOr("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"))
 	agentRepo := agentrepo.NewRepository(
 		db,
@@ -47,17 +43,9 @@ func main() {
 		envOr("MONGO_COLLECTION_AGENT_SCORE_STATS", "agent_score_stats"),
 	)
 
-	if err := walletRepo.EnsureIndexes(ctx); err != nil {
-		log.Printf("feedback-others: ensure wallet indexes: %v", err)
-	}
-
 	conn, err := amqp.Dial(mustEnv("RABBITMQ_URI"))
 	must(err, "rabbitmq connect")
 	defer conn.Close()
-
-	publisher, err := mqinfra.NewMultiPublisher(conn)
-	must(err, "rabbitmq multi-publisher")
-	defer publisher.Close()
 
 	var hybridClassifier *classifier.HybridClassifier
 	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
@@ -73,25 +61,18 @@ func main() {
 		hybridClassifier = classifier.NewHybridClassifier(ai)
 		log.Printf("feedback-others: AI fallback enabled at %s (model=%q)", llmURL, aiModel)
 	} else {
-		log.Println("feedback-others: LLM_BASE_URL not set; others feedback will be held pending")
+		log.Println("feedback-others: LLM_BASE_URL not set; others feedback will be nack'd until LLM is available")
 	}
-
-	propCfg := scoring.DefaultQualityWeightConfig()
-	propCfg.WiBase = envFloat("TRUST_WI_BASE", propCfg.WiBase)
 
 	app := feedbackother.NewApp(feedbackother.Deps{
 		Conn:         conn,
 		FeedbackRepo: feedbackRepo,
-		WalletRepo:   walletRepo,
 		AgentRepo:    agentRepo,
-		PropCfg:      propCfg,
 		Cfg: feedbackother.AppConfig{
-			ColdStartT0: envFloat("TRUST_WEIGHT_COLD_START_T0", 10.0),
-			Workers:     envIntAlias("FEEDBACK_OTHERS_WORKERS", "TRUST_GRAPH_WORKERS", 8),
-			Prefetch:    envIntAlias("FEEDBACK_OTHERS_PREFETCH", "TRUST_GRAPH_PREFETCH", 10),
+			Workers:  envIntAlias("FEEDBACK_OTHERS_WORKERS", "TRUST_GRAPH_WORKERS", 8),
+			Prefetch: envIntAlias("FEEDBACK_OTHERS_PREFETCH", "TRUST_GRAPH_PREFETCH", 10),
 		},
 		Classifier: hybridClassifier,
-		Publisher:  publisher,
 	})
 
 	log.Println("feedback-others: starting")
@@ -129,15 +110,6 @@ func mustEnv(k string) string {
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
-	}
-	return def
-}
-
-func envFloat(k string, def float64) float64 {
-	if v := os.Getenv(k); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
 	}
 	return def
 }
