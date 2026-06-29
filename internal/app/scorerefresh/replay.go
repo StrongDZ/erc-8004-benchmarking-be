@@ -121,7 +121,11 @@ func replayAgent(
 	}
 
 	for _, fb := range feedbacks {
-		if fb.IsRevoked || fb.IsSelfFeedback {
+		// Only revoked feedback is skipped wholesale. Self-feedback (IsSelfFeedback==true)
+		// flows through and is graded as "self"/junk (Gated:true, Wi:0) for the reviewer
+		// tally — restoring the anti-self-dealing penalty — but remains excluded from the
+		// agent's reputation mass via the quality-category guard below.
+		if fb.IsRevoked {
 			continue
 		}
 
