@@ -119,11 +119,5 @@ func (a *App) resolveLLM(ctx context.Context, fb *feedbackrepo.FeedbackRecord) e
 	if err := a.deps.FeedbackRepo.UpdateFallback(ctx, fb.ID, fallback); err != nil {
 		return err
 	}
-	// Mutate in place for consistency with the persisted state.
-	fb.Classification.Fallback = &fallback
-	fb.Category = fallback.Category
-	if fallback.Feature != "" {
-		fb.Feature = fallback.Feature
-	}
 	return nil
 }
