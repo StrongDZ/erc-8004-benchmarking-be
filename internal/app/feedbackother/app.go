@@ -60,9 +60,9 @@ type Deps struct {
 	WalletRepo   WalletRepository
 	// AgentRepo is optional; when non-nil resolveLLM loads the agent's
 	// description/services/OASF so the classifier's domain stage has context.
-	AgentRepo  AgentRepository
-	PropCfg    scoring.QualityWeightConfig
-	Cfg        AppConfig
+	AgentRepo AgentRepository
+	PropCfg   scoring.QualityWeightConfig
+	Cfg       AppConfig
 	// Classifier is optional; when nil all others records are held pending
 	// (persisted with verdict="pending", reason="llm unavailable").
 	Classifier *classifier.HybridClassifier
