@@ -88,7 +88,6 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 		ctx,
 		in.Tag1, in.Tag2,
 		valueNorm,
-		in.ValueDecimals,
 		in.OffchainContent,
 		in.AgentDescription,
 		in.AgentServices,

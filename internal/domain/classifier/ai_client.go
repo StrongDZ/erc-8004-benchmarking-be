@@ -77,7 +77,6 @@ type classifyRequest struct {
 	Tag1             string                `json:"tag1"`
 	Tag2             string                `json:"tag2"`
 	ValueNorm        float64               `json:"value_norm"`
-	ValueDecimals    int                   `json:"value_decimals,omitempty"`
 	Scale            string                `json:"scale,omitempty"`
 	OffchainContent  string                `json:"offchain_content,omitempty"`
 	Endpoint         string                `json:"endpoint,omitempty"`
@@ -97,7 +96,6 @@ func (c *AIClient) Classify(
 	ctx context.Context,
 	tag1, tag2 string,
 	valueNorm float64,
-	valueDecimals int,
 	offchainContent string,
 	agentDescription string,
 	agentServices []AgentServicePayload,
@@ -114,7 +112,6 @@ func (c *AIClient) Classify(
 		Tag1:             tag1,
 		Tag2:             tag2,
 		ValueNorm:        valueNorm,
-		ValueDecimals:    valueDecimals,
 		Scale:            scale,
 		OffchainContent:  offchainContent,
 		Endpoint:         endpoint,

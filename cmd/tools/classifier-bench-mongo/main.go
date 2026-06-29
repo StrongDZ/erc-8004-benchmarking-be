@@ -323,7 +323,7 @@ func main() {
 
 					callCtx, cancel := context.WithTimeout(gctx, time.Duration(*timeout+5)*time.Second)
 					t0 := time.Now()
-					res := client.Classify(callCtx, fb.Tag1, fb.Tag2, valueNorm, int(fb.ValueDecimals), off, am.description, am.services, am.oasfDomains, am.oasfSkills, am.tags, fb.Endpoint, scale)
+					res := client.Classify(callCtx, fb.Tag1, fb.Tag2, valueNorm, off, am.description, am.services, am.oasfDomains, am.oasfSkills, am.tags, fb.Endpoint, scale)
 					elapsed := time.Since(t0)
 					cancel()
 

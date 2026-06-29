@@ -11,7 +11,7 @@ import (
 
 // GradeResult holds the full grading outcome for one feedback record.
 type GradeResult struct {
-	Verdict      string  // "valid" | "junk" | "missing_fields" | "self"
+	Verdict      string // "valid" | "junk" | "missing_fields" | "self"
 	Reason       string
 	Confidence   float64
 	Gated        bool    // true when Verdict != "valid"

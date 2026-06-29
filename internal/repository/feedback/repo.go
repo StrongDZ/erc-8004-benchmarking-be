@@ -261,12 +261,12 @@ func (r *Repository) BulkUpdateValueScale(ctx context.Context, updates []ScaleUp
 // whose timestamp is before beforeUnix. Used by the rescale worker Phase 1 and 3.
 func (r *Repository) FindServiceFeedbacksByTagPair(ctx context.Context, tag1, tag2 string, beforeUnix int64) ([]FeedbackRecord, error) {
 	filter := bson.M{
-		"tag1":     tag1,
-		"tag2":     tag2,
-		"category": "quality",
-		"isRevoked":                    false,
-		"isSelfFeedback":               false,
-		"timestamp":                    bson.M{"$lt": beforeUnix},
+		"tag1":           tag1,
+		"tag2":           tag2,
+		"category":       "quality",
+		"isRevoked":      false,
+		"isSelfFeedback": false,
+		"timestamp":      bson.M{"$lt": beforeUnix},
 	}
 	opts := options.Find().SetSort(bson.D{{Key: "agentId", Value: 1}})
 	docs, err := r.Find(ctx, filter, opts)
