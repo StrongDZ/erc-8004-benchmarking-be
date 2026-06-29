@@ -16,7 +16,6 @@ import (
 	rescaleapp "erc-8004-benchmarking-be/internal/app/rescale"
 	"erc-8004-benchmarking-be/internal/config"
 	mongoclient "erc-8004-benchmarking-be/internal/infra/mongo"
-	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
 )
@@ -42,13 +41,9 @@ func main() {
 
 	analyzedDB := mc.Database(cfg.AnalyzedDatabase)
 
-	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	corrections := tagstatsrepo.NewCorrectionRepository(analyzedDB, cfg.TagCorrectionsColl)
 
-	if err := agents.EnsureIndexes(ctx); err != nil {
-		log.Fatalf("agents indexes: %v", err)
-	}
 	if err := feedbacks.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("feedback_history indexes: %v", err)
 	}
