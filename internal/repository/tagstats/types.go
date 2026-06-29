@@ -46,41 +46,24 @@ const (
 )
 
 // ScaleChangeCorrection is written to changed_tag_scales when the detected scale for a
-// (tag1, tag2) pair changes. It drives the rescale worker (Phase 1–4 retroactive correction).
+// (tag1, tag2) pair changes. It drives the rescale worker (Phase 3–4 retroactive correction).
 // _id == "{tag1}:{tag2}:v{scaleVersion}".
+// Score mass is reconciled by the next score-refresh replay cycle.
 type ScaleChangeCorrection struct {
 	ID   string `bson:"_id"`
 	Tag1 string `bson:"tag1"`
 	Tag2 string `bson:"tag2"`
 
-	OldScale string `bson:"oldScale"` // "" means first detection (null → newScale)
+	OldScale string `bson:"oldScale"` // "" means first detection (null → newScale); kept as audit data
 	NewScale string `bson:"newScale"`
 
-	DetectedAt int64                       `bson:"detectedAt"` // feedbacks before this timestamp are re-scored
-	Status     ScaleChangeCorrectionStatus `bson:"status"`
-
-	// Idempotency tracking across phases.
-	DeltaSnapshotReady bool   `bson:"deltaSnapshotReady"` // true after Phase 1 is complete
-	LastAgentIDCursor  string `bson:"lastAgentIDCursor"`  // agentID of last successfully committed agent
-	AgentsTotal        int64  `bson:"agentsTotal"`
-	AgentsProcessed    int64  `bson:"agentsProcessed"`
-	FeedbacksRescaled  int64  `bson:"feedbacksRescaled"`
+	DetectedAt        int64                       `bson:"detectedAt"`        // feedbacks before this timestamp are re-scored
+	Status            ScaleChangeCorrectionStatus `bson:"status"`
+	FeedbacksRescaled int64                       `bson:"feedbacksRescaled"` // incremented in Phase 3
 
 	StartedAt  int64  `bson:"startedAt,omitempty"`
 	FinishedAt int64  `bson:"finishedAt,omitempty"`
 	ErrorMsg   string `bson:"errorMsg,omitempty"`
-}
-
-// RescaleDelta stores the pre-computed reputationScore delta for one agent, keyed to a correction.
-// Written in Phase 1 (compute), consumed in Phase 2 (apply). One doc per (correctionID, agentID).
-// _id == "{correctionID}:{agentID}".
-type RescaleDelta struct {
-	ID           string `bson:"_id"`
-	CorrectionID string `bson:"correctionID"`
-	AgentID      string `bson:"agentID"`
-	ChainID      int64  `bson:"chainID"`
-	Delta        float64 `bson:"delta"` // Σ wi*(vi_new - vi_old)*decay
-	Applied      bool    `bson:"applied"`
 }
 
 // TierUpdate is an in-memory struct (not persisted) collected during Phase 2
@@ -100,9 +83,4 @@ type StatsRepository struct {
 // CorrectionRepository wraps the changed_tag_scales collection.
 type CorrectionRepository struct {
 	mongorepo.MongoRepoImpl[ScaleChangeCorrection]
-}
-
-// DeltaRepository wraps the rescale_deltas collection.
-type DeltaRepository struct {
-	mongorepo.MongoRepoImpl[RescaleDelta]
 }

@@ -1,6 +1,6 @@
 package tagstats
 
-// repo.go — Repositories for tag_value_stats, changed_tag_scales, rescale_deltas.
+// repo.go — Repositories for tag_value_stats and changed_tag_scales.
 
 import (
 	"context"
@@ -24,12 +24,6 @@ func NewStatsRepository(db *mongodrv.Database, collectionName string) *StatsRepo
 func NewCorrectionRepository(db *mongodrv.Database, collectionName string) *CorrectionRepository {
 	m := mongorepo.NewMongoRepo[ScaleChangeCorrection](db, collectionName)
 	return &CorrectionRepository{MongoRepoImpl: *m}
-}
-
-// NewDeltaRepository returns a DeltaRepository bound to the named collection.
-func NewDeltaRepository(db *mongodrv.Database, collectionName string) *DeltaRepository {
-	m := mongorepo.NewMongoRepo[RescaleDelta](db, collectionName)
-	return &DeltaRepository{MongoRepoImpl: *m}
 }
 
 // BulkIncrementTiers atomically increments the tier count and total count for each TierUpdate.
@@ -185,26 +179,6 @@ func (r *CorrectionRepository) ClaimPending(ctx context.Context, nowUnix int64) 
 	return &doc, nil
 }
 
-// SetDeltaSnapshotReady marks Phase 1 as complete.
-func (r *CorrectionRepository) SetDeltaSnapshotReady(ctx context.Context, correctionID string, agentsTotal int64) error {
-	_, err := r.UpdateOne(ctx, bson.M{"_id": correctionID}, bson.M{
-		"$set": bson.M{
-			"deltaSnapshotReady": true,
-			"agentsTotal":        agentsTotal,
-		},
-	})
-	return err
-}
-
-// UpdateCursor advances the idempotency cursor after an agent's delta is committed.
-func (r *CorrectionRepository) UpdateCursor(ctx context.Context, correctionID, agentID string) error {
-	_, err := r.UpdateOne(ctx, bson.M{"_id": correctionID}, bson.M{
-		"$set": bson.M{"lastAgentIDCursor": agentID},
-		"$inc": bson.M{"agentsProcessed": 1},
-	})
-	return err
-}
-
 // IncrFeedbacksRescaled increments the feedbacksRescaled counter.
 func (r *CorrectionRepository) IncrFeedbacksRescaled(ctx context.Context, correctionID string, n int64) error {
 	_, err := r.UpdateOne(ctx, bson.M{"_id": correctionID}, bson.M{
@@ -233,50 +207,5 @@ func (r *CorrectionRepository) MarkFailed(ctx context.Context, correctionID, err
 			"finishedAt": nowUnix,
 		},
 	})
-	return err
-}
-
-// ── DeltaRepository ───────────────────────────────────────────────────────────
-
-// BulkUpsertDeltas writes pre-computed per-agent deltas (Phase 1 output).
-func (r *DeltaRepository) BulkUpsertDeltas(ctx context.Context, deltas []RescaleDelta) error {
-	if len(deltas) == 0 {
-		return nil
-	}
-	var models []mongodrv.WriteModel
-	for _, d := range deltas {
-		models = append(models, mongodrv.NewUpdateOneModel().
-			SetFilter(bson.M{"_id": d.ID}).
-			SetUpdate(bson.M{"$setOnInsert": d}).
-			SetUpsert(true))
-	}
-	opts := options.BulkWrite().SetOrdered(false)
-	if _, err := r.BulkWrite(ctx, models, opts); err != nil {
-		return fmt.Errorf("delta repo: bulk upsert: %w", err)
-	}
-	return nil
-}
-
-// FindPendingForCorrection returns all unapplied deltas for a correction, sorted by agentID ASC,
-// skipping entries at or before lastAgentIDCursor (cursor-based resume).
-func (r *DeltaRepository) FindPendingForCorrection(ctx context.Context, correctionID, afterAgentID string) ([]RescaleDelta, error) {
-	filter := bson.M{
-		"correctionID": correctionID,
-		"applied":      false,
-	}
-	if afterAgentID != "" {
-		filter["agentID"] = bson.M{"$gt": afterAgentID}
-	}
-	opts := options.Find().SetSort(bson.D{{Key: "agentID", Value: 1}})
-	docs, err := r.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, fmt.Errorf("delta repo: find pending: %w", err)
-	}
-	return docs, nil
-}
-
-// MarkApplied marks a delta as applied (called within a session transaction).
-func (r *DeltaRepository) MarkApplied(ctx context.Context, deltaID string) error {
-	_, err := r.UpdateOne(ctx, bson.M{"_id": deltaID}, bson.M{"$set": bson.M{"applied": true}})
 	return err
 }

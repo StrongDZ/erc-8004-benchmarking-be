@@ -27,7 +27,6 @@ type Config struct {
 	FeedbackHistColl        string
 	TagStatsColl            string // tag_value_stats — per-tag tier vote counters
 	TagCorrectionsColl      string // changed_tag_scales — rescale correction queue
-	RescaleDeltasColl       string // rescale_deltas — pre-computed per-agent deltas
 	ScoreStatsColl          string // agent_score_stats — periodic materialized view
 	WalletColl              string // wallets — unified wallet trust nodes
 	WalletExternalCacheColl string // wallet_external_cache — permanent RPC/Etherscan enrichment cache (erc8004 db, survives analyzed_agents resets)
@@ -186,7 +185,6 @@ func Load() (Config, error) {
 		FeedbackHistColl:        utils.Getenv("MONGO_COLLECTION_FEEDBACK_HISTORY", "feedback_history"),
 		TagStatsColl:            utils.Getenv("MONGO_COLLECTION_TAG_VALUE_STATS", "tag_value_stats"),
 		TagCorrectionsColl:      utils.Getenv("MONGO_COLLECTION_TAG_CORRECTIONS", "changed_tag_scales"),
-		RescaleDeltasColl:       utils.Getenv("MONGO_COLLECTION_RESCALE_DELTAS", "rescale_deltas"),
 		ScoreStatsColl:          utils.Getenv("MONGO_COLLECTION_SCORE_STATS", "agent_score_stats"),
 		WalletColl:              utils.Getenv("MONGO_COLLECTION_WALLETS", "wallets"),
 		WalletExternalCacheColl: utils.Getenv("MONGO_COLLECTION_WALLET_EXTERNAL_CACHE", "wallet_external_cache"),
