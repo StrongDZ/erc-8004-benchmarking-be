@@ -13,7 +13,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
-	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	rmqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	"erc-8004-benchmarking-be/internal/mq"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
@@ -36,7 +36,7 @@ type Deps struct {
 	// AgentRepo is optional; when non-nil resolveLLMFallback loads the agent's
 	// description/services/OASF so the classifier's domain stage has context.
 	AgentRepo *agentrepo.Repository
-	PropCfg   propagation.PropagationConfig
+	PropCfg   scoring.QualityWeightConfig
 	Cfg          AppConfig
 	// Classifier is optional; when non-nil the worker calls the LLM for
 	// feedback records where rule.category="others" and fallback is absent.

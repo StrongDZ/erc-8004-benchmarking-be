@@ -1,16 +1,16 @@
 package trustgraph
 
-// extract_quality.go — Extracts propagation.QualityInput from FeedbackParsed.
+// extract_quality.go — Extracts scoring.FeedbackQualityInput from FeedbackParsed.
 // All extractions are best-effort; missing/wrong-typed fields default to zero.
 
 import (
-	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 )
 
-func extractQualityInput(fb feedback.FeedbackRecord, classifierConfidence float64) propagation.QualityInput {
+func extractQualityInput(fb feedback.FeedbackRecord, classifierConfidence float64) scoring.FeedbackQualityInput {
 	p := fb.FeedbackParsed
-	return propagation.QualityInput{
+	return scoring.FeedbackQualityInput{
 		ReasoningLen:         parsedStringLen(p, "reasoning"),
 		AttachmentCount:      parsedArrayLen(p, "attachments"),
 		HasRatingBreakdown:   parsedHasKey(p, "rating_breakdown"),

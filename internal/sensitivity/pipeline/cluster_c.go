@@ -16,14 +16,14 @@ package pipeline
 // Parameters: 5 Q-weights (sum=1), ReasoningLenFull, AttachmentCountFull, WiBase.
 
 import (
-	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/sensitivity/runner"
 	"erc-8004-benchmarking-be/internal/sensitivity/snapshot"
 )
 
 // ClusterCParamSpecs returns the canonical Cluster-C parameter list with sweep ranges.
 func ClusterCParamSpecs() []runner.ParamSpec {
-	def := propagation.DefaultPropagationConfig()
+	def := scoring.DefaultQualityWeightConfig()
 	return []runner.ParamSpec{
 		{Name: "QWeightReasoning", Default: def.QWeightReasoning, Low: 0.05, High: 0.50},
 		{Name: "QWeightAttachment", Default: def.QWeightAttachment, Low: 0.05, High: 0.50},
@@ -55,7 +55,7 @@ func ClusterCRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
 	}
 
 	return func(cfg map[string]float64) map[string]float64 {
-		pc := propagation.PropagationConfig{
+		pc := scoring.QualityWeightConfig{
 			WiBase:              cfg["WiBase"],
 			QWeightReasoning:    cfg["QWeightReasoning"],
 			QWeightAttachment:   cfg["QWeightAttachment"],
@@ -85,14 +85,14 @@ func ClusterCRecompute(data snapshot.SnapshotData) runner.RecomputeFn {
 			}
 			var sum float64
 			for _, fb := range fbs {
-				q := propagation.ComputeQualityScore(pc, propagation.QualityInput{
+				q := scoring.ComputeFeedbackQuality(pc, scoring.FeedbackQualityInput{
 					ReasoningLen:         fb.ReasoningLen,
 					AttachmentCount:      fb.AttachmentCount,
 					HasRatingBreakdown:   fb.HasRatingBreakdown,
 					HasProofOfPayment:    fb.HasProofOfPayment,
 					ClassifierConfidence: fb.ClassifierConfidence,
 				})
-				sum += propagation.ComputeWeight(pc, q)
+				sum += scoring.ComputeFeedbackQualityWeight(pc, q)
 			}
 			out[a.ID] = sum / float64(len(fbs))
 		}

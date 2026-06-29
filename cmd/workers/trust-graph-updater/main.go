@@ -19,7 +19,7 @@ import (
 
 	"erc-8004-benchmarking-be/internal/app/trustgraph"
 	"erc-8004-benchmarking-be/internal/domain/classifier"
-	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
 	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
@@ -69,7 +69,7 @@ func main() {
 		log.Println("trust-graph-updater: LLM_BASE_URL not set; LLM fallback disabled (others → requeue)")
 	}
 
-	propCfg := propagation.DefaultPropagationConfig()
+	propCfg := scoring.DefaultQualityWeightConfig()
 	propCfg.WiBase = envFloat("TRUST_WI_BASE", propCfg.WiBase)
 
 	app := trustgraph.NewApp(trustgraph.Deps{

@@ -22,7 +22,7 @@ import (
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
-	"erc-8004-benchmarking-be/internal/domain/propagation"
+	"erc-8004-benchmarking-be/internal/domain/scoring"
 	"erc-8004-benchmarking-be/internal/mq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
@@ -90,8 +90,8 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	var wi, qualityScore float64
 	if !verdict.IsGated() {
 		qi := extractQualityInput(*fb, verdict.Confidence)
-		qualityScore = propagation.ComputeQualityScore(a.deps.PropCfg, qi)
-		wi = propagation.ComputeWeight(a.deps.PropCfg, qualityScore)
+		qualityScore = scoring.ComputeFeedbackQuality(a.deps.PropCfg, qi)
+		wi = scoring.ComputeFeedbackQualityWeight(a.deps.PropCfg, qualityScore)
 	}
 
 	// 6. Write feedback weighting.
