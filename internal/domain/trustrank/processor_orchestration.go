@@ -30,7 +30,8 @@ import (
 // NewProcessor constructs a Processor with all required dependencies.
 // uriPublisher may be nil; when set, service endpoint URIs discovered during
 // identity event processing are published to the service_uri queue.
-// fbPublisher may be nil; when set, classified feedback IDs are published to QueueFeedbackClassified.
+// fbPublisher may be nil; when set, rule-undecided ("others") feedback IDs are published to QueueFeedbackOthers,
+// and brand-new sender wallets are published to QueueWalletEnrich.
 // descPublisher may be nil; when set, agent description-summary jobs are published to QueueAgentDescSummary.
 // tagStatsRepo / tagCorrsRepo may be nil to disable dynamic scale detection.
 func NewProcessor(
@@ -40,6 +41,7 @@ func NewProcessor(
 	feedbackRepo *feedback.Repository,
 	offchainRepo *offchain.Repository,
 	formulaCfg scoring.FormulaConfig,
+	qualityWeightCfg scoring.QualityWeightConfig,
 	compositeWeights scoring.CompositeWeights,
 	uriPublisher URIPublisher,
 	fbPublisher FeedbackPublisher,
@@ -60,6 +62,7 @@ func NewProcessor(
 		feedbackRepo:     feedbackRepo,
 		offchainRepo:     offchainRepo,
 		formulaCfg:       formulaCfg,
+		qualityWeightCfg: qualityWeightCfg,
 		compositeWeights: compositeWeights,
 		uriPublisher:     uriPublisher,
 		fbPublisher:      fbPublisher,
@@ -280,40 +283,79 @@ func filterUngradedFeedbacks(ctx context.Context, repo *feedback.Repository, pen
 	return out, skipped, nil
 }
 
-// publishClassifiedFeedback enqueues trust-graph jobs only for feedback that is not yet graded.
-func (p *Processor) publishClassifiedFeedback(ctx context.Context, toUpsert []feedback.FeedbackRecord) {
-	if p.fbPublisher == nil || len(toUpsert) == 0 {
+// publishOthersFeedback enqueues async grading jobs only for rule-undecided
+// ("others") feedback that is not yet graded. Rule-decided feedback is graded
+// inline at ingest and is never published here. The IsGraded skip-guard is a
+// redelivery safety: if a prior others row was already graded by the async
+// worker, it is not republished.
+func (p *Processor) publishOthersFeedback(ctx context.Context, bs *batchState) {
+	if p.fbPublisher == nil || len(bs.pendingOthers) == 0 {
 		return
 	}
-	ids := make([]string, 0, len(toUpsert))
-	for i := range toUpsert {
-		toUpsert[i].ID = feedback.FeedbackDocumentID(toUpsert[i].ChainID, toUpsert[i].AgentID, toUpsert[i].ClientAddress, toUpsert[i].FeedbackIndex)
-		ids = append(ids, toUpsert[i].ID)
-	}
-	existing, err := p.feedbackRepo.FindByIDs(ctx, ids)
+	existing, err := p.feedbackRepo.FindByIDs(ctx, bs.pendingOthers)
 	if err != nil {
-		log.Printf("processor: publish guard lookup: %v", err)
+		log.Printf("processor: publish others guard lookup: %v", err)
 	}
-	verdictByID := make(map[string]string, len(existing))
+	graded := make(map[string]bool, len(existing))
 	for i := range existing {
-		verdictByID[existing[i].ID] = existing[i].ValidationVerdict
+		if feedback.IsGraded(existing[i].ValidationVerdict) {
+			graded[existing[i].ID] = true
+		}
 	}
 	var published, skippedPublishGraded int
-	for i := range toUpsert {
-		fb := &toUpsert[i]
-		if feedback.IsGraded(verdictByID[fb.ID]) {
+	for _, id := range bs.pendingOthers {
+		if graded[id] {
 			skippedPublishGraded++
 			continue
 		}
-		pubMsg := mq.FeedbackClassifiedMessage{FeedbackID: fb.ID, ChainID: fb.ChainID}
-		if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackClassified, pubMsg); err != nil {
-			log.Printf("processor: publish feedback.classified (%s): %v", fb.ID, err)
+		pubMsg := mq.FeedbackOthersMessage{FeedbackID: id, ChainID: bs.chainID}
+		if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackOthers, pubMsg); err != nil {
+			log.Printf("processor: publish feedback.others (%s): %v", id, err)
 			continue
 		}
 		published++
 	}
 	if published > 0 || skippedPublishGraded > 0 {
-		log.Printf("processor: feedback.classified batch published=%d skipped_publish_graded=%d", published, skippedPublishGraded)
+		log.Printf("processor: feedback.others batch published=%d skipped_publish_graded=%d", published, skippedPublishGraded)
+	}
+}
+
+// applyFeedbackIntents applies the sender-wallet + reviewer-counter intents
+// accumulated during inline grading. Sender-wallet UpsertCold calls are de-duped
+// per (chainID, lowercased address); each new wallet triggers a wallet-enrich
+// publish. Counter increments are atomic ($inc) and applied once per feedback.
+func (p *Processor) applyFeedbackIntents(ctx context.Context, bs *batchState) {
+	if p.walletRepo == nil {
+		return
+	}
+	seen := make(map[string]bool, len(bs.pendingSenderWallets))
+	for _, w := range bs.pendingSenderWallets {
+		addr := utils.NormalizeAddress(w.addr)
+		if addr == "" {
+			continue
+		}
+		key := wallet.WalletDocumentID(w.chainID, addr)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		_, wasNew, err := p.walletRepo.UpsertCold(ctx, w.chainID, addr, p.coldStartT0)
+		if err != nil {
+			log.Printf("processor: upsert sender wallet (chain=%d addr=%s): %v", w.chainID, addr, err)
+			continue
+		}
+		if pubErr := mq.PublishWalletEnrich(ctx, p.fbPublisher, wasNew, w.chainID, addr); pubErr != nil {
+			log.Printf("processor: publish wallet enrich sender (chain=%d addr=%s): %v", w.chainID, addr, pubErr)
+		}
+	}
+	for _, c := range bs.pendingCounters {
+		addr := utils.NormalizeAddress(c.addr)
+		if addr == "" {
+			continue
+		}
+		if err := p.walletRepo.IncrementFeedbackCounters(ctx, c.chainID, addr, c.valid); err != nil {
+			log.Printf("processor: increment feedback counters (chain=%d addr=%s): %v", c.chainID, addr, err)
+		}
 	}
 }
 
@@ -344,7 +386,10 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 	if err := p.feedbackRepo.BulkUpsert(ctx, toUpsert); err != nil {
 		return fmt.Errorf("flush feedback: %w", err)
 	}
-	p.publishClassifiedFeedback(ctx, toUpsert)
+	// Apply inline-grading side effects (sender wallets + reviewer counters), then
+	// publish only rule-undecided ("others") feedback for async LLM grading.
+	p.applyFeedbackIntents(ctx, bs)
+	p.publishOthersFeedback(ctx, bs)
 
 	if err := p.feedbackRepo.BulkUpdate(ctx, bs.pendingFBUpdates); err != nil {
 		return fmt.Errorf("flush feedback updates: %w", err)

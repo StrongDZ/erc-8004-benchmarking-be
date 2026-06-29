@@ -17,6 +17,7 @@ const (
 	QueueRawLogs             = "erc8004.raw_logs"
 	QueueAgentURI            = "erc8004.agent_uri"
 	QueueFeedbackClassified  = "erc8004.feedback.classified"
+	QueueFeedbackOthers      = "erc8004.feedback.others"
 	QueueAgentDescSummary    = "erc8004.agent.desc.summary"
 	QueueWalletEnrich        = "erc8004.wallet_enrich"
 	QueueScoreRefreshTrigger = "erc8004.scorerefresh.trigger"
@@ -87,6 +88,16 @@ type ServiceURIMessage struct {
 // FeedbackClassifiedMessage is published to QueueFeedbackClassified by the trustrank
 // processor after a feedback record has been classified and written to feedback_history.
 type FeedbackClassifiedMessage struct {
+	FeedbackID string `json:"feedbackId"`
+	ChainID    int64  `json:"chainId"`
+}
+
+// FeedbackOthersMessage is published to QueueFeedbackOthers by the trustrank
+// processor for feedback the rule classifier could not decide (category "others").
+// These rows are written ungraded; the async others-grader consumes them, runs the
+// LLM fallback, and persists the verdict/weighting. Rule-decided feedback is graded
+// inline at ingest and is never published here.
+type FeedbackOthersMessage struct {
 	FeedbackID string `json:"feedbackId"`
 	ChainID    int64  `json:"chainId"`
 }

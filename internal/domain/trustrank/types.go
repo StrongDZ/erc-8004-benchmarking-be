@@ -286,6 +286,7 @@ type Processor struct {
 	feedbackRepo     *feedback.Repository
 	offchainRepo     *offchain.Repository
 	formulaCfg       scoring.FormulaConfig
+	qualityWeightCfg scoring.QualityWeightConfig // hyperparameters for inline feedback grading (Wi / quality)
 	compositeWeights scoring.CompositeWeights
 	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
 	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
@@ -296,6 +297,20 @@ type Processor struct {
 	tagCorrsRepo     *tagstats.CorrectionRepository
 	tagScaleCache    sync.Map // tag1 -> cachedScale
 	minSamples       int      // minimum feedbacks before scale is locked
+}
+
+// counterIntent records a reviewer-counter increment to apply during flush.
+// valid picks the valid vs junk counter (valid == !graded.Gated).
+type counterIntent struct {
+	chainID int64
+	addr    string
+	valid   bool
+}
+
+// walletIntent records a sender-wallet UpsertCold to ensure during flush.
+type walletIntent struct {
+	chainID int64
+	addr    string
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.
@@ -315,5 +330,8 @@ type batchState struct {
 	pendingServiceURIs  []mq.ServiceURIMessage       // service endpoint URIs to publish asynchronously
 	pendingDescSummary  []mq.AgentDescSummaryMessage // description-summary jobs to publish asynchronously
 	pendingTierUpdates []tagstats.TierUpdate  // tag scale votes to flush in Phase 3
+	pendingOthers        []string        // feedback IDs (category "others") to publish to feedback.others
+	pendingCounters      []counterIntent // reviewer-counter increments for graded non-others feedback
+	pendingSenderWallets []walletIntent  // sender-wallet upserts for graded non-others feedback
 	dirtyAgents        map[string]bool        // agentIDs that were created or mutated
 }

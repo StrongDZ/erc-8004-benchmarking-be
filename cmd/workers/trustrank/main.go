@@ -150,7 +150,11 @@ func main() {
 		Compliance: cfg.ScoreWeightCompliance,
 	}
 
-	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, compositeWeights, publisher, fbPub, descPub, tagStats, tagCorrs, cfg.TagStatsMinSamples, wallets, coldStartT0)
+	// Inline feedback grading hyperparameters; WiBase overridable via TRUST_WI_BASE.
+	qualityWeightCfg := scoring.DefaultQualityWeightConfig()
+	qualityWeightCfg.WiBase = envFloat("TRUST_WI_BASE", qualityWeightCfg.WiBase)
+
+	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, qualityWeightCfg, compositeWeights, publisher, fbPub, descPub, tagStats, tagCorrs, cfg.TagStatsMinSamples, wallets, coldStartT0)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,

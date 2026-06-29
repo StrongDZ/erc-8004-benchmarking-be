@@ -117,17 +117,6 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		bs.pendingTierUpdates = append(bs.pendingTierUpdates, tu)
 	}
 
-	wi := bs.formulaCfg.Alpha
-
-	var adjustments []scoring.WiAdjustment
-	if adj, ok := scoring.LowConfidenceAdjustment(cls.Confidence); ok {
-		adjustments = append(adjustments, adj)
-	}
-	if cls.Category == classifier.CategoryQuality {
-		adjustments = append(adjustments, scoring.ServiceFeedbackBonus(feedbackURI, bs.uriMap[feedbackURI]))
-	}
-	wi = scoring.ApplyAdjustments(wi, adjustments)
-
 	fbRecord := feedback.FeedbackRecord{
 		AgentID:        agentID,
 		ChainID:        bs.chainID,
@@ -141,7 +130,6 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		FeedbackURI:    feedbackURI,
 		FeedbackHash:   feedbackHash,
 		FeedbackParsed: feedbackParsed,
-		Wi:             wi,
 		ValueScale:     scale,
 		IsSelfFeedback:      isSelf,
 		Type:           "reputation_feedback",
@@ -155,11 +143,18 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 			Rule: feedback.RuleClassification{Category: string(cls.Category), Feature: string(cls.Feature)},
 		},
 	}
+
+	// Grade inline before persisting so the row carries verdict/Wi/qualityScore.
+	// "others" (rule undecided) is left ungraded and escalated to the async queue;
+	// every rule-decided category — including self and junk — is graded here and
+	// gets a reviewer-counter + sender-wallet intent applied during flush.
+	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
+	p.gradeFeedbackInline(bs, &fbRecord, fbID, ev.Timestamp)
+
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
 	agentDoc.TotalFeedbacks++
 	bs.dirtyAgents[agentID] = true
 
-	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	bs.fbMap[fbID] = &fbRecord
 
 	// Skip scoring for self-feedback, junk, anomalous values, or non-quality categories.
@@ -191,7 +186,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 
 	// v2 weighted-mean state: decay the two mass accumulators forward and add this
 	// feedback's contribution. A = Σ wᵢ·dᵢ·vᵢ, B = Σ wᵢ·dᵢ.
-	newA, newB := scoring.ApplyFeedbackToMass(prev.WeightedScoreSum, prev.WeightMass, prev.ScoreUpdateAt, wi, vi, ev.Timestamp, bs.formulaCfg)
+	newA, newB := scoring.ApplyFeedbackToMass(prev.WeightedScoreSum, prev.WeightMass, prev.ScoreUpdateAt, fbRecord.Wi, vi, ev.Timestamp, bs.formulaCfg)
 	newTotalTasks := prev.TotalTasks + 1
 
 	var newPassed, newFailed, newConsecFails int64
@@ -215,7 +210,7 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 		newServiceScores = upsertServiceReputation(
 			prev.ServiceScores,
 			matchedSvc,
-			wi,
+			fbRecord.Wi,
 			vi,
 			ev.Timestamp,
 			bs.formulaCfg,
@@ -256,6 +251,32 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	}}); err != nil {
 		log.Printf("trustrank: sync agent score chain=%d agent=%s: %v", bs.chainID, agentID, err)
 	}
+}
+
+// gradeFeedbackInline grades a freshly built feedback record at ingest.
+//
+//   - "others" (rule could not decide): left ungraded — no verdict, no Wi, no
+//     counters, no wallet — and its ID is queued for async LLM grading.
+//   - every rule-decided category (quality, quantity, junk, and self — which
+//     classifies as junk): graded via scoring.GradeFeedback. The verdict/Wi/
+//     qualityScore are stamped onto the record, and a reviewer-counter +
+//     sender-wallet intent is recorded for flush. Gated verdicts (self / junk /
+//     missing_fields) yield Wi 0 and increment the junk counter; "valid" yields
+//     Wi ≥ WiBase and increments the valid counter. This mirrors the old async
+//     grader, which processed EVERY non-"others" feedback (self and junk included).
+func (p *Processor) gradeFeedbackInline(bs *batchState, fbRecord *feedback.FeedbackRecord, fbID string, computedAt int64) {
+	if fbRecord.Category == string(classifier.CategoryOthers) {
+		bs.pendingOthers = append(bs.pendingOthers, fbID)
+		return
+	}
+	g := scoring.GradeFeedback(*fbRecord, p.qualityWeightCfg)
+	fbRecord.Wi = g.Wi
+	fbRecord.QualityScore = g.QualityScore
+	fbRecord.ValidationVerdict = g.Verdict
+	fbRecord.ValidationReason = g.Reason
+	fbRecord.WiComputedAt = computedAt
+	bs.pendingCounters = append(bs.pendingCounters, counterIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress, valid: !g.Gated})
+	bs.pendingSenderWallets = append(bs.pendingSenderWallets, walletIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress})
 }
 
 func upsertServiceReputation(
