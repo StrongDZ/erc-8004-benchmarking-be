@@ -29,7 +29,6 @@ import (
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
-	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	tagstatsrepo "erc-8004-benchmarking-be/internal/repository/tagstats"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -65,7 +64,6 @@ func main() {
 	cfgRepo := configrepo.NewConfigRepository(db, cfg.ConfigColl)
 	eventsRepo := eventrepo.NewRepository(db, cfg.EventsColl)
 	agents := agentrepo.NewRepository(analyzedDB, cfg.AgentsColl, cfg.ScoreStatsColl)
-	stats := scorestatsrepo.NewRepository(analyzedDB, cfg.ScoreStatsColl)
 	identities := identityrepo.NewRepository(analyzedDB, cfg.IdentityHistColl)
 	feedbacks := feedbackrepo.NewRepository(analyzedDB, cfg.FeedbackHistColl)
 	offchain := offchainrepo.NewRepository(db, cfg.OffchainColl)
@@ -142,19 +140,7 @@ func main() {
 		SBase:        0.0,
 	}
 
-	compositeWeights := scoring.CompositeWeights{
-		Reputation: cfg.ScoreWeightReputation,
-		Adoption:   cfg.ScoreWeightAdoption,
-		Services:   cfg.ScoreWeightServices,
-		Publisher:  cfg.ScoreWeightPublisher,
-		Compliance: cfg.ScoreWeightCompliance,
-	}
-
-	// Inline feedback grading hyperparameters; WiBase overridable via TRUST_WI_BASE.
-	qualityWeightCfg := scoring.DefaultQualityWeightConfig()
-	qualityWeightCfg.WiBase = envFloat("TRUST_WI_BASE", qualityWeightCfg.WiBase)
-
-	proc := domaintrustrank.NewProcessor(agents, stats, identities, feedbacks, offchain, formulaCfg, qualityWeightCfg, compositeWeights, publisher, fbPub, descPub, tagStats, tagCorrs, cfg.TagStatsMinSamples, wallets, coldStartT0)
+	proc := domaintrustrank.NewProcessor(agents, identities, feedbacks, offchain, formulaCfg, publisher, fbPub, descPub, tagStats, tagCorrs, cfg.TagStatsMinSamples, wallets, coldStartT0)
 
 	app := trustrankapp.NewApp(
 		contractsRepo,

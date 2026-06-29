@@ -17,7 +17,6 @@ import (
 	"erc-8004-benchmarking-be/internal/repository/feedback"
 	identityrepo "erc-8004-benchmarking-be/internal/repository/identity"
 	"erc-8004-benchmarking-be/internal/repository/offchain"
-	"erc-8004-benchmarking-be/internal/repository/scorestats"
 	"erc-8004-benchmarking-be/internal/repository/tagstats"
 	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
@@ -280,42 +279,20 @@ type cachedScale struct {
 
 // Processor implements EventProcessor with real domain logic.
 type Processor struct {
-	agentRepo        *agent.Repository
-	statsRepo        *scorestats.Repository
-	identityRepo     *identityrepo.Repository
-	feedbackRepo     *feedback.Repository
-	offchainRepo     *offchain.Repository
-	formulaCfg       scoring.FormulaConfig
-	qualityWeightCfg scoring.QualityWeightConfig // hyperparameters for inline feedback grading (Wi / quality)
-	compositeWeights scoring.CompositeWeights
-	uriPublisher     URIPublisher    // may be nil; publishes service endpoint URIs asynchronously
-	fbPublisher      FeedbackPublisher // may be nil; publishes classified feedback IDs
-	descPublisher    DescSummaryPublisher // may be nil; publishes agent description-summary jobs
-	walletRepo       *wallet.Repository // may be nil; syncs owner → wallets for trust graph
-	coldStartT0      float64            // initial trustScore for new owner wallets
-	tagStatsRepo     *tagstats.StatsRepository
-	tagCorrsRepo     *tagstats.CorrectionRepository
-	tagScaleCache    sync.Map // tag1 -> cachedScale
-	minSamples       int      // minimum feedbacks before scale is locked
-}
-
-// counterIntent records a reviewer-counter increment to apply during flush.
-// valid picks the valid vs junk counter (valid == !graded.Gated).
-// fbID is the feedback document _id; only intents whose fbID survived
-// filterUngradedFeedbacks are applied (prevents replay double-counting).
-type counterIntent struct {
-	chainID int64
-	addr    string
-	valid   bool
-	fbID    string
-}
-
-// walletIntent records a sender-wallet UpsertCold to ensure during flush.
-// fbID gates application to un-graded feedbacks only (see counterIntent).
-type walletIntent struct {
-	chainID int64
-	addr    string
-	fbID    string
+	agentRepo     *agent.Repository
+	identityRepo  *identityrepo.Repository
+	feedbackRepo  *feedback.Repository
+	offchainRepo  *offchain.Repository
+	formulaCfg    scoring.FormulaConfig
+	uriPublisher  URIPublisher         // may be nil; publishes service endpoint URIs asynchronously
+	fbPublisher   FeedbackPublisher    // may be nil; publishes classified feedback IDs
+	descPublisher DescSummaryPublisher // may be nil; publishes agent description-summary jobs
+	walletRepo    *wallet.Repository   // may be nil; syncs owner → wallets for trust graph
+	coldStartT0   float64              // initial trustScore for new owner wallets
+	tagStatsRepo  *tagstats.StatsRepository
+	tagCorrsRepo  *tagstats.CorrectionRepository
+	tagScaleCache sync.Map // tag1 -> cachedScale
+	minSamples    int      // minimum feedbacks before scale is locked
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.
@@ -332,11 +309,9 @@ type batchState struct {
 	pendingIdentity    []identityrepo.IdentityChange
 	pendingFeedbacks   []feedback.FeedbackRecord
 	pendingFBUpdates   []feedback.FeedbackUpdate
-	pendingServiceURIs  []mq.ServiceURIMessage       // service endpoint URIs to publish asynchronously
-	pendingDescSummary  []mq.AgentDescSummaryMessage // description-summary jobs to publish asynchronously
-	pendingTierUpdates []tagstats.TierUpdate  // tag scale votes to flush in Phase 3
-	pendingOthers        []string        // feedback IDs (category "others") to publish to feedback.others
-	pendingCounters      []counterIntent // reviewer-counter increments for graded non-others feedback
-	pendingSenderWallets []walletIntent  // sender-wallet upserts for graded non-others feedback
-	dirtyAgents        map[string]bool        // agentIDs that were created or mutated
+	pendingServiceURIs []mq.ServiceURIMessage       // service endpoint URIs to publish asynchronously
+	pendingDescSummary []mq.AgentDescSummaryMessage // description-summary jobs to publish asynchronously
+	pendingTierUpdates []tagstats.TierUpdate        // tag scale votes to flush in Phase 3
+	pendingOthers      []string                     // feedback IDs (category "others") to publish to feedback.others
+	dirtyAgents        map[string]bool              // agentIDs that were created or mutated
 }
