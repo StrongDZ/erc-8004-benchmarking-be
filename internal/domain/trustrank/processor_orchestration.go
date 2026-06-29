@@ -320,16 +320,35 @@ func (p *Processor) publishOthersFeedback(ctx context.Context, bs *batchState) {
 	}
 }
 
+// survivingFeedbackIDSet builds the set of feedback document IDs that survived
+// filterUngradedFeedbacks and will actually be written this flush. Only intents
+// whose fbID is in this set should be applied; intents for already-graded rows
+// must be skipped to prevent replay double-counting of reviewer counters.
+func survivingFeedbackIDSet(toUpsert []feedback.FeedbackRecord) map[string]bool {
+	out := make(map[string]bool, len(toUpsert))
+	for i := range toUpsert {
+		id := feedback.FeedbackDocumentID(toUpsert[i].ChainID, toUpsert[i].AgentID, toUpsert[i].ClientAddress, toUpsert[i].FeedbackIndex)
+		out[id] = true
+	}
+	return out
+}
+
 // applyFeedbackIntents applies the sender-wallet + reviewer-counter intents
-// accumulated during inline grading. Sender-wallet UpsertCold calls are de-duped
-// per (chainID, lowercased address); each new wallet triggers a wallet-enrich
-// publish. Counter increments are atomic ($inc) and applied once per feedback.
-func (p *Processor) applyFeedbackIntents(ctx context.Context, bs *batchState) {
+// accumulated during inline grading, but ONLY for feedbacks whose fbID appears
+// in survivingIDs (i.e. survived filterUngradedFeedbacks this flush).
+// Skipping intents for already-graded rows prevents replay double-counting of
+// IncrementFeedbackCounters, which is a non-idempotent Mongo $inc.
+// Sender-wallet UpsertCold calls are de-duped per (chainID, lowercased address);
+// each new wallet triggers a wallet-enrich publish.
+func (p *Processor) applyFeedbackIntents(ctx context.Context, bs *batchState, survivingIDs map[string]bool) {
 	if p.walletRepo == nil {
 		return
 	}
 	seen := make(map[string]bool, len(bs.pendingSenderWallets))
 	for _, w := range bs.pendingSenderWallets {
+		if !survivingIDs[w.fbID] {
+			continue
+		}
 		addr := utils.NormalizeAddress(w.addr)
 		if addr == "" {
 			continue
@@ -349,6 +368,9 @@ func (p *Processor) applyFeedbackIntents(ctx context.Context, bs *batchState) {
 		}
 	}
 	for _, c := range bs.pendingCounters {
+		if !survivingIDs[c.fbID] {
+			continue
+		}
 		addr := utils.NormalizeAddress(c.addr)
 		if addr == "" {
 			continue
@@ -386,9 +408,11 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 	if err := p.feedbackRepo.BulkUpsert(ctx, toUpsert); err != nil {
 		return fmt.Errorf("flush feedback: %w", err)
 	}
-	// Apply inline-grading side effects (sender wallets + reviewer counters), then
-	// publish only rule-undecided ("others") feedback for async LLM grading.
-	p.applyFeedbackIntents(ctx, bs)
+	// Apply inline-grading side effects only for feedbacks that were NOT already
+	// graded in a prior run (i.e. those that survived filterUngradedFeedbacks).
+	// This prevents replay double-counting of reviewer counters ($inc is not idempotent).
+	survivingIDs := survivingFeedbackIDSet(toUpsert)
+	p.applyFeedbackIntents(ctx, bs, survivingIDs)
 	p.publishOthersFeedback(ctx, bs)
 
 	if err := p.feedbackRepo.BulkUpdate(ctx, bs.pendingFBUpdates); err != nil {

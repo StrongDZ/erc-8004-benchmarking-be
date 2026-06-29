@@ -275,8 +275,8 @@ func (p *Processor) gradeFeedbackInline(bs *batchState, fbRecord *feedback.Feedb
 	fbRecord.ValidationVerdict = g.Verdict
 	fbRecord.ValidationReason = g.Reason
 	fbRecord.WiComputedAt = computedAt
-	bs.pendingCounters = append(bs.pendingCounters, counterIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress, valid: !g.Gated})
-	bs.pendingSenderWallets = append(bs.pendingSenderWallets, walletIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress})
+	bs.pendingCounters = append(bs.pendingCounters, counterIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress, valid: !g.Gated, fbID: fbID})
+	bs.pendingSenderWallets = append(bs.pendingSenderWallets, walletIntent{chainID: bs.chainID, addr: fbRecord.ClientAddress, fbID: fbID})
 }
 
 func upsertServiceReputation(

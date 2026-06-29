@@ -301,16 +301,21 @@ type Processor struct {
 
 // counterIntent records a reviewer-counter increment to apply during flush.
 // valid picks the valid vs junk counter (valid == !graded.Gated).
+// fbID is the feedback document _id; only intents whose fbID survived
+// filterUngradedFeedbacks are applied (prevents replay double-counting).
 type counterIntent struct {
 	chainID int64
 	addr    string
 	valid   bool
+	fbID    string
 }
 
 // walletIntent records a sender-wallet UpsertCold to ensure during flush.
+// fbID gates application to un-graded feedbacks only (see counterIntent).
 type walletIntent struct {
 	chainID int64
 	addr    string
+	fbID    string
 }
 
 // batchState holds all in-memory maps and write buffers for a single batch.
