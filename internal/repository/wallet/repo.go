@@ -499,6 +499,41 @@ func (r *Repository) BulkSetUnrated(ctx context.Context, ids []string, at int64)
 	return err
 }
 
+// FeedbackCounterSet is one reviewer wallet's derived valid/junk verdict tally
+// for BulkSetFeedbackCounters.
+type FeedbackCounterSet struct {
+	ID    string
+	Valid int64
+	Junk  int64
+}
+
+// BulkSetFeedbackCounters SETS feedbackValidCount / feedbackJunkCount for many reviewer
+// wallets by _id. Unlike the per-event $inc (ApplyTrustDelta / IncrementFeedbackCounters),
+// this overwrites with counts derived from the full verdict corpus in a score-refresh
+// cycle, so it is idempotent. Only called on the full cycle (chainID==0) where every
+// agent — and thus every reviewer's complete verdict set — was replayed.
+func (r *Repository) BulkSetFeedbackCounters(ctx context.Context, counters []FeedbackCounterSet) error {
+	if len(counters) == 0 {
+		return nil
+	}
+	now := time.Now().Unix()
+	ops := make([]mongodrv.WriteModel, 0, len(counters))
+	for _, c := range counters {
+		ops = append(ops, mongodrv.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": c.ID}).
+			SetUpdate(bson.M{"$set": bson.M{
+				"feedbackValidCount": c.Valid,
+				"feedbackJunkCount":  c.Junk,
+				"updatedAt":          now,
+			}}))
+	}
+	_, err := r.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
+	if err != nil {
+		return fmt.Errorf("wallet repo: bulk set feedback counters: %w", err)
+	}
+	return nil
+}
+
 // ExternalUpdate is one wallet's external enrichment to persist.
 type ExternalUpdate struct {
 	ID  string

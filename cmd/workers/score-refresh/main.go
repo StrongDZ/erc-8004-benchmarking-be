@@ -22,6 +22,7 @@ import (
 	offchainrepo "erc-8004-benchmarking-be/internal/repository/offchain"
 	scorestatsrepo "erc-8004-benchmarking-be/internal/repository/scorestats"
 	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
+	"erc-8004-benchmarking-be/internal/utils"
 )
 
 func main() {
@@ -88,9 +89,14 @@ func main() {
 		Tier2Total: cfg.ComplianceTier2Weight,
 	}
 
+	// Quality-weight config drives GradeFeedback during the replay. WiBase (the feedback
+	// weight floor) is overridable via TRUST_WI_BASE; all other knobs use the design defaults.
+	qwCfg := scoring.DefaultQualityWeightConfig()
+	qwCfg.WiBase = utils.GetenvFloat("TRUST_WI_BASE", qwCfg.WiBase)
+
 	app := scorerefreshapp.NewApp(
 		agents, feedbacks, scoreStats, offchain, wallets,
-		formulaCfg, compositeWeights, complianceWeights,
+		formulaCfg, compositeWeights, complianceWeights, qwCfg,
 		cfg.ScoreRefreshCron,
 		conn,
 	)

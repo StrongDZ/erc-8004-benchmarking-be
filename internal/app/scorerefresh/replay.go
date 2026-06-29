@@ -18,7 +18,17 @@ import (
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 	"erc-8004-benchmarking-be/internal/repository/scorestats"
+	walletrepo "erc-8004-benchmarking-be/internal/repository/wallet"
+	"erc-8004-benchmarking-be/internal/utils"
 )
+
+// reviewerCounter holds a reviewer wallet's derived valid/junk verdict tally for one
+// replay pass, keyed (by the caller) on the wallet document _id. Aggregated across all
+// agents in runCycle, then SET onto the wallet via BulkSetFeedbackCounters.
+type reviewerCounter struct {
+	valid int64
+	junk  int64
+}
 
 const consistencyWindow = 20
 
@@ -35,6 +45,14 @@ const adoptionWindowDays = 30
 //   - Snapshot at milestone T-X = acc decayed from last event before the milestone to T-X.
 //   - If no service feedback exists before a milestone, snapshot = 0 ("thì thôi").
 //   - delta = compositeNow − compositeAtMilestone (approximated, see note in body).
+//
+// Alongside AgentScoreStats it returns, for the score-refresh cycle to persist:
+//   - grade backfills: rows whose stored (verdict, wi, qualityScore) differ from the
+//     freshly graded values (the API reads the stored grade);
+//   - reviewerTally: per reviewer-wallet valid/junk verdict counts keyed by wallet _id.
+//
+// GradeFeedback is computed exactly once per (non-others) feedback and reused for the
+// backfill diff, the reviewer tally, and — for quality feedback — the mass weight.
 func replayAgent(
 	ctx context.Context,
 	ag *agentrepo.AgentDocument,
@@ -46,7 +64,8 @@ func replayAgent(
 	publisherProvider scoring.PublisherScoreProvider,
 	compositeWeights scoring.CompositeWeights,
 	complianceWeights scoring.ComplianceWeights,
-) scorestats.AgentScoreStats {
+	qwCfg scoring.QualityWeightConfig,
+) (scorestats.AgentScoreStats, []feedbackrepo.GradeBackfill, map[string]reviewerCounter) {
 	chainID := ag.ChainID
 	agentID := ag.AgentID
 
@@ -87,6 +106,10 @@ func replayAgent(
 	var snapFails [3]int64
 	var eventScores []float64
 
+	// Cycle-side outputs: grade backfills for changed rows + reviewer verdict tally.
+	var backfills []feedbackrepo.GradeBackfill
+	reviewerTally := make(map[string]reviewerCounter)
+
 	// decayMass decays both mass accumulators forward to toTs (in place).
 	decayMass := func(toTs int64) {
 		if lastTs < toTs {
@@ -102,15 +125,51 @@ func replayAgent(
 			continue
 		}
 
+		effCat := feedbackrepo.EffectiveCategory(fb)
+
 		// Adoption: count distinct client addresses in the recent window across
 		// scored-or-relevant categories (quality + quantity), so heavily-used
 		// agents whose feedback is all quantity still earn breadth credit. Windowed to the
 		// last adoptionWindowDays so Adoption reflects current (not all-time) breadth.
-		if fb.Timestamp >= adoptionWindowStart && isAdoptionCategory(feedbackrepo.EffectiveCategory(fb)) {
+		if fb.Timestamp >= adoptionWindowStart && isAdoptionCategory(effCat) {
 			distinct[strings.ToLower(fb.ClientAddress)] = struct{}{}
 		}
 
-		if feedbackrepo.EffectiveCategory(fb) != string(classifier.CategoryQuality) {
+		// "others" is unresolved (LLM never ran in this replay-only pipeline): no grade,
+		// no backfill, no reviewer tally, no mass.
+		if effCat == string(classifier.CategoryOthers) {
+			continue
+		}
+
+		// Grade exactly once; the result drives the backfill diff, the reviewer tally,
+		// and (for quality) the mass weight below.
+		g := scoring.GradeFeedback(fb, qwCfg)
+
+		// Backfill rows whose stored grade is stale vs the freshly computed one. The API
+		// reads stored wi/verdict, so this keeps storage in sync with the replay engine.
+		if g.Verdict != fb.ValidationVerdict || g.Wi != fb.Wi || g.QualityScore != fb.QualityScore {
+			backfills = append(backfills, feedbackrepo.GradeBackfill{
+				ID:           fb.ID,
+				Wi:           g.Wi,
+				QualityScore: g.QualityScore,
+				Verdict:      g.Verdict,
+				Reason:       g.Reason,
+				ComputedAt:   now,
+			})
+		}
+
+		// Reviewer tally: a non-gated verdict counts as valid, anything gated as junk.
+		wid := walletrepo.WalletDocumentID(fb.ChainID, utils.NormalizeAddress(fb.ClientAddress))
+		rc := reviewerTally[wid]
+		if g.Gated {
+			rc.junk++
+		} else {
+			rc.valid++
+		}
+		reviewerTally[wid] = rc
+
+		// Only quality feedback contributes to the reputation mass.
+		if effCat != string(classifier.CategoryQuality) {
 			continue
 		}
 
@@ -135,9 +194,11 @@ func replayAgent(
 			mIdx++
 		}
 
-		// Decay to this event's timestamp, then add the contribution.
+		// Decay to this event's timestamp, then add the contribution. The base weight is
+		// the freshly graded g.Wi (not stored fb.Wi); the WalletTrust multiplier is applied
+		// on top, exactly as before — only the source of the base weight changed.
 		decayMass(ts)
-		wi := effectiveFeedbackWi(fb, trustBatch)
+		wi := scoring.EffectiveWi(g.Wi, trustBatch.TrustScore(fb.ChainID, fb.ClientAddress))
 		a += wi * vi
 		b += wi
 
@@ -232,7 +293,7 @@ func replayAgent(
 		return scoring.ComputeCompositeFromStats(repAt, adoption, svcResult.Score, pubScore, compScore, snapB[i] > 0, pubPresent, compositeWeights)
 	}
 
-	return scorestats.AgentScoreStats{
+	stats := scorestats.AgentScoreStats{
 		ChainID:          chainID,
 		AgentID:          agentID,
 		ReputationScore:  reputation,
@@ -259,6 +320,7 @@ func replayAgent(
 		ServiceScores:    serviceScores,
 		ComputedAt:       now,
 	}
+	return stats, backfills, reviewerTally
 }
 
 // isAdoptionCategory reports whether a feedback category counts toward the Adoption
@@ -348,13 +410,4 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
-}
-
-func effectiveFeedbackWi(fb feedbackrepo.FeedbackRecord, trustBatch *WalletTrustBatch) float64 {
-	base := scoring.ResolveBaseWi(fb)
-	trust := defaultWalletTrustScore
-	if trustBatch != nil {
-		trust = trustBatch.TrustScore(fb.ChainID, fb.ClientAddress)
-	}
-	return scoring.EffectiveWi(base, trust)
 }

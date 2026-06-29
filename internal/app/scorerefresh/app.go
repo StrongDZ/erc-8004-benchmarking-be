@@ -34,6 +34,7 @@ type App struct {
 	formulaCfg        scoring.FormulaConfig
 	compositeWeights  scoring.CompositeWeights
 	complianceWeights scoring.ComplianceWeights
+	qwCfg             scoring.QualityWeightConfig
 	cronExpr          string
 	conn              *amqp.Connection
 }
@@ -50,6 +51,7 @@ func NewApp(
 	formulaCfg scoring.FormulaConfig,
 	compositeWeights scoring.CompositeWeights,
 	complianceWeights scoring.ComplianceWeights,
+	qwCfg scoring.QualityWeightConfig,
 	cronExpr string,
 	conn *amqp.Connection,
 ) *App {
@@ -62,6 +64,7 @@ func NewApp(
 		formulaCfg:        formulaCfg,
 		compositeWeights:  compositeWeights,
 		complianceWeights: complianceWeights,
+		qwCfg:             qwCfg,
 		cronExpr:          cronExpr,
 		conn:              conn,
 	}
@@ -146,6 +149,11 @@ func (a *App) runCycle(ctx context.Context, chainID int64) {
 	cw := scoring.DefaultCompositeWeights()
 	ownerToAgents := make(map[string][]ownerAgentEntry) // wallet doc ID → agent entries
 
+	// Cycle-level accumulators: grade backfills (all rows) + reviewer verdict tally
+	// (wallet doc ID → valid/junk), aggregated across every batch.
+	var allBackfills []feedbackrepo.GradeBackfill
+	reviewerTally := make(map[string]reviewerCounter)
+
 	for {
 		agents, err := a.agents.FindAllFiltered(ctx, chainID, skip, batchSize)
 		if err != nil {
@@ -202,13 +210,21 @@ func (a *App) runCycle(ctx context.Context, chainID int64) {
 				continue
 			}
 			fbs := feedbacksByAgent[i]
-			stats := replayAgent(
+			stats, backfills, tally := replayAgent(
 				ctx, ag, fbs, now,
 				a.formulaCfg, offchainStatus,
 				trustBatch, publisherProvider, a.compositeWeights, a.complianceWeights,
+				a.qwCfg,
 			)
 			statsBatch = append(statsBatch, stats)
 			fbCounts = append(fbCounts, int64(len(fbs)))
+			allBackfills = append(allBackfills, backfills...)
+			for id, rc := range tally {
+				agg := reviewerTally[id]
+				agg.valid += rc.valid
+				agg.junk += rc.junk
+				reviewerTally[id] = agg
+			}
 
 			// Accumulate data for WalletTrust O-component computation after all batches.
 			if ag.Owner != "" {
@@ -254,8 +270,43 @@ func (a *App) runCycle(ctx context.Context, chainID int64) {
 
 	log.Printf("score-refresh: cycle done agents=%d", total)
 
+	// Backfill computed grades onto the feedback rows (both full and scoped cycles): the
+	// replay is the sole grading engine, so storage is synced to its output here.
+	if err := a.feedbacks.BulkBackfillGrades(ctx, allBackfills); err != nil {
+		log.Printf("score-refresh: bulk backfill grades: %v", err)
+	}
+	log.Printf("score-refresh: grade backfills=%d", len(allBackfills))
+
+	// Reviewer feedback counters are SET from this cycle's verdict tally — but ONLY on the
+	// full cron cycle (chainID==0). feedbackCountersForCycle returns nil for a scoped
+	// recompute (chainID!=0), which replayed only some agents and would undercount, so the
+	// last full cycle's counters are left untouched. Counters are written BEFORE
+	// computeAndWriteWalletTrust so its ScanAll reads the fresh counts (R).
+	if counters := feedbackCountersForCycle(chainID, reviewerTally); counters != nil {
+		if err := a.wallets.BulkSetFeedbackCounters(ctx, counters); err != nil {
+			log.Printf("score-refresh: bulk set feedback counters: %v", err)
+		}
+		log.Printf("score-refresh: reviewer counters set=%d", len(counters))
+	}
+
 	// Compute and persist WalletTrust for every wallet using the freshly replayed agent stats.
 	a.computeAndWriteWalletTrust(ctx, chainID, ownerToAgents, now)
+}
+
+// feedbackCountersForCycle converts the cycle's reviewer verdict tally into the wallet
+// counter SET payload, or returns nil when the cycle is scoped (chainID != 0). A scoped
+// replay covers only some agents, so its tally is partial and must not overwrite the last
+// full cycle's counters; a nil return signals the caller to skip the write entirely. A
+// full cycle (chainID == 0) always returns a non-nil slice (possibly empty).
+func feedbackCountersForCycle(chainID int64, tally map[string]reviewerCounter) []walletrepo.FeedbackCounterSet {
+	if chainID != 0 {
+		return nil
+	}
+	counters := make([]walletrepo.FeedbackCounterSet, 0, len(tally))
+	for id, rc := range tally {
+		counters = append(counters, walletrepo.FeedbackCounterSet{ID: id, Valid: rc.valid, Junk: rc.junk})
+	}
+	return counters
 }
 
 // computeAndWriteWalletTrust derives WalletTrust for the wallets in scope and writes
