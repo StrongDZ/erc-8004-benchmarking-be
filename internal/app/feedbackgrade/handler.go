@@ -25,7 +25,6 @@ package feedbackgrade
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
@@ -52,9 +51,13 @@ func (a *App) handle(ctx context.Context, feedbackID string) error {
 	fb, err := a.deps.FeedbackRepo.FindByID(ctx, feedbackID)
 	if err != nil {
 		if errors.Is(err, mongodrv.ErrNoDocuments) {
+			// Row not yet committed (publish raced the write) — requeue.
 			return ErrTransient
 		}
-		return fmt.Errorf("feedbackgrade: fetch feedback %s: %w", feedbackID, err)
+		// Any other fetch error is a transient infra fault (a _id lookup has no
+		// permanent-failure mode); requeue rather than drop the live update.
+		log.Printf("feedbackgrade: fetch feedback %s: %v", feedbackID, err)
+		return ErrTransient
 	}
 
 	// 2. Already-graded guard: the verdict is the IsGraded marker; a set verdict means a
