@@ -31,7 +31,6 @@ import (
 // identity event processing are published to the service_uri queue.
 // fbPublisher may be nil; when set, rule-undecided ("others") feedback IDs are published to QueueFeedbackOthers,
 // and brand-new owner wallets are published to QueueWalletEnrich.
-// descPublisher may be nil; when set, agent description-summary jobs are published to QueueAgentDescSummary.
 // tagStatsRepo / tagCorrsRepo may be nil to disable dynamic scale detection.
 func NewProcessor(
 	agentRepo *agent.Repository,
@@ -41,7 +40,6 @@ func NewProcessor(
 	formulaCfg scoring.FormulaConfig,
 	uriPublisher URIPublisher,
 	fbPublisher FeedbackPublisher,
-	descPublisher DescSummaryPublisher,
 	tagStatsRepo *tagstats.StatsRepository,
 	tagCorrsRepo *tagstats.CorrectionRepository,
 	minSamples int,
@@ -59,7 +57,6 @@ func NewProcessor(
 		formulaCfg:   formulaCfg,
 		uriPublisher: uriPublisher,
 		fbPublisher:  fbPublisher,
-		descPublisher: descPublisher,
 		walletRepo:   walletRepo,
 		coldStartT0:  coldStartT0,
 		tagStatsRepo: tagStatsRepo,
@@ -384,17 +381,6 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 			if err := p.uriPublisher.Publish(ctx, queueName, msg); err != nil {
 				log.Printf("processor: publish service uri chain=%d agent=%s service=%s: %v",
 					msg.ChainID, msg.AgentID, msg.ServiceName, err)
-			}
-		}
-	}
-
-	// Publish agent description-summary jobs (best-effort; errors are logged, not fatal).
-	// Identity flow must not block on RabbitMQ availability.
-	if p.descPublisher != nil {
-		for _, msg := range bs.pendingDescSummary {
-			if err := p.descPublisher.Publish(ctx, mq.QueueAgentDescSummary, msg); err != nil {
-				log.Printf("processor: publish desc summary chain=%d agent=%s: %v",
-					msg.ChainID, msg.AgentID, err)
 			}
 		}
 	}

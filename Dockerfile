@@ -21,7 +21,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/score-r
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/uri-bootstrap ./cmd/workers/uri-bootstrap
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rescale ./cmd/workers/rescale
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/feedback-others ./cmd/workers/feedback-others
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/desc-summarizer ./cmd/workers/desc-summarizer
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/oasf-schema-refresh ./cmd/workers/oasf-schema-refresh
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/wallet-enrich ./cmd/workers/wallet-enrich
 
@@ -61,10 +60,6 @@ ENTRYPOINT ["/usr/local/bin/rescale-worker"]
 FROM base-runtime AS feedback-others
 COPY --from=builder /out/feedback-others /usr/local/bin/feedback-others
 ENTRYPOINT ["/usr/local/bin/feedback-others"]
-
-FROM base-runtime AS desc-summarizer
-COPY --from=builder /out/desc-summarizer /usr/local/bin/desc-summarizer
-ENTRYPOINT ["/usr/local/bin/desc-summarizer"]
 
 FROM base-runtime AS oasf-schema-refresh
 COPY --from=builder /out/oasf-schema-refresh /usr/local/bin/oasf-schema-refresh

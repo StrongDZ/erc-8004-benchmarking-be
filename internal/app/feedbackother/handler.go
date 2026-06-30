@@ -82,11 +82,7 @@ func (a *App) resolveLLM(ctx context.Context, fb *feedbackrepo.FeedbackRecord) e
 	// through with empty agent context.
 	if a.deps.AgentRepo != nil {
 		if ag, err := a.deps.AgentRepo.FindByAgentID(ctx, fb.ChainID, fb.AgentID); err == nil && ag != nil {
-			desc := ag.SummarizedDescription
-			if desc == "" {
-				desc = ag.Description
-			}
-			in.AgentDescription = desc
+			in.AgentDescription = ag.Description
 			in.AgentOASFDomains = ag.OASFDomains
 			in.AgentOASFSkills = ag.OASFSkills
 			in.AgentTags = ag.Tags

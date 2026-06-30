@@ -242,31 +242,6 @@ func (p *Processor) applyIdentityFromURI(bs *batchState, agentID, uri string) {
 		}
 	}
 
-	// Enqueue a description-summary job when the description is non-empty and
-	// not yet summarized (or hash stale after an edit). Consumer dedupes via
-	// DescHash against agents.summarizedDescriptionHash.
-	if p.descPublisher != nil {
-		newDesc := strings.TrimSpace(card.Description)
-		if shouldPublishDescSummary(newDesc, doc.SummarizedDescriptionHash) {
-			bs.pendingDescSummary = append(bs.pendingDescSummary, mq.AgentDescSummaryMessage{
-				ChainID:     bs.chainID,
-				AgentID:     agentID,
-				Description: newDesc,
-				DescHash:    mq.DescHash(newDesc),
-				PublishedAt: time.Now().Unix(),
-			})
-		}
-	}
-}
-
-// shouldPublishDescSummary returns true when newDesc is non-empty and either
-// missing a summary or the stored hash does not match the current description.
-func shouldPublishDescSummary(newDesc, summarizedHash string) bool {
-	newDesc = strings.TrimSpace(newDesc)
-	if newDesc == "" {
-		return false
-	}
-	return mq.DescHash(newDesc) != summarizedHash
 }
 
 // filterCaip10 returns only strings that match the CAIP-10 format eip155:{chainId}:{address}.

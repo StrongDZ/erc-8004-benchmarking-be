@@ -102,8 +102,8 @@ type modelSpec struct {
 //	ollama pull qwen2.5:7b-instruct
 var modelsUnderTest = []modelSpec{
 	{csvKey: "qwen2_5_3b", model: "qwen2.5:3b"},
-	{csvKey: "knn_embed",  model: "knn"},
-	{csvKey: "ensemble",   model: "ensemble"},
+	{csvKey: "knn_embed", model: "knn"},
+	{csvKey: "ensemble", model: "ensemble"},
 }
 
 // agentMeta is the slice of an AgentDocument we surface to the prompt builder.
@@ -492,16 +492,9 @@ func buildAgentCache(ctx context.Context, agents *agentrepo.Repository, samples 
 			cache[s.ID] = agentMeta{}
 			continue
 		}
-		// Prefer the realtime summarised description (desc-summarizer worker) over
-		// the raw on-chain description so the LLM sees a compact business / domain
-		// signal instead of marketing fluff. Fall back to raw description when the
-		// summary is not yet computed.
-		desc := doc.SummarizedDescription
-		if desc == "" {
-			desc = doc.Description
-		}
+		// Use the full on-chain description — the same input the live classifier sees.
 		meta := agentMeta{
-			description: desc,
+			description: doc.Description,
 			oasfDomains: doc.OASFDomains,
 			oasfSkills:  doc.OASFSkills,
 			tags:        doc.Tags,

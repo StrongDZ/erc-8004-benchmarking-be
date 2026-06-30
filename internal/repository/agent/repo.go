@@ -263,24 +263,6 @@ func (r *Repository) ScanOwnerEdges(ctx context.Context, chainID int64) ([]Agent
 	return out, nil
 }
 
-// SetSummarizedDescription writes the realtime description summary fields for an agent.
-// Returns true when the agent doc exists and the update applied (modifiedCount + matchedCount > 0).
-// Returns false when no agent matches (e.g. summary message arrived before agent upsert) — the
-// caller should ack-drop in that case; a later identity event will re-trigger.
-func (r *Repository) SetSummarizedDescription(ctx context.Context, chainID int64, agentID, summary, descHash string, at int64) (bool, error) {
-	filter := bson.M{"_id": AgentDocumentID(chainID, agentID)}
-	update := bson.M{"$set": bson.M{
-		"summarizedDescription":     summary,
-		"summarizedDescriptionHash": descHash,
-		"summarizedDescriptionAt":   at,
-	}}
-	res, err := r.UpdateOne(ctx, filter, update)
-	if err != nil {
-		return false, fmt.Errorf("agent repo: set summarized description %d:%s: %w", chainID, agentID, err)
-	}
-	return res.MatchedCount > 0, nil
-}
-
 // ScoreUpdate carries the scoring fields synced from agent_score_stats each cycle.
 type ScoreUpdate struct {
 	ID             string
