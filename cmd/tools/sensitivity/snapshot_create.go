@@ -57,7 +57,11 @@ func snapshotCreate(args []string) {
 	now := time.Now()
 	snapID := snapshot.NewSnapshotID(now)
 
-	log.Printf("snapshot create: id=%s label=%q chain=%d filters=%+v", snapID, *label, *chainID, filt)
+	chainLabel := fmt.Sprintf("%d", *chainID)
+	if *chainID == 0 {
+		chainLabel = "all"
+	}
+	log.Printf("snapshot create: id=%s label=%q chain=%s filters=%+v", snapID, *label, chainLabel, filt)
 
 	buildOpts := snapshot.BuildOptions{
 		ChainID:    *chainID,

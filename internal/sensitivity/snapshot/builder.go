@@ -2,10 +2,21 @@ package snapshot
 
 // builder.go — Build SnapshotData from source MongoDB collections.
 // Orchestrates: load → filter → denormalize → compute baseline.
+//
+// All-chains mode (opts.ChainID == 0):
+//   Agent keys are composite "chainId:agentId" strings so that agent "5" on
+//   chain 8453 and agent "5" on chain 56 are stored as distinct snapshots.
+//   Cluster files (cluster_a.go, cluster_c.go) key by AgentSnapshot.ID /
+//   FeedbackSnapshot.AgentID — since both fields carry the composite key in
+//   all-chains mode, the clusters need no modification.
+//
+// Single-chain mode (opts.ChainID != 0):
+//   Behaviour is byte-identical to the pre-all-chains implementation.
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -41,30 +52,47 @@ type agentMini struct {
 	Verified    bool
 }
 
+// agentKey returns the key used to identify an agent across the builder pipeline.
+// In single-chain mode (allChains=false) it returns agentID unchanged — identical
+// to the pre-all-chains behaviour.
+// In all-chain mode (allChains=true) it returns "chainId:agentId" so that the
+// same numeric agentId from different chains produces distinct map keys.
+func agentKey(chainID int64, agentID string, allChains bool) string {
+	if !allChains {
+		return agentID
+	}
+	return fmt.Sprintf("%d:%s", chainID, agentID)
+}
+
 // BuildFromSource reads filtered feedbacks + their agents from the source DB and
 // returns SnapshotData ready to be written. It does NOT touch the snapshot DB.
 func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptions) (SnapshotData, error) {
+	allChains := opts.ChainID == 0
+
 	fbs, err := loadFilteredFeedbacks(ctx, src.Feedbacks, opts.ChainID, opts.Filter)
 	if err != nil {
 		return SnapshotData{}, fmt.Errorf("load feedbacks: %w", err)
 	}
 
-	agentIDs := uniqueAgentIDs(fbs)
-	agentDocs, err := loadAgents(ctx, src.Agents, opts.ChainID, agentIDs)
+	agentIDs := uniqueAgentIDs(fbs) // always raw IDs — used for Mongo $in
+	agentDocs, err := loadAgents(ctx, src.Agents, opts.ChainID, agentIDs, allChains)
 	if err != nil {
 		return SnapshotData{}, fmt.Errorf("load agents: %w", err)
 	}
 
-	agents := denormalizeAgents(fbs, agentDocs, opts.ChainID)
+	agents := denormalizeAgents(fbs, agentDocs, opts.ChainID, allChains)
 	if opts.Filter.MinFeedbacks > 1 {
 		agents = filterByMinFeedbacks(agents, opts.Filter.MinFeedbacks)
+		// agentIDSet returns composite keys (a.ID is already composite in all-chains mode).
 		keepIDs := agentIDSet(agents)
-		fbs = filterFeedbacksByAgent(fbs, keepIDs)
+		// filterFeedbacksByAgent uses agentKey to build the composite lookup key so that
+		// raw fb.AgentID + fb.ChainID maps to the same composite key stored in keepIDs.
+		fbs = filterFeedbacksByAgent(fbs, keepIDs, allChains)
 	}
 
-	feedbacks := projectFeedbacks(fbs)
-	edges := buildEdges(fbs, agentDocs)
-	baseline, err := computeBaseline(ctx, src, agents, opts)
+	feedbacks := projectFeedbacks(fbs, allChains)
+	edges := buildEdges(fbs, agentDocs, allChains)
+	baseline, err := computeBaseline(ctx, src, agents, opts, allChains)
 	if err != nil {
 		return SnapshotData{}, fmt.Errorf("compute baseline: %w", err)
 	}
@@ -79,7 +107,11 @@ func BuildFromSource(ctx context.Context, src SourceCollections, opts BuildOptio
 }
 
 func loadFilteredFeedbacks(ctx context.Context, coll *mongodrv.Collection, chainID int64, cfg FilterConfig) ([]feedback.FeedbackRecord, error) {
-	query := bson.M{"chainId": chainID}
+	query := bson.M{}
+	if chainID != 0 {
+		// Single-chain: restrict to this chain. Zero means all chains (no filter).
+		query["chainId"] = chainID
+	}
 	if !cfg.IncludeSpam {
 		// Filter on the EFFECTIVE top-level category (what actually scored), falling
 		// back to the rule category for rows persisted before the top-level field.
@@ -106,6 +138,9 @@ func loadFilteredFeedbacks(ctx context.Context, coll *mongodrv.Collection, chain
 	return out, nil
 }
 
+// uniqueAgentIDs returns the set of distinct raw agentIDs (un-composited) from the
+// feedback slice. These are passed as-is to Mongo $in queries; compositing happens
+// at the point where results are keyed (loadAgents, denormalizeAgents).
 func uniqueAgentIDs(fbs []feedback.FeedbackRecord) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(fbs))
@@ -119,20 +154,30 @@ func uniqueAgentIDs(fbs []feedback.FeedbackRecord) []string {
 	return out
 }
 
-func loadAgents(ctx context.Context, coll *mongodrv.Collection, chainID int64, agentIDs []string) (map[string]agentMini, error) {
+// loadAgents fetches the minimal agent metadata for the given raw agentIDs.
+// Single-chain: queries {chainId, agentId:$in}, keys result by raw agentID.
+// All-chains: queries {agentId:$in} (no chainId), keys result by composite agentKey.
+func loadAgents(ctx context.Context, coll *mongodrv.Collection, chainID int64, agentIDs []string, allChains bool) (map[string]agentMini, error) {
 	if len(agentIDs) == 0 {
 		return map[string]agentMini{}, nil
 	}
-	cur, err := coll.Find(ctx, bson.M{
-		"chainId": chainID,
-		"agentId": bson.M{"$in": agentIDs},
-	})
+	var q bson.M
+	if allChains {
+		q = bson.M{"agentId": bson.M{"$in": agentIDs}}
+	} else {
+		q = bson.M{
+			"chainId": chainID,
+			"agentId": bson.M{"$in": agentIDs},
+		}
+	}
+	cur, err := coll.Find(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	defer cur.Close(ctx)
 	var raw []struct {
 		AgentID     string `bson:"agentId"`
+		ChainID     int64  `bson:"chainId"`
 		Owner       string `bson:"owner"`
 		AgentWallet string `bson:"agentWallet"`
 		Verified    bool   `bson:"verified"`
@@ -142,25 +187,34 @@ func loadAgents(ctx context.Context, coll *mongodrv.Collection, chainID int64, a
 	}
 	out := make(map[string]agentMini, len(raw))
 	for _, r := range raw {
-		out[r.AgentID] = agentMini{Owner: r.Owner, AgentWallet: r.AgentWallet, Verified: r.Verified}
+		key := agentKey(r.ChainID, r.AgentID, allChains)
+		out[key] = agentMini{Owner: r.Owner, AgentWallet: r.AgentWallet, Verified: r.Verified}
 	}
 	return out, nil
 }
 
-func denormalizeAgents(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, chainID int64) []AgentSnapshot {
+// denormalizeAgents groups feedbacks by agent and builds AgentSnapshot values.
+// In all-chains mode AgentSnapshot.ID is the composite "chainId:agentId" string;
+// in single-chain mode it is the raw agentID — identical to pre-all-chains behaviour.
+func denormalizeAgents(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, chainID int64, allChains bool) []AgentSnapshot {
 	byID := map[string]*AgentSnapshot{}
 	for _, fb := range fbs {
-		s, ok := byID[fb.AgentID]
+		key := agentKey(fb.ChainID, fb.AgentID, allChains)
+		s, ok := byID[key]
 		if !ok {
-			meta := agentDocs[fb.AgentID]
+			meta := agentDocs[key]
+			effectiveChainID := chainID
+			if allChains {
+				effectiveChainID = fb.ChainID
+			}
 			s = &AgentSnapshot{
-				ID:          fb.AgentID,
-				ChainID:     chainID,
+				ID:          key,
+				ChainID:     effectiveChainID,
 				Owner:       meta.Owner,
 				AgentWallet: meta.AgentWallet,
 				Verified:    meta.Verified,
 			}
-			byID[fb.AgentID] = s
+			byID[key] = s
 		}
 		s.FeedbackIDs = append(s.FeedbackIDs, fb.ID)
 		s.FeedbackCount++
@@ -184,6 +238,8 @@ func filterByMinFeedbacks(agents []AgentSnapshot, min int) []AgentSnapshot {
 	return out
 }
 
+// agentIDSet builds a set from AgentSnapshot.ID values. In all-chains mode these
+// are composite keys; in single-chain mode they are raw agentIDs.
 func agentIDSet(agents []AgentSnapshot) map[string]struct{} {
 	out := make(map[string]struct{}, len(agents))
 	for _, a := range agents {
@@ -194,24 +250,30 @@ func agentIDSet(agents []AgentSnapshot) map[string]struct{} {
 
 // filterFeedbacksByAgent performs an in-place filter; caller MUST NOT retain a
 // reference to the old slice header (the backing array is reused).
-func filterFeedbacksByAgent(fbs []feedback.FeedbackRecord, keep map[string]struct{}) []feedback.FeedbackRecord {
+// keep contains composite agent keys (from agentIDSet); agentKey is used to build
+// the composite lookup key from the raw fb.AgentID + fb.ChainID.
+func filterFeedbacksByAgent(fbs []feedback.FeedbackRecord, keep map[string]struct{}, allChains bool) []feedback.FeedbackRecord {
 	out := fbs[:0]
 	for _, fb := range fbs {
-		if _, ok := keep[fb.AgentID]; ok {
+		key := agentKey(fb.ChainID, fb.AgentID, allChains)
+		if _, ok := keep[key]; ok {
 			out = append(out, fb)
 		}
 	}
 	return out
 }
 
-func projectFeedbacks(fbs []feedback.FeedbackRecord) []FeedbackSnapshot {
+// projectFeedbacks projects raw FeedbackRecords into FeedbackSnapshot values.
+// FeedbackSnapshot.AgentID is set to the composite key in all-chains mode so that
+// cluster files can match feedbacks to agents purely by AgentID == AgentSnapshot.ID.
+func projectFeedbacks(fbs []feedback.FeedbackRecord, allChains bool) []FeedbackSnapshot {
 	out := make([]FeedbackSnapshot, 0, len(fbs))
 	for _, fb := range fbs {
 		// Quality signals for Cụm C (reasoningLen, attachmentCount, breakdown, proof).
 		rl, ac, bk, pp := ExtractQualitySignals(fb.FeedbackParsed)
 		out = append(out, FeedbackSnapshot{
 			ID:                   fb.ID,
-			AgentID:              fb.AgentID,
+			AgentID:              agentKey(fb.ChainID, fb.AgentID, allChains),
 			ChainID:              fb.ChainID,
 			ClientAddress:        fb.ClientAddress,
 			FeedbackIndex:        fb.FeedbackIndex,
@@ -267,12 +329,14 @@ func classifierConfidence(fb feedback.FeedbackRecord) float64 {
 	return 1.0
 }
 
-// buildEdges groups feedbacks by (client → agent owner). Retained for graph-edge stats; no cluster sweeps edge weights directly.
-func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini) []GraphEdge {
+// buildEdges groups feedbacks by (client → agent owner). Retained for graph-edge
+// stats; no cluster sweeps edge weights directly.
+// agentDocs is keyed by composite key in all-chains mode, raw agentID in single-chain.
+func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini, allChains bool) []GraphEdge {
 	type key struct{ from, to string }
 	agg := map[key]*GraphEdge{}
 	for _, fb := range fbs {
-		meta := agentDocs[fb.AgentID]
+		meta := agentDocs[agentKey(fb.ChainID, fb.AgentID, allChains)]
 		to := meta.Owner
 		if to == "" {
 			continue
@@ -305,26 +369,51 @@ func buildEdges(fbs []feedback.FeedbackRecord, agentDocs map[string]agentMini) [
 // weightMass / owner external score that Cụm B and Cụm D need). Agents without a
 // score row get zeros. Returns (nil, nil) when the score-stats handle is nil or
 // there are no agents — an intentional caller signal, not a failure.
-func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentSnapshot, opts BuildOptions) ([]BaselineScore, error) {
+//
+// All-chains mode: queries without chainId, reads chainId off each row, matches
+// back to agents by composite key. The $in list carries RAW agentIDs (un-composited)
+// because that is how Mongo stores the agentId field.
+// Single-chain mode: behaviour is byte-identical to the pre-all-chains implementation.
+func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentSnapshot, opts BuildOptions, allChains bool) ([]BaselineScore, error) {
 	if src.AgentScoreStats == nil || len(agents) == 0 {
 		return nil, nil
 	}
-	ids := make([]string, 0, len(agents))
+
+	// ownerByAgent is keyed by composite agent key (= AgentSnapshot.ID in both modes).
 	ownerByAgent := make(map[string]string, len(agents))
+	// rawIDs for the Mongo $in — Mongo stores agentId un-composited.
+	rawIDSet := make(map[string]struct{}, len(agents))
+	rawIDs := make([]string, 0, len(agents))
 	for _, a := range agents {
-		ids = append(ids, a.ID)
 		ownerByAgent[a.ID] = a.Owner
+		rawID := a.ID
+		if allChains {
+			// a.ID == "chainId:rawAgentId"; strip the chain prefix to recover rawAgentId.
+			rawID = strings.TrimPrefix(a.ID, fmt.Sprintf("%d:", a.ChainID))
+		}
+		if _, seen := rawIDSet[rawID]; !seen {
+			rawIDSet[rawID] = struct{}{}
+			rawIDs = append(rawIDs, rawID)
+		}
 	}
-	cur, err := src.AgentScoreStats.Find(ctx, bson.M{
-		"chainId": opts.ChainID,
-		"agentId": bson.M{"$in": ids},
-	})
+
+	var q bson.M
+	if allChains {
+		q = bson.M{"agentId": bson.M{"$in": rawIDs}}
+	} else {
+		q = bson.M{
+			"chainId": opts.ChainID,
+			"agentId": bson.M{"$in": rawIDs},
+		}
+	}
+	cur, err := src.AgentScoreStats.Find(ctx, q)
 	if err != nil {
 		return nil, err
 	}
 	defer cur.Close(ctx)
 	var rows []struct {
 		AgentID          string  `bson:"agentId"`
+		ChainID          int64   `bson:"chainId"`
 		ReputationScore  float64 `bson:"reputationScore"`
 		AdoptionScore    float64 `bson:"adoptionScore"`
 		ServicesScore    float64 `bson:"servicesScore"`
@@ -342,9 +431,16 @@ func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentS
 
 	out := make([]BaselineScore, 0, len(rows))
 	for _, r := range rows {
+		// In single-chain mode agentKey(r.ChainID, r.AgentID, false) == r.AgentID,
+		// so the ownerByAgent lookup and BaselineScore.AgentID are unchanged.
+		key := agentKey(r.ChainID, r.AgentID, allChains)
+		effectiveChainID := opts.ChainID
+		if allChains {
+			effectiveChainID = r.ChainID
+		}
 		out = append(out, BaselineScore{
-			AgentID:          r.AgentID,
-			ChainID:          opts.ChainID,
+			AgentID:          key,
+			ChainID:          effectiveChainID,
 			ReputationScore:  r.ReputationScore,
 			AdoptionScore:    r.AdoptionScore,
 			ServicesScore:    r.ServicesScore,
@@ -353,7 +449,7 @@ func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentS
 			ComplianceScore:  r.ComplianceScore,
 			CompositeScore:   r.CompositeScore,
 			WeightMass:       r.WeightMass,
-			ExternalScore:    externalByOwner[ownerByAgent[r.AgentID]],
+			ExternalScore:    externalByOwner[ownerByAgent[key]],
 		})
 	}
 	return out, nil
@@ -362,6 +458,8 @@ func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentS
 // loadOwnerExternalScores returns owner-address → external on-chain score [0,100]
 // from the wallets collection. Owners without an enrichment row (or a nil handle)
 // simply map to 0 — Cụm D treats external=0 as signal absent (ePresent=false).
+// Owner addresses are chain-agnostic EVM addresses; chainID is unused in the query
+// but retained in the signature for caller clarity.
 func loadOwnerExternalScores(ctx context.Context, coll *mongodrv.Collection, chainID int64, ownerByAgent map[string]string) map[string]float64 {
 	out := map[string]float64{}
 	if coll == nil {
