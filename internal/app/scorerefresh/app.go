@@ -221,6 +221,8 @@ func (a *App) runCycle(ctx context.Context, chainID int64) {
 			allBackfills = append(allBackfills, backfills...)
 			for id, rc := range tally {
 				agg := reviewerTally[id]
+				agg.chainID = rc.chainID
+				agg.address = rc.address
 				agg.valid += rc.valid
 				agg.junk += rc.junk
 				reviewerTally[id] = agg
