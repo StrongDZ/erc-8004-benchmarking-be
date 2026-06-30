@@ -5,7 +5,6 @@ package cache
 // is defined at the consumer (service layer) — see service/types.go.
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
 )
@@ -50,35 +49,6 @@ func (m *Memory) Set(key string, value []byte, ttl time.Duration) {
 	m.mu.Lock()
 	m.store[key] = entry{value: value, expiry: time.Now().Add(ttl)}
 	m.mu.Unlock()
-}
-
-// Delete removes a key from the cache.
-func (m *Memory) Delete(key string) {
-	m.mu.Lock()
-	delete(m.store, key)
-	m.mu.Unlock()
-}
-
-// GetJSON decodes a cached JSON payload into `dst`. Returns (true, nil) on hit.
-func (m *Memory) GetJSON(key string, dst any) (bool, error) {
-	b, ok := m.Get(key)
-	if !ok {
-		return false, nil
-	}
-	if err := json.Unmarshal(b, dst); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// SetJSON marshals `src` and stores it under key with ttl.
-func (m *Memory) SetJSON(key string, src any, ttl time.Duration) error {
-	b, err := json.Marshal(src)
-	if err != nil {
-		return err
-	}
-	m.Set(key, b, ttl)
-	return nil
 }
 
 // StartJanitor launches a goroutine that periodically removes expired entries.

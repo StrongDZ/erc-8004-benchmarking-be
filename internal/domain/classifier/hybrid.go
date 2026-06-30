@@ -8,7 +8,6 @@ package classifier
 
 import (
 	"context"
-	"fmt"
 	"strings"
 )
 
@@ -129,10 +128,4 @@ func (h *HybridClassifier) Classify(ctx context.Context, in HybridInput) (Hybrid
 	}
 
 	return result, nil
-}
-
-// String returns a human-readable summary of the hybrid result (for logging).
-func (r HybridResult) String() string {
-	return fmt.Sprintf("category=%s confidence=%.2f source=%s low_conf=%v",
-		r.Category, r.Confidence, r.Source, r.LowConfidence)
 }

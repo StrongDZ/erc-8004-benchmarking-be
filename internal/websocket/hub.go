@@ -42,14 +42,6 @@ func (h *Hub) Broadcast(payload []byte) {
 	}
 }
 
-// ClientCount returns the current number of registered clients.
-func (h *Hub) ClientCount() int64 {
-	if h == nil {
-		return 0
-	}
-	return atomic.LoadInt64(&h.clientCount)
-}
-
 // Run owns the clients map and processes register/unregister/broadcast events.
 // Returns when ctx is cancelled. Safe to call exactly once per Hub.
 func (h *Hub) Run(ctx context.Context) {

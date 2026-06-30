@@ -1,78 +1,18 @@
 package extenrich
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	"erc-8004-benchmarking-be/internal/domain/extscore"
-	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 const explorerBaseURL = "https://api.etherscan.io/v2/api"
 const explorerMaxBodyBytes = 10 << 20
-
-// FetchRichSignal fetches age and counterparties from Etherscan and updates the wallet's external doc.
-func (a *App) FetchRichSignal(ctx context.Context, w wallet.WalletDocument) (wallet.WalletDocument, error) {
-	if len(a.explorerClients) == 0 {
-		return w, fmt.Errorf("no explorer clients configured")
-	}
-	client := a.explorerClients[rand.IntN(len(a.explorerClients))]
-
-	feat, err := client.FetchFeatures(w.ChainID, w.Address, time.Now())
-	if err != nil {
-		if IsExplorerPermanentError(err) {
-			doc := w.External
-			doc.ExplorerSkipped = true
-			doc.RichFetched = true // marked as fetched because we cannot fetch it anyway
-			doc.ExplorerAt = time.Now().Unix()
-			update := wallet.ExternalUpdate{ID: w.ID, Doc: doc}
-			if err2 := a.writeThrough(ctx, []wallet.ExternalUpdate{update}); err2 != nil {
-				return w, fmt.Errorf("write through skipped rich: %w", err2)
-			}
-			w.External = doc
-			return w, nil
-		}
-		return w, err
-	}
-
-	f := extscore.Features{
-		BalanceUSD:            w.External.BalanceUSD,
-		Nonce:                 w.External.Nonce,
-		AgeDays:               feat.AgeDays,
-		UniqueCounterparties:  feat.UniqueCounterparties,
-		HasENS:                w.External.ENS != "",
-		BalancePresent:        w.External.Present,
-		NoncePresent:          w.External.Present,
-		AgePresent:            true,
-		CounterpartiesPresent: true,
-		ENSApplicable:         w.ChainID == 1,
-	}
-
-	doc := w.External
-	doc.Score = extscore.Score(f)
-	doc.Complete = extscore.Complete(f)
-	doc.Present = true
-	doc.AgeDays = feat.AgeDays
-	doc.Counterparties = feat.UniqueCounterparties
-	doc.ExplorerAt = time.Now().Unix()
-	doc.RichFetched = true
-
-	update := wallet.ExternalUpdate{ID: w.ID, Doc: doc}
-	if err := a.writeThrough(ctx, []wallet.ExternalUpdate{update}); err != nil {
-		return w, fmt.Errorf("write through rich signal: %w", err)
-	}
-
-	w.External = doc
-	return w, nil
-}
 
 type ExplorerClient struct {
 	httpc  *http.Client

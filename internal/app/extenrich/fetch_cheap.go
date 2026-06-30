@@ -2,63 +2,11 @@ package extenrich
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
 	"net/http"
-	"time"
-
-	"erc-8004-benchmarking-be/internal/domain/extscore"
-	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
-
-// FetchCheapSignal fetches balance + nonce from RPC and updates the wallet's external doc.
-func (a *App) FetchCheapSignal(ctx context.Context, w wallet.WalletDocument) (wallet.WalletDocument, error) {
-	rpcs := a.rpcByChain[w.ChainID]
-	if len(rpcs) == 0 {
-		return w, fmt.Errorf("no rpcs configured for chain %d", w.ChainID)
-	}
-	rpcClient := NewRPCClient(a.httpc, rpcs)
-	usdPrice, _ := a.price.NativeUSD(w.ChainID)
-	now := time.Now().Unix()
-
-	results, err := rpcClient.FetchBalanceNonce([]string{w.Address})
-	if err != nil {
-		return w, err
-	}
-	if len(results) == 0 || !results[0].OK {
-		return w, fmt.Errorf("rpc fetch failed for %s", w.Address)
-	}
-
-	r := results[0]
-	balanceUSD := weiToFloat(r.BalanceWei) * usdPrice
-	f := extscore.Features{
-		BalanceUSD:     balanceUSD,
-		Nonce:          r.Nonce,
-		BalancePresent: true,
-		NoncePresent:   true,
-		// ENS is not resolved in the cheap pass; the ENS/rich sweep sets this true on chain 1.
-		ENSApplicable:  false,
-	}
-
-	doc := w.External
-	doc.Score = extscore.Score(f)
-	doc.Complete = extscore.CompleteForChain(w.ChainID, f)
-	doc.Present = true
-	doc.BalanceUSD = balanceUSD
-	doc.Nonce = r.Nonce
-	doc.CheapAt = now
-	doc.CheapFetched = true
-
-	update := wallet.ExternalUpdate{ID: w.ID, Doc: doc}
-	if err := a.writeThrough(ctx, []wallet.ExternalUpdate{update}); err != nil {
-		return w, fmt.Errorf("write through cheap signal: %w", err)
-	}
-
-	w.External = doc
-	return w, nil
-}
 
 // RPCClient handles batched JSON-RPC queries for balance and transaction count.
 type RPCClient struct {

@@ -110,12 +110,6 @@ func ExplorerApplicable(chainID int64) bool {
 	return true
 }
 
-// ExplorerUnsupportedChainIDs returns chain IDs excluded from explorer enrichment
-// (for Mongo $nin filters).
-func ExplorerUnsupportedChainIDs() []int64 {
-	return nil
-}
-
 // CompleteForChain reports whether external enrichment is finished for chainID.
 // On explorer-unsupported chains, balance+nonce suffice.
 func CompleteForChain(chainID int64, f Features) bool {
@@ -124,4 +118,3 @@ func CompleteForChain(chainID int64, f Features) bool {
 	}
 	return Complete(f)
 }
-

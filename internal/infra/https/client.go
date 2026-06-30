@@ -33,14 +33,6 @@ type ClientOptions struct {
 	Headers   map[string]string
 }
 
-// DefaultClientOptions returns baseline behaviour.
-func DefaultClientOptions() ClientOptions {
-	return ClientOptions{
-		Timeout:      defaultTimeout,
-		MaxBodyBytes: defaultMaxBodyBytes,
-	}
-}
-
 // BodyTooLargeError is returned when the response body exceeds MaxBodyBytes.
 type BodyTooLargeError struct {
 	URL   string
@@ -212,9 +204,3 @@ var (
 	_ = (*BodyTooLargeError)(nil)
 	_ = (*HTTPStatusError)(nil)
 )
-
-// IsBodyTooLarge reports whether err is a BodyTooLargeError.
-func IsBodyTooLarge(err error) bool {
-	var e *BodyTooLargeError
-	return errors.As(err, &e)
-}

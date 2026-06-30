@@ -92,27 +92,3 @@ func deduplicateStrings(items []string) []string {
 	}
 	return result
 }
-
-// expandPathPrefixes generates all parent prefixes from a leaf path.
-// Example: "a/b/c" -> ["a", "a/b", "a/b/c"]
-func expandPathPrefixes(leafPath string) []string {
-	if leafPath == "" {
-		return nil
-	}
-	segments := strings.Split(leafPath, "/")
-	if len(segments) == 0 {
-		return nil
-	}
-
-	prefixes := make([]string, 0, len(segments))
-	current := ""
-	for i, seg := range segments {
-		if i == 0 {
-			current = seg
-		} else {
-			current = current + "/" + seg
-		}
-		prefixes = append(prefixes, current)
-	}
-	return prefixes
-}

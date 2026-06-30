@@ -4,7 +4,6 @@ package uri
 // This package avoids infrastructure imports (no mongo, mq, repository).
 
 import (
-	"erc-8004-benchmarking-be/internal/mq"
 	"erc-8004-benchmarking-be/internal/utils"
 )
 
@@ -34,21 +33,5 @@ func ExtractURIFromEvent(event Event) (string, bool) {
 		return utils.GetStringArg(event.Args, "responseURI")
 	default:
 		return "", false
-	}
-}
-
-// BuildAgentURIMessage creates an AgentURIMessage from a decoded event and an extracted URI.
-// eventID must be pre-computed by the caller (e.g. repository.EventDocumentID).
-func BuildAgentURIMessage(event Event, uri, source, eventID string) mq.AgentURIMessage {
-	return mq.AgentURIMessage{
-		URI:          uri,
-		ChainID:      event.ChainID,
-		EventID:      eventID,
-		BlockNumber:  event.BlockNumber,
-		LogIndex:     event.LogIndex,
-		DecodedAt:    event.DecodedAt,
-		EventName:    event.EventName,
-		ContractType: event.ContractType,
-		Source:       source,
 	}
 }

@@ -80,22 +80,3 @@ func (r *MongoRepoImpl[T]) Count(ctx context.Context, filter any) (int64, error)
 func (r *MongoRepoImpl[T]) BulkWrite(ctx context.Context, models []mongodrv.WriteModel, opts ...*options.BulkWriteOptions) (*mongodrv.BulkWriteResult, error) {
 	return r.Coll.BulkWrite(ctx, models, opts...)
 }
-
-// ProjectionForOwnership returns find options projecting only agentId, chainId, owner.
-func ProjectionForOwnership() *options.FindOptions {
-	return options.Find().SetProjection(map[string]any{
-		"agentId": 1,
-		"chainId": 1,
-		"owner":   1,
-		"_id":     0,
-	}).SetBatchSize(10000)
-}
-
-// ProjectionForSender returns find options projecting only chainId, clientAddress.
-func ProjectionForSender() *options.FindOptions {
-	return options.Find().SetProjection(map[string]any{
-		"chainId":       1,
-		"clientAddress": 1,
-		"_id":           0,
-	}).SetBatchSize(10000)
-}

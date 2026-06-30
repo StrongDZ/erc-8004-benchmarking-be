@@ -1,51 +1,14 @@
 package extenrich
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"time"
-
-	"erc-8004-benchmarking-be/internal/domain/extscore"
-	"erc-8004-benchmarking-be/internal/repository/wallet"
 )
 
 const ensBaseURL = "https://api.ensdata.net/"
 const ensMaxBodyBytes = 1 << 20
-
-// FetchENSSignal fetches ENS name and avatar from ENS Client and updates the wallet's external doc.
-func (a *App) FetchENSSignal(ctx context.Context, w wallet.WalletDocument) (wallet.WalletDocument, error) {
-	if a.ensClient == nil {
-		return w, fmt.Errorf("no ENS client configured")
-	}
-
-	res, err := a.ensClient.Lookup(w.Address)
-	if err != nil {
-		return w, err
-	}
-
-	update := wallet.ExternalENSUpdate{
-		ID:         w.ID,
-		Score:      extscore.Score(ensFeatures(w, res.ENS)),
-		ENS:        res.ENS,
-		ENSAvatar:  res.Avatar,
-		ENSAt:      time.Now().Unix(),
-		ENSFetched: true,
-	}
-
-	if err := a.writeThroughENS(ctx, []wallet.ExternalENSUpdate{update}); err != nil {
-		return w, fmt.Errorf("write through ens signal: %w", err)
-	}
-
-	w.External.ENS = res.ENS
-	w.External.ENSAvatar = res.Avatar
-	w.External.ENSAt = update.ENSAt
-	w.External.ENSFetched = true
-	w.External.Score = update.Score
-	return w, nil
-}
 
 type ENSClient struct {
 	httpc *http.Client
