@@ -14,6 +14,7 @@ const (
 	QueueRawLogs             = "erc8004.raw_logs"
 	QueueAgentURI            = "erc8004.agent_uri"
 	QueueFeedbackOthers      = "erc8004.feedback.others"
+	QueueFeedbackClassified  = "erc8004.feedback.classified"
 	QueueWalletEnrich        = "erc8004.wallet_enrich"
 	QueueScoreRefreshTrigger = "erc8004.scorerefresh.trigger"
 )
@@ -86,6 +87,16 @@ type ServiceURIMessage struct {
 // LLM fallback, and persists the verdict/weighting. Rule-decided feedback is graded
 // inline at ingest and is never published here.
 type FeedbackOthersMessage struct {
+	FeedbackID string `json:"feedbackId"`
+	ChainID    int64  `json:"chainId"`
+}
+
+// FeedbackClassifiedMessage is published to QueueFeedbackClassified for every
+// feedback whose category has been fully resolved — either by the rule classifier
+// at ingest (non-"others") or by the feedback-others worker after the LLM fallback
+// succeeds. Consumers (e.g. the live-score worker) use it to trigger near-real-time
+// score updates without waiting for the next score-refresh cycle.
+type FeedbackClassifiedMessage struct {
 	FeedbackID string `json:"feedbackId"`
 	ChainID    int64  `json:"chainId"`
 }

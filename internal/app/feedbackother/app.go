@@ -54,6 +54,11 @@ type Deps struct {
 	// Classifier is optional; when nil (or when the LLM is down) handle()
 	// returns ErrTransient so the message is nack'd and requeued.
 	Classifier *classifier.HybridClassifier
+	// Publisher is optional; when non-nil, handle() publishes a
+	// FeedbackClassifiedMessage to QueueFeedbackClassified after UpdateFallback
+	// succeeds, so downstream consumers see the resolved category without waiting
+	// for the next score-refresh cycle.
+	Publisher mq.Publisher
 }
 
 // App is the feedback-others worker.

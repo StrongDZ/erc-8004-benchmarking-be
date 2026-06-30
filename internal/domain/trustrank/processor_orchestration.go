@@ -310,6 +310,28 @@ func (p *Processor) publishOthersFeedback(ctx context.Context, bs *batchState) {
 	}
 }
 
+// publishClassifiedFeedback publishes one FeedbackClassifiedMessage per non-"others"
+// feedback ID collected in bs.pendingClassified. These are rule-decided at ingest,
+// so no grading guard is needed — we publish every ID unconditionally.
+// Guard: no-op when fbPublisher is nil or the slice is empty.
+func (p *Processor) publishClassifiedFeedback(ctx context.Context, bs *batchState) {
+	if p.fbPublisher == nil || len(bs.pendingClassified) == 0 {
+		return
+	}
+	var published int
+	for _, id := range bs.pendingClassified {
+		pubMsg := mq.FeedbackClassifiedMessage{FeedbackID: id, ChainID: bs.chainID}
+		if err := p.fbPublisher.Publish(ctx, mq.QueueFeedbackClassified, pubMsg); err != nil {
+			log.Printf("processor: publish feedback.classified (%s): %v", id, err)
+			continue
+		}
+		published++
+	}
+	if published > 0 {
+		log.Printf("processor: feedback.classified batch published=%d", published)
+	}
+}
+
 // ── Phase 3: Flush ─────────────────────────────────────────────────────────────
 
 func (p *Processor) flush(ctx context.Context, bs *batchState) error {
@@ -338,6 +360,7 @@ func (p *Processor) flush(ctx context.Context, bs *batchState) error {
 		return fmt.Errorf("flush feedback: %w", err)
 	}
 	p.publishOthersFeedback(ctx, bs)
+	p.publishClassifiedFeedback(ctx, bs)
 
 	if err := p.feedbackRepo.BulkUpdate(ctx, bs.pendingFBUpdates); err != nil {
 		return fmt.Errorf("flush feedback updates: %w", err)

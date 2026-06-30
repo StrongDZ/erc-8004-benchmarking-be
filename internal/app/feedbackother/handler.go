@@ -21,6 +21,7 @@ import (
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
 	"erc-8004-benchmarking-be/internal/domain/classifier"
+	"erc-8004-benchmarking-be/internal/mq"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
 
@@ -53,6 +54,19 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 	// 4. Resolve LLM → UpdateFallback; grading/counters are the replay's job.
 	if llmErr := a.resolveLLM(ctx, fb); llmErr != nil {
 		return ErrTransient
+	}
+
+	// 5. Publish classified notification so downstream consumers (live-score worker)
+	//    learn about the resolved category without waiting for score-refresh.
+	//    On error: return it so the message requeues — the fallback is already
+	//    persisted and the already-resolved guard prevents re-LLM on the retry.
+	if a.deps.Publisher != nil {
+		if pubErr := a.deps.Publisher.Publish(ctx, mq.QueueFeedbackClassified, mq.FeedbackClassifiedMessage{
+			FeedbackID: feedbackID,
+			ChainID:    chainID,
+		}); pubErr != nil {
+			return fmt.Errorf("feedbackother: publish feedback.classified %s: %w", feedbackID, pubErr)
+		}
 	}
 	return nil
 }

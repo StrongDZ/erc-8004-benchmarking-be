@@ -303,7 +303,8 @@ type batchState struct {
 	pendingFeedbacks   []feedback.FeedbackRecord
 	pendingFBUpdates   []feedback.FeedbackUpdate
 	pendingServiceURIs []mq.ServiceURIMessage // service endpoint URIs to publish asynchronously
-	pendingTierUpdates []tagstats.TierUpdate  // tag scale votes to flush in Phase 3
-	pendingOthers      []string               // feedback IDs (category "others") to publish to feedback.others
-	dirtyAgents        map[string]bool        // agentIDs that were created or mutated
+	pendingTierUpdates  []tagstats.TierUpdate // tag scale votes to flush in Phase 3
+	pendingOthers       []string              // feedback IDs (category "others") to publish to feedback.others
+	pendingClassified   []string              // feedback IDs (non-"others") to publish to feedback.classified
+	dirtyAgents         map[string]bool       // agentIDs that were created or mutated
 }

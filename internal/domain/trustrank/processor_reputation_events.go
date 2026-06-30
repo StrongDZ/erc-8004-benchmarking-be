@@ -115,6 +115,8 @@ func (p *Processor) handleNewFeedback(bs *batchState, agentID string, ev eventre
 	fbID := feedback.FeedbackDocumentID(bs.chainID, agentID, clientAddress, feedbackIndex)
 	if cls.Category == classifier.CategoryOthers {
 		bs.pendingOthers = append(bs.pendingOthers, fbID)
+	} else {
+		bs.pendingClassified = append(bs.pendingClassified, fbID)
 	}
 	bs.pendingFeedbacks = append(bs.pendingFeedbacks, fbRecord)
 	bs.fbMap[fbID] = &fbRecord

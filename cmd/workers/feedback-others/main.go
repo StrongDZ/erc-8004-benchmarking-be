@@ -23,6 +23,7 @@ import (
 	"erc-8004-benchmarking-be/internal/app/feedbackother"
 	"erc-8004-benchmarking-be/internal/domain/classifier"
 	mongoinfra "erc-8004-benchmarking-be/internal/infra/mongo"
+	mqinfra "erc-8004-benchmarking-be/internal/infra/rabbitmq"
 	agentrepo "erc-8004-benchmarking-be/internal/repository/agent"
 	feedbackrepo "erc-8004-benchmarking-be/internal/repository/feedback"
 )
@@ -46,6 +47,10 @@ func main() {
 	conn, err := amqp.Dial(mustEnv("RABBITMQ_URI"))
 	must(err, "rabbitmq connect")
 	defer conn.Close()
+
+	classifiedPub, err := mqinfra.NewMultiPublisher(conn)
+	must(err, "feedback-others: rabbitmq classified publisher")
+	defer classifiedPub.Close()
 
 	var hybridClassifier *classifier.HybridClassifier
 	if llmURL := envOr("LLM_BASE_URL", ""); llmURL != "" {
@@ -73,6 +78,7 @@ func main() {
 			Prefetch: envInt("FEEDBACK_OTHERS_PREFETCH", 10),
 		},
 		Classifier: hybridClassifier,
+		Publisher:  classifiedPub,
 	})
 
 	log.Println("feedback-others: starting")
