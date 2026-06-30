@@ -63,6 +63,12 @@ func (a *App) handle(ctx context.Context, feedbackID string) error {
 		return nil
 	}
 
+	// IsRevoked short-circuit — matches the replay which skips revoked feedback before
+	// grading (replay.go:130). No verdict, no mass, no composite update.
+	if fb.IsRevoked {
+		return nil
+	}
+
 	// 3. Grade once — same call, same config the replay uses.
 	g := scoring.GradeFeedback(*fb, a.qwCfg)
 
@@ -126,6 +132,9 @@ func (a *App) applyQuality(ctx context.Context, fb *feedbackrepo.FeedbackRecord,
 		log.Printf("feedbackgrade: load stats %d:%s: %v", fb.ChainID, fb.AgentID, err)
 		return ErrTransient
 	}
+	// coldStart: the agent has no prior stats doc — adoption/services/publisher/compliance
+	// are all zero because the score-refresh cron has not yet run for this agent.
+	coldStart := prev == nil
 	var cur scorestats.AgentScoreStats
 	if prev != nil {
 		cur = *prev
@@ -156,9 +165,13 @@ func (a *App) applyQuality(ctx context.Context, fb *feedbackrepo.FeedbackRecord,
 	}
 
 	// Sync the live composite to the agents collection (leaderboard denormalization).
+	// Skip on cold-start: adoption/services/publisher/compliance are all zero (the cron has
+	// not yet run for this agent), so ComputeCompositeFromStats would produce a value far
+	// below the true composite. Leave the first composite to the score-refresh cron, which
+	// computes all components correctly. Established agents (prev != nil) keep current behaviour.
 	// Failure here is non-fatal: it is a pure denormalization the next cycle reconciles, and
 	// the stats above are already committed (re-applying would double-count on requeue).
-	if a.deps.AgentRepo != nil {
+	if a.deps.AgentRepo != nil && !coldStart {
 		if err := a.deps.AgentRepo.BulkUpdateScores(ctx, []agentrepo.ScoreUpdate{{
 			ID:             agentrepo.AgentDocumentID(fb.ChainID, fb.AgentID),
 			CompositeScore: comp,
