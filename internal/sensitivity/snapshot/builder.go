@@ -434,6 +434,16 @@ func computeBaseline(ctx context.Context, src SourceCollections, agents []AgentS
 		// In single-chain mode agentKey(r.ChainID, r.AgentID, false) == r.AgentID,
 		// so the ownerByAgent lookup and BaselineScore.AgentID are unchanged.
 		key := agentKey(r.ChainID, r.AgentID, allChains)
+		// Restrict baseline rows to the filtered snapshot agent set. In all-chain mode
+		// the $in query drops chainId, so the same raw agentId returns score rows on
+		// every chain — including (chain, agentId) pairs that never passed the feedback
+		// filter and are absent from data.Agents. Cluster B iterates data.Baseline
+		// directly, so emitting those would contaminate its SA population with agents
+		// that have no qualifying feedback. ownerByAgent holds exactly the snapshot
+		// agent keys; in single-chain mode every row already matches (no-op).
+		if _, ok := ownerByAgent[key]; !ok {
+			continue
+		}
 		effectiveChainID := opts.ChainID
 		if allChains {
 			effectiveChainID = r.ChainID
