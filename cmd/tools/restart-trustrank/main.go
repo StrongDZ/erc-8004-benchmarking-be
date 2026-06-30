@@ -85,7 +85,7 @@ func main() {
 	}
 	queues := buildResetQueues(chainIDs)
 
-	log.Printf("analyzed DB to drop: %q", analyzedName)
+	log.Printf("analyzed DB to reset: %q (all collections except %q)", analyzedName, preserveCacheColl)
 	log.Printf("checkpoints to delete: %d doc(s) in %q.%q matching trustrank_worker_<chain_id>", delCount, primaryName, configColl)
 	log.Printf("rabbitmq queues to delete: %d (%s)", len(queues), strings.Join(queues, ", "))
 
@@ -95,8 +95,8 @@ func main() {
 	}
 
 	if !*yes {
-		fmt.Fprintf(os.Stderr, "This will delete %d RabbitMQ queue(s), DROP database %q, and delete %d checkpoint(s). Type YES to continue: ",
-			len(queues), analyzedName, delCount)
+		fmt.Fprintf(os.Stderr, "This will delete %d RabbitMQ queue(s), RESET database %q (drop all collections except %q), and delete %d checkpoint(s). Type YES to continue: ",
+			len(queues), analyzedName, preserveCacheColl, delCount)
 		var confirm string
 		if _, err := fmt.Scanln(&confirm); err != nil || confirm != "YES" {
 			log.Fatal("restart-trustrank: aborted (expected YES)")
@@ -127,10 +127,11 @@ func main() {
 	}
 	log.Printf("deleted %d rabbitmq queue(s)", len(queues))
 
-	if err := client.Database(analyzedName).Drop(ctx); err != nil {
-		log.Fatalf("restart-trustrank: drop database %q: %v", analyzedName, err)
+	dropped, err := resetAnalyzedExceptCache(ctx, client.Database(analyzedName))
+	if err != nil {
+		log.Fatalf("restart-trustrank: reset database %q: %v", analyzedName, err)
 	}
-	log.Printf("dropped database %q", analyzedName)
+	log.Printf("reset database %q: dropped %d collection(s), preserved %q", analyzedName, dropped, preserveCacheColl)
 
 	res, err := cfgDB.DeleteMany(ctx, checkpointFilter)
 	if err != nil {
@@ -389,6 +390,33 @@ func buildResetQueues(chainIDs []int64) []string {
 		queues = append(queues, mq.ServiceURIQueueName(chainID))
 	}
 	return queues
+}
+
+// preserveCacheColl is the ai-service runtime LLM classify cache (erc-8004-ai-service
+// app/cache.py, collection "classify_cache"). It is expensive-to-rebuild LLM output,
+// NOT event-derived data, so a re-derivation must preserve it — dropping it forces
+// every re-run to re-classify the whole others bucket from scratch through the LLM.
+const preserveCacheColl = "classify_cache"
+
+// resetAnalyzedExceptCache drops every collection in the analyzed DB EXCEPT the LLM
+// classify cache, returning the count dropped. Replaces a whole-database Drop so the
+// cache survives the re-derivation.
+func resetAnalyzedExceptCache(ctx context.Context, db *mongo.Database) (int, error) {
+	names, err := db.ListCollectionNames(ctx, bson.D{})
+	if err != nil {
+		return 0, fmt.Errorf("list collections: %w", err)
+	}
+	dropped := 0
+	for _, name := range names {
+		if name == preserveCacheColl {
+			continue
+		}
+		if err := db.Collection(name).Drop(ctx); err != nil {
+			return dropped, fmt.Errorf("drop %q: %w", name, err)
+		}
+		dropped++
+	}
+	return dropped, nil
 }
 
 func collectChainIDs(ctx context.Context, client *mongo.Client, cfg config.Config, checkpointFilter bson.M) ([]int64, error) {
