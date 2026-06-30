@@ -502,33 +502,6 @@ func probeEndpointHealthFromRow(name, endpoint string, row *offchainrepo.Offchai
 	}
 }
 
-func probeEndpointHealth(ctx context.Context, repo agentOffchainRepo, name, endpoint string) (string, string) {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" || repo == nil {
-		return "unknown", ""
-	}
-	rows, rerr := repo.FindByURIs(ctx, []string{endpoint})
-	if rerr != nil || len(rows) == 0 {
-		return "unknown", ""
-	}
-	row := rows[0]
-	switch row.Status {
-	case offchainrepo.StatusFetchedJSON:
-		return "ok", ""
-	case offchainrepo.StatusFetchedNotJSON:
-		if scoring.IsJSONRequired(name) {
-			return "warning", "fetched but not valid JSON; expected JSON for this endpoint type"
-		}
-		return "ok", ""
-	case offchainrepo.StatusFetchFailed:
-		if strings.TrimSpace(row.FetchError) != "" {
-			return "fail", row.FetchError
-		}
-		return "fail", ""
-	}
-	return "unknown", ""
-}
-
 // ── Trust-score history ──────────────────────────────────────────────────────
 
 // TrustScoreHistory re-derives the composite trust-score timeline from feedback_history.
