@@ -206,6 +206,26 @@ services:
             MONGO_URI: mongodb://mongo:27017
             RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
 
+    feedback-grader:
+        build:
+            context: .
+            dockerfile: Dockerfile
+            target: feedback-grader
+        image: erc8004-feedback-grader:latest
+        container_name: erc8004-feedback-grader
+        restart: unless-stopped
+        stop_grace_period: 3m
+        depends_on:
+            mongo:
+                condition: service_healthy
+            rabbitmq:
+                condition: service_healthy
+        env_file:
+            - .env
+        environment:
+            MONGO_URI: mongodb://mongo:27017
+            RABBITMQ_URI: amqp://guest:guest@rabbitmq:5672/
+
     wallet-enrich:
         build:
             context: .
