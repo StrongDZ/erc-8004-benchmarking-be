@@ -4,11 +4,15 @@ package feedbackother
 //
 // Flow:
 //  1. Fetch FeedbackRecord from Mongo; ErrNoDocuments → ErrTransient (nack+requeue).
-//  2. Already-resolved guard: skip (return nil) if fb.Classification.Fallback != nil (LLM already ran).
+//  2. Already-resolved guard: if fb.Classification.Fallback != nil the LLM already ran.
+//     Re-publish FeedbackClassifiedMessage (idempotent retry of the publish step only);
+//     return ErrTransient if that publish fails, else nil.
 //  3. Nil classifier → ErrTransient (retry when LLM is available).
 //  4. Resolve LLM: build HybridInput (+ agent context from AgentRepo), call Classifier.Classify.
 //     Source=="fallback" (AI down) → ErrTransient.
-//     On success → UpdateFallback(category) and return nil.
+//     On success → UpdateFallback(category).
+//  5. Publish FeedbackClassifiedMessage; on error → ErrTransient (nack+requeue so only
+//     the publish is retried — the already-resolved guard prevents re-running the LLM).
 //
 // Grading, wallet counters, weighting, and reputation are the score-refresh replay's job.
 
@@ -17,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	mongodrv "go.mongodb.org/mongo-driver/mongo"
 
@@ -41,8 +46,19 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 		return fmt.Errorf("feedbackother: fetch feedback %s: %w", feedbackID, err)
 	}
 
-	// 2. Already-resolved guard: skip if the LLM already ran.
+	// 2. Already-resolved guard: LLM already ran — re-publish only (skip LLM).
+	// On redelivery (nack'd due to a prior publish failure) UpdateFallback is already
+	// done, so we only need to retry the publish.
 	if fb.Classification.Fallback != nil {
+		if a.deps.Publisher != nil {
+			if pubErr := a.deps.Publisher.Publish(ctx, mq.QueueFeedbackClassified, mq.FeedbackClassifiedMessage{
+				FeedbackID: feedbackID,
+				ChainID:    chainID,
+			}); pubErr != nil {
+				log.Printf("feedbackother: publish feedback.classified %s (redelivery): %v", feedbackID, pubErr)
+				return ErrTransient
+			}
+		}
 		return nil
 	}
 
@@ -58,14 +74,16 @@ func (a *App) handle(ctx context.Context, feedbackID string, chainID int64) erro
 
 	// 5. Publish classified notification so downstream consumers (live-score worker)
 	//    learn about the resolved category without waiting for score-refresh.
-	//    On error: return it so the message requeues — the fallback is already
-	//    persisted and the already-resolved guard prevents re-LLM on the retry.
+	//    On error: log and return ErrTransient so the consumer nacks+requeues.
+	//    The fallback is already persisted; the already-resolved guard (step 2)
+	//    ensures redelivery re-runs only this publish, never the LLM.
 	if a.deps.Publisher != nil {
 		if pubErr := a.deps.Publisher.Publish(ctx, mq.QueueFeedbackClassified, mq.FeedbackClassifiedMessage{
 			FeedbackID: feedbackID,
 			ChainID:    chainID,
 		}); pubErr != nil {
-			return fmt.Errorf("feedbackother: publish feedback.classified %s: %w", feedbackID, pubErr)
+			log.Printf("feedbackother: publish feedback.classified %s: %v", feedbackID, pubErr)
+			return ErrTransient
 		}
 	}
 	return nil
