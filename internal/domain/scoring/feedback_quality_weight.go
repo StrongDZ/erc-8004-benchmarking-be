@@ -17,7 +17,7 @@ type QualityWeightConfig struct {
 // DefaultQualityWeightConfig returns the design-doc recommended values.
 func DefaultQualityWeightConfig() QualityWeightConfig {
 	return QualityWeightConfig{
-		WiBase: 0.4,
+		WiBase: 0.7,
 
 		QWeightReasoning:  0.20,
 		QWeightAttachment: 0.25,
