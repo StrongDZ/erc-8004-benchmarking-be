@@ -112,7 +112,7 @@ func main() {
 		// ux_chain_address index → index build fails → trustrank-worker crash-loops.
 		if err := composeStop([]string{
 			"indexer", "trustrank-worker", "consumer", "score-worker",
-			"wallet-enrich", "feedback-others", "uri-resolver",
+			"wallet-enrich", "feedback-others", "feedback-grader", "uri-resolver",
 		}); err != nil {
 			log.Fatalf("restart-trustrank: stop workers: %v", err)
 		}
@@ -367,6 +367,7 @@ func restartComposeWorkers() error {
 		"uri-resolver",
 		"wallet-enrich",
 		"feedback-others",
+		"feedback-grader",
 		"score-worker",
 		"consumer",
 	}
@@ -381,6 +382,7 @@ func restartComposeWorkers() error {
 func buildResetQueues(chainIDs []int64) []string {
 	queues := []string{
 		mq.QueueFeedbackOthers,
+		mq.QueueFeedbackClassified,
 		mq.QueueWalletEnrich,
 	}
 	for _, chainID := range chainIDs {
